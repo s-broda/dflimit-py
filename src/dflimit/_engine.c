@@ -22,17 +22,19 @@
 #include <stdint.h>
 #include <string.h>
 #include "dflimit.h"
+#include "dfl_lock.h"
 
 #define ERRLEN 512
 
-static PyThread_type_lock engine_lock = NULL;
+/* (the engine's own mutex, not a PyThread lock: python3.dll of CPython 3.9 on Windows does not export PyThread_*) */
+static dfl_lock_t engine_lock = DFL_LOCK_INIT;
 
 /* the engine call stmt without the GIL, under the engine lock */
 #define ENGINE_CALL(stmt) do { \
         Py_BEGIN_ALLOW_THREADS \
-        PyThread_acquire_lock(engine_lock, WAIT_LOCK); \
+        dfl_lock(&engine_lock); \
         stmt; \
-        PyThread_release_lock(engine_lock); \
+        dfl_unlock(&engine_lock); \
         Py_END_ALLOW_THREADS \
     } while (0)
 
@@ -250,9 +252,5 @@ static struct PyModuleDef MODULE = {
 
 PyMODINIT_FUNC PyInit__engine(void)
 {
-    if (engine_lock == NULL && (engine_lock = PyThread_allocate_lock()) == NULL) {
-        PyErr_SetString(PyExc_RuntimeError, "cannot allocate the engine lock");
-        return NULL;
-    }
     return PyModule_Create(&MODULE);
 }
