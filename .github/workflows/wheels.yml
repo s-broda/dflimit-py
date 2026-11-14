@@ -1,0 +1,133 @@
+# Builds the source distribution and the wheels (cibuildwheel; the settings are in [tool.cibuildwheel] of
+# pyproject.toml): Linux x86_64 and aarch64 (manylinux), macOS arm64 and x86_64, Windows AMD64, one abi3 wheel per
+# platform for every CPython from 3.9. The test suite runs against each built wheel (installed, outside the source
+# tree; on CPython 3.9 and 3.14) and against the installed sdist. The files are uploaded as artifacts of the run and,
+# for a tag, attached to a GitHub release.
+#
+# Runs only when started by hand (Actions tab, "Run workflow", which builds and uploads the files as artifacts of the
+# run and creates a release only if a tag is given) or when a version tag v* is pushed (which creates the release of
+# that tag). The account's Actions minutes are limited: nothing runs on an ordinary push or on a pull request.
+#
+# The PyPI upload (job pypi) is disabled: it runs only when started by hand with the input pypi ticked, and it needs
+# the configuration described at the job.
+#
+# The Linux aarch64 wheel is built on the native arm64 runner ubuntu-24.04-arm (free for public repositories; for a
+# private repository without arm64 runners, use ubuntu-latest with docker/setup-qemu-action@v3 and CIBW_ARCHS=aarch64,
+# which emulates and is much slower).
+name: wheels
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to attach the files to (e.g. v0.1.0); empty: artifacts only"
+        required: false
+        default: ""
+      pypi:
+        description: "Also upload to PyPI (needs the trusted publisher configured: see the job pypi)"
+        type: boolean
+        required: false
+        default: false
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Build the sdist
+        run: |
+          python -m pip install build
+          python -m build --sdist
+      - name: Install the sdist and run the tests (from a copy of tests/ outside the source tree)
+        run: |
+          python -m pip install dist/*.tar.gz pytest
+          mkdir "$RUNNER_TEMP/t" && cp -r tests "$RUNNER_TEMP/t/"
+          cd "$RUNNER_TEMP/t" && python -m pytest -q tests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  wheels:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, name: linux-x86_64 }
+          - { os: ubuntu-24.04-arm, name: linux-aarch64 }
+          - { os: macos-latest, name: macos-arm64 }
+          - { os: macos-15-intel, name: macos-x86_64 }
+          - { os: windows-latest, name: windows-amd64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Build the wheel and run the tests against it
+        shell: bash
+        run: |
+          python -m pip install "cibuildwheel>=3.2,<4"
+          python -m cibuildwheel --output-dir wheelhouse
+          ls -l wheelhouse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.name }}
+          path: wheelhouse/*.whl
+
+  release:
+    needs: [sdist, wheels]
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag != '' && inputs.tag || github.ref_name }}
+        run: |
+          ls -l dist
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 ||
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "dflimit $TAG" --verify-tag \
+              --notes "Source distribution (.tar.gz) and wheels for Linux (x86_64, aarch64), macOS (arm64, x86_64) and Windows (AMD64); each wheel serves every CPython from 3.9 (abi3). Install the one for your platform with pip install <file>."
+          gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+
+  # The upload to PyPI by trusted publishing (no token is stored anywhere). Disabled: it runs only when the workflow is
+  # started by hand with the input pypi ticked. Before that, the owner must
+  #   1. on PyPI (Your account, Publishing), add a trusted publisher (a "pending publisher" while the project does not
+  #      exist on PyPI) for the project dflimit with owner s-broda, repository dflimit-py, workflow wheels.yml and
+  #      environment pypi (and check that the name dflimit is free on PyPI);
+  #   2. in the repository (Settings, Environments), create the environment pypi, preferably with a required reviewer.
+  # To try it first on TestPyPI, register the same publisher there and add `repository-url: https://test.pypi.org/legacy/`
+  # under `with:` of the last step. To publish every tag automatically, change the condition of the job to
+  # startsWith(github.ref, 'refs/tags/v').
+  pypi:
+    needs: [sdist, wheels]
+    if: github.event_name == 'workflow_dispatch' && inputs.pypi
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/dflimit
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+# started by hand: gh workflow run wheels.yml (with -f tag=v0.1.0 to attach the files to that release)
