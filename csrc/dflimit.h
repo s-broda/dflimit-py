@@ -12,14 +12,22 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+/* complex division without the native operator (MSVC, and the check mode below): Smith's scaling, so that |b|^2 is not
+ * formed (it overflows for |b| > 1e154 and underflows for |b| < 1e-154, where the native division of the other compilers
+ * still returns the quotient); a finite number over an infinite one is zero, as in C99 */
+static inline void dfl_cdiv_parts(double ar, double ai, double br, double bi, double *qr, double *qi)
+{
+    if (fabs(br) >= fabs(bi)) { double r = bi / br, den = br + bi * r; *qr = (ar + ai * r) / den; *qi = (ai - ar * r) / den; }
+    else { double r = br / bi, den = bi + br * r; *qr = (ar * r + ai) / den; *qi = (ai * r - ar) / den; }
+    if (*qr != *qr && *qi != *qi && (isinf(br) || isinf(bi)) && isfinite(ar) && isfinite(ai)) { *qr = 0; *qi = 0; }
+}
 #ifdef _MSC_VER
 typedef _Dcomplex cdouble;
 #define CPX(re, im) _Cbuild((re), (im))
 static inline cdouble cadd(cdouble a, cdouble b) { return _Cbuild(creal(a) + creal(b), cimag(a) + cimag(b)); }
 static inline cdouble csub(cdouble a, cdouble b) { return _Cbuild(creal(a) - creal(b), cimag(a) - cimag(b)); }
 static inline cdouble cmul(cdouble a, cdouble b) { return _Cmulcc(a, b); }
-static inline cdouble cdiv(cdouble a, cdouble b) { double d = creal(b) * creal(b) + cimag(b) * cimag(b);
-    return _Cbuild((creal(a) * creal(b) + cimag(a) * cimag(b)) / d, (cimag(a) * creal(b) - creal(a) * cimag(b)) / d); }
+static inline cdouble cdiv(cdouble a, cdouble b) { double qr, qi; dfl_cdiv_parts(creal(a), cimag(a), creal(b), cimag(b), &qr, &qi); return _Cbuild(qr, qi); }
 static inline cdouble cscale(double a, cdouble b) { return _Cmulcr(b, a); }
 static inline cdouble cneg(cdouble a) { return _Cbuild(-creal(a), -cimag(a)); }
 #elif defined(DFL_STRICT_COMPLEX)
@@ -54,7 +62,7 @@ static inline cdouble dfl_s_csinh(cdouble a) { return dfl_s_from(csinh(dfl_s_to(
 static inline cdouble cadd(cdouble a, cdouble b) { return CPX(a.re + b.re, a.im + b.im); }
 static inline cdouble csub(cdouble a, cdouble b) { return CPX(a.re - b.re, a.im - b.im); }
 static inline cdouble cmul(cdouble a, cdouble b) { return CPX(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re); }
-static inline cdouble cdiv(cdouble a, cdouble b) { double d = b.re * b.re + b.im * b.im; return CPX((a.re * b.re + a.im * b.im) / d, (a.im * b.re - a.re * b.im) / d); }
+static inline cdouble cdiv(cdouble a, cdouble b) { double qr, qi; dfl_cdiv_parts(a.re, a.im, b.re, b.im, &qr, &qi); return CPX(qr, qi); }
 static inline cdouble cscale(double a, cdouble b) { return CPX(a * b.re, a * b.im); }
 static inline cdouble cneg(cdouble a) { return CPX(-a.re, -a.im); }
 #else
