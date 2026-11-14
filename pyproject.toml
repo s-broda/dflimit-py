@@ -1,0 +1,63 @@
+[build-system]
+# setuptools >= 77 for the licence expression (PEP 639); the extension module is defined in setup.py
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dflimit"
+version = "0.1.0"
+description = "Exact limiting distribution of the Dickey-Fuller t-ratio"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "COPYRIGHTS"]
+requires-python = ">=3.9"
+authors = [
+    { name = "Yong Bao" },
+    { name = "Simon A. Broda", email = "simon.broda@hslu.ch" },
+    { name = "Raymond Kan" },
+]
+maintainers = [{ name = "Simon A. Broda", email = "simon.broda@hslu.ch" }]
+keywords = ["unit root", "Dickey-Fuller", "local alternatives", "limiting distribution", "econometrics"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: C",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/s-broda/dflimit-py"
+Source = "https://github.com/s-broda/dflimit-py"
+"R package" = "https://github.com/s-broda/dflimit"
+
+[tool.setuptools]
+# the C sources (csrc/, src/dflimit/_engine.c) go into the sdist, not into the wheel: only UPSTREAM is package data
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+dflimit = ["UPSTREAM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.cibuildwheel]
+# (.github/workflows/wheels.yml) the abi3 wheel (cp39-abi3) is built with CPython 3.9 and serves every later CPython;
+# for cp314 cibuildwheel finds that wheel, builds nothing and runs the tests on the newest CPython.  No PyPy, no
+# musllinux, no free-threaded builds (the free-threaded CPython has no limited API).  The tests run against the
+# installed wheel, from a copy of tests/ outside the source tree.
+build = ["cp39-*", "cp314-*"]
+skip = ["*-musllinux_*"]
+archs = ["native"]
+test-requires = ["pytest"]
+test-sources = ["tests"]
+test-command = "pytest -q tests"

@@ -1,0 +1,7 @@
+# the sdist: the C engine (csrc/), the gateway, the tests with their reference files, the sync script
+include README.md LICENSE COPYRIGHTS setup.py pyproject.toml
+recursive-include csrc *.c *.h *.cc *.cpp
+include src/dflimit/_engine.c src/dflimit/UPSTREAM
+include tests/*.py
+include tests/ref/*.txt
+include tools/sync-engine.sh
