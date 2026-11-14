@@ -1,10 +1,12 @@
 """The stored Julia reference values (tests/testthat/test-reference.R of the R package dflimit)."""
+import math
 import warnings
 
 import numpy as np
 import pytest
 
-from dflimit import adfmax_cdf, adfmax_pdf, ltratio_cdf, ltratio_mom, ltratio_pdf, ltratio_region
+from dflimit import (adfmax_cdf, adfmax_pdf, ltratio_cdf, ltratio_lincdf, ltratio_mom, ltratio_pdf, ltratio_region,
+                     power_envelope)
 from helpers import case_code, check_Ff, read_app_ref, read_ref
 
 SINGLE = read_ref("single_ref.txt")       # m c st x F f
@@ -65,10 +67,25 @@ def test_moments(r):
 
 
 @pytest.mark.parametrize("row", APP, ids=lambda row: row[0] + " " + " ".join(f"{v:g}" for v in row[1][:5]))
-def test_adfmax_and_regions(row):
-    """ADFmax and the regions reproduce the Julia values"""
+def test_applications(row):
+    """ADFmax, the regions, the linear form and the power envelope reproduce the Julia values"""
     tag, v = row
-    if tag == "adfmax":
+
+    def pairs(start):               # the pairs (point, value) of a row from position start on
+        return np.array(v[start::2]), np.array(v[start + 1::2])
+
+    if tag == "lincdf":             # model a c cbar k b_1 P_1 ... b_k P_k
+        b, P = pairs(5)
+        cas = {1: "DK", 4: "DG"}[int(v[0])]
+        assert np.max(np.abs(ltratio_lincdf(b, v[1], cas, v[2], v[3]) - P)) < 1e-10
+    elif tag == "vcdf":             # c k b_1 P_1 ...
+        b, P = pairs(2)
+        assert np.max(np.abs(ltratio_lincdf(b, math.nan, "DK", v[0]) - P)) < 1e-10
+    elif tag == "envelope":         # model alpha k c_1 P_1 ...
+        c, P = pairs(3)
+        cas = {1: "DK", 4: "DG"}[int(v[0])]
+        assert np.max(np.abs(power_envelope(c, cas, v[1]) - P)) < 1e-10
+    elif tag == "adfmax":
         model, stat, c, x, F, f = v
         cas = ("S" if stat == 1 else "D") + "KUT"[int(model) - 1]
         check_Ff(adfmax_cdf(x, cas, c), adfmax_pdf(x, cas, c), F, f, 1e-10, 0, 1e-10,

@@ -14,9 +14,9 @@
  * are serialized by a lock: each call starts its own workers on all the threads set by ltratio_threads(), and the
  * engine has not been checked for concurrent calls.
  *
- * To add an entry point of the engine (e.g. ltratio_lincdf, power_envelope once DF-Limit's c/ has them): a function
- * like py_dist below (in_doubles for the inputs, scratch() for the outputs, ENGINE_CALL around the call, check() for
- * the return code, out_bytes() for the results), a line in METHODS, and the user-level function in the Python layer. */
+ * To add an entry point of the engine: a function like py_dist or py_lincdf below (in_doubles for the inputs,
+ * scratch() for the outputs, ENGINE_CALL around the call, check() for the return code, out_bytes() for the results),
+ * a line in METHODS, and the user-level function in the Python layer. */
 #include <Python.h>
 #include <limits.h>
 #include <stdint.h>
@@ -178,6 +178,42 @@ done:
     return res;
 }
 
+/* lincdf(b, a, model, c, cbar) -> bytearray: P(U - aV <= b), a = NaN: P(V <= b): dfl_lincdf */
+static PyObject *py_lincdf(PyObject *self, PyObject *args)
+{
+    int model, n = 0, rc = 0;
+    double a, c, cbar, *bc = NULL, *out = NULL;
+    PyObject *bb, *res = NULL;
+    char err[ERRLEN] = "";
+    if (!PyArg_ParseTuple(args, "Odidd:lincdf", &bb, &a, &model, &c, &cbar)) return NULL;
+    const double *b = in_doubles(bb, "b", &n, &bc);
+    if (b == NULL || (out = scratch(n, sizeof(double))) == NULL) goto done;
+    ENGINE_CALL(rc = dfl_lincdf(n, b, a, model, c, cbar, NULL, out, err, sizeof err));
+    if (check(rc, err)) goto done;
+    res = out_bytes(out, n, sizeof(double));
+done:
+    PyMem_Free(out); PyMem_Free(bc);
+    return res;
+}
+
+/* envelope(c, model, alpha) -> bytearray: the power envelope at the points c: dfl_power_envelope */
+static PyObject *py_envelope(PyObject *self, PyObject *args)
+{
+    int model, n = 0, rc = 0;
+    double alpha, *cc = NULL, *out = NULL;
+    PyObject *cb, *res = NULL;
+    char err[ERRLEN] = "";
+    if (!PyArg_ParseTuple(args, "Oid:envelope", &cb, &model, &alpha)) return NULL;
+    const double *c = in_doubles(cb, "c", &n, &cc);
+    if (c == NULL || (out = scratch(n, sizeof(double))) == NULL) goto done;
+    ENGINE_CALL(rc = dfl_power_envelope(n, c, model, alpha, NULL, out, err, sizeof err));
+    if (check(rc, err)) goto done;
+    res = out_bytes(out, n, sizeof(double));
+done:
+    PyMem_Free(out); PyMem_Free(cc);
+    return res;
+}
+
 /* threads(n=None) -> the number of worker threads, after setting it to n (None: unchanged) */
 static PyObject *py_threads(PyObject *self, PyObject *args)
 {
@@ -200,6 +236,8 @@ static PyMethodDef METHODS[] = {
     {"moments", py_moments, METH_VARARGS, "moments(pmax, model, c, c0, g0, stat) -> (m, err): dfl_moments"},
     {"adfmax", py_adfmax, METH_VARARGS, "adfmax(kind, x, model, c, stat) -> (value, err, status): dfl_adfmax"},
     {"region", py_region, METH_VARARGS, "region(type, p1, p2, v0, brks, c) -> (P, err, status): dfl_region"},
+    {"lincdf", py_lincdf, METH_VARARGS, "lincdf(b, a, model, c, cbar) -> P: dfl_lincdf"},
+    {"envelope", py_envelope, METH_VARARGS, "envelope(c, model, alpha) -> the power envelope: dfl_power_envelope"},
     {"threads", py_threads, METH_VARARGS, "threads(n=None) -> the number of worker threads: dfl_nworkers"},
     {NULL, NULL, 0, NULL}
 };

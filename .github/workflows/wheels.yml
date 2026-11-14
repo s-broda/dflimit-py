@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to attach the files to (e.g. v0.1.0); empty: artifacts only"
+        description: "Existing tag to attach the files to (e.g. v0.2.0); empty: artifacts only"
         required: false
         default: ""
       pypi:
@@ -130,4 +130,4 @@ jobs:
           path: dist
           merge-multiple: true
       - uses: pypa/gh-action-pypi-publish@release/v1
-# started by hand: gh workflow run wheels.yml (with -f tag=v0.1.0 to attach the files to that release)
+# started by hand: gh workflow run wheels.yml (with -f tag=v0.2.0 to attach the files to that release)

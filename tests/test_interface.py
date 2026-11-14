@@ -10,8 +10,8 @@ import numpy as np
 import pytest
 
 import dflimit
-from dflimit import (adfmax_cdf, adfmax_icdf, adfmax_pdf, coef_cdf, ltratio_cdf, ltratio_icdf, ltratio_mom,
-                     ltratio_pdf, ltratio_region, ltratio_threads)
+from dflimit import (adfmax_cdf, adfmax_icdf, adfmax_pdf, coef_cdf, ltratio_cdf, ltratio_icdf, ltratio_lincdf,
+                     ltratio_mom, ltratio_pdf, ltratio_region, ltratio_threads, power_envelope)
 
 
 def test_shape_and_non_finite_points():
@@ -25,6 +25,16 @@ def test_shape_and_non_finite_points():
     assert isinstance(e, np.ndarray) and e.shape == (0,) and e.dtype == np.float64
     np.testing.assert_array_equal(adfmax_cdf([-math.inf, math.nan, math.inf], "DU"), [0, math.nan, 1])
     assert ltratio_icdf(np.array([[0.05, 0.1]]), "DK").shape == (1, 2)
+    P = ltratio_lincdf(x, -3.5, "DK")
+    assert P.shape == x.shape
+    assert P[0, 0] == 0 and math.isnan(P[0, 1]) and P[1, 1] == 1
+    assert ltratio_lincdf([0.1, 0.5], math.nan, "dk").shape == (2,)
+    e = ltratio_lincdf([], 1, "DG")
+    assert isinstance(e, np.ndarray) and e.shape == (0,)
+    E = power_envelope(np.array([[0, math.nan], [1, 2]]))
+    assert E.shape == (2, 2)
+    assert E[0, 0] == 0.05 and E[1, 0] == 0.05 and math.isnan(E[0, 1])
+    assert power_envelope(-7, "DU") == power_envelope(-7, "dk")
 
 
 def test_scalars_give_floats_and_arrays_keep_their_shape():
@@ -36,6 +46,7 @@ def test_scalars_give_floats_and_arrays_keep_their_shape():
     assert type(adfmax_icdf(0.05, "DU")) is float
     assert type(coef_cdf(-5, "DU")) is float
     assert type(ltratio_region({"type": "line", "a": -3.5, "b": -0.2639})) is float
+    assert type(ltratio_lincdf(0.1, np.float64(-3.5), "DK")) is float and type(power_envelope(-7)) is float
     x = np.linspace(-3, 1, 6).reshape(2, 3)
     F = ltratio_cdf(x, "DU")
     assert F.shape == (2, 3)
@@ -85,6 +96,11 @@ def test_engine_errors_become_value_errors():
         (lambda: ltratio_mom(0, "DU"), "positive integer"),
         (lambda: ltratio_mom(2.5, "DU"), "positive integer"),
         (lambda: adfmax_icdf(1.5, "DU"), r"\(0, 1\)"),
+        (lambda: ltratio_lincdf(0, math.nan, "DG"), "case DK only"),
+        (lambda: ltratio_lincdf(0, 1, "DU"), "the case must be one of DK, DG"),
+        (lambda: ltratio_lincdf(0, 1, "DK", c=math.inf), "finite"),
+        (lambda: power_envelope(-5, "DT"), "the case must be one of DK, DU, DG"),
+        (lambda: power_envelope(-5, alpha=2), "no sign change"),
     ]
     for fun, msg in cases:
         with pytest.raises(ValueError, match=msg):
@@ -108,6 +124,11 @@ def test_type_errors():
         (lambda: ltratio_region([1, 2]), "dict with the key 'type'"),
         (lambda: ltratio_region({"type": "line", "a": "1", "b": 0}), r"bnd\['a'\] must be a single number"),
         (lambda: ltratio_threads("2"), "positive integer"),
+        (lambda: ltratio_lincdf(0, None, "DK"), "a must be a single number"),
+        (lambda: ltratio_lincdf(0, [1, 2], "DK"), "a must be a single number"),
+        (lambda: ltratio_lincdf("b", 1, "DK"), "b must be numeric"),
+        (lambda: power_envelope("c"), "c must be numeric"),
+        (lambda: power_envelope(-5, alpha=None), "alpha must be a single number"),
     ]
     for fun, msg in cases:
         with pytest.raises(TypeError, match=msg):
@@ -123,6 +144,12 @@ def test_threads_can_be_set_and_do_not_change_the_values():
     ltratio_threads(old)
     assert ltratio_threads() == old
     np.testing.assert_allclose(F1, F2, rtol=1e-14)
+    ltratio_threads(1)
+    P1 = ltratio_lincdf([-0.2639, 0.5], -3.5, "DK", -7)
+    E1 = power_envelope([-7, -13.5], "DG")
+    ltratio_threads(old)
+    np.testing.assert_allclose(ltratio_lincdf([-0.2639, 0.5], -3.5, "DK", -7), P1, rtol=1e-14)
+    np.testing.assert_allclose(power_envelope([-7, -13.5], "DG"), E1, rtol=1e-14)
     with pytest.raises(ValueError, match="positive integer"):
         ltratio_threads(0)
 

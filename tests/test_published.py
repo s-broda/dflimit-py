@@ -1,7 +1,8 @@
 """Published values and consistency (tests/testthat/test-published.R of the R package dflimit)."""
 import numpy as np
 
-from dflimit import adfmax_cdf, adfmax_icdf, ltratio_cdf, ltratio_icdf, ltratio_mom, ltratio_region
+from dflimit import (adfmax_cdf, adfmax_icdf, ltratio_cdf, ltratio_icdf, ltratio_lincdf, ltratio_mom, ltratio_region,
+                     power_envelope)
 from helpers import expect_equal
 
 
@@ -11,6 +12,8 @@ def test_published_critical_values_and_moments():
     expect_equal(ltratio_mom(2, "DU")[1], 3.0559953450, 1e-10)    # Nabeya (1999)
     expect_equal(adfmax_cdf(-2.43542, "DU"), 0.05, 1e-5)          # Table I of the paper
     expect_equal(ltratio_region({"type": "wap", "k": 3.6658, "omega": 10}), 0.05, 1e-4)   # Table V
+    expect_equal(ltratio_lincdf(-0.2639, -3.5, "DK"), 0.05, 1e-4)  # the point-optimal test at cbar = -7
+    expect_equal(power_envelope(-7), 0.5, 1e-2)                     # power one half at c = -7
 
 
 def test_power_is_the_cdf_at_the_critical_value():
@@ -32,3 +35,6 @@ def test_the_two_representations_agree():
     expect_equal(ltratio_cdf(x, "DU", -2, method="line"), ltratio_cdf(x, "DU", -2, method="conditional"), 1e-10)
     expect_equal(ltratio_cdf(-1, "DK", 2, c0=2), ltratio_region({"type": "parabola", "x": -1, "c0": 2}, "DK", 2),
                  1e-10)
+    # the line of the point-optimal test by the conditional integral and by the inversion of U - aV
+    expect_equal(ltratio_region({"type": "line", "a": -3.5, "b": -0.2639}, "DK", -5),
+                 ltratio_lincdf(-0.2639, -3.5, "DK", -5), 1e-10)
