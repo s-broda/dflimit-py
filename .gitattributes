@@ -1,0 +1,6 @@
+# LF line endings everywhere (the engine's sources are copied with LF by tools/sync-engine.sh)
+* text=auto eol=lf
+*.whl binary
+*.tar.gz binary
+*.png binary
+*.pdf binary
