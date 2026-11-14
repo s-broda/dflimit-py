@@ -30,7 +30,9 @@ LIMITED_API = not sysconfig.get_config_var("Py_GIL_DISABLED")
 def c_flags(compiler_type, src=None):
     """The flags of the C files (the engine's and the gateway's)."""
     if compiler_type == "msvc":
-        return ["/O2", "/std:c11"]
+        # /GL- switches off the whole-program optimization that setuptools turns on (/GL): the engine is built and
+        # checked with cl /O2 /std:c11 (c.yml of DF-Limit)
+        return ["/O2", "/std:c11", "/GL-"]
     # -O3 for dfl_gen.c as in c/build.sh: the l-rule of the noncentral kernel is written to be vectorized;
     # -Wno-unused-function as in c/build.sh (after the -Wall of Python's CFLAGS)
     return ["-std=c11", "-O3" if src == "dfl_gen.c" else "-O2", "-pthread", "-Wno-unused-function"]
@@ -38,7 +40,7 @@ def c_flags(compiler_type, src=None):
 
 def cxx_flags(compiler_type):
     """The flags of the C++ files (setuptools adds /EHsc for MSVC)."""
-    return ["/O2"] if compiler_type == "msvc" else ["-std=c++11", "-O2"]
+    return ["/O2", "/GL-"] if compiler_type == "msvc" else ["-std=c++11", "-O2"]
 
 
 class build_ext_engine(build_ext):
