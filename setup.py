@@ -19,7 +19,7 @@ from setuptools.command.build_ext import build_ext
 
 CSRC = "csrc"
 ENGINE_C = ["dfl_special.c", "dfl_mgf.c", "dfl_single.c", "dfl_gen.c", "dfl_moments.c", "dfl_double.c", "dfl_api.c",
-            "dfl_threads.c", "tables.c"]
+            "dfl_gilpelaez.c", "dfl_threads.c", "tables.c"]
 ENGINE_CXX = ["Faddeeva.cc", "faddeeva_shim.cpp"]
 ENGINE_H = ["dflimit.h", "dfl_lock.h", "dfl_vmath.h", "Faddeeva.h"]
 MACROS = [("DFL_QUIET", None)]

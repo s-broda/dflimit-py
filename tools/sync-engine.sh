@@ -21,8 +21,8 @@ PKG=$(cd "$(dirname "$0")/.." && pwd)
 [ -f "$UP/c/dflimit.h" ] || { echo "$UP does not look like a DF-Limit checkout (no c/dflimit.h)" >&2; exit 1; }
 [ -f "$PKG/pyproject.toml" ] && [ -d "$PKG/src/dflimit" ] || { echo "$PKG is not the package root" >&2; exit 1; }
 
-ENGINE="dflimit.h dfl_lock.h dfl_vmath.h dfl_api.c dfl_double.c dfl_gen.c dfl_mgf.c dfl_moments.c dfl_single.c
-        dfl_special.c dfl_threads.c tables.c"
+ENGINE="dflimit.h dfl_lock.h dfl_vmath.h dfl_api.c dfl_double.c dfl_gen.c dfl_gilpelaez.c dfl_mgf.c dfl_moments.c
+        dfl_single.c dfl_special.c dfl_threads.c tables.c"
 FADDEEVA="Faddeeva.cc Faddeeva.h faddeeva_shim.cpp"
 
 mkdir -p "$PKG/csrc"

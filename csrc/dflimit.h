@@ -132,6 +132,7 @@ cdouble dfl_Dscaled(int model, double c, cdouble s, cdouble t, cdouble *mu);
 /* models: 1 no deterministic terms (case DK), 2 intercept (DU), 3 intercept and trend (DT), 4 the GLS-detrended trend case of
  * Elliott, Rothenberg and Stock (1996) at cbar = DFL_CBAR_GLS (case DG: zero start, the single integral only, no moments) */
 #define DFL_CBAR_GLS (-13.5)
+double dfl_lam_gls(double cbar);                    /* lambda = (1 - cbar)/(1 - cbar + cbar^2/3) of the GLS detrending at cbar */
 typedef struct { cdouble th, del, eta, lsh, lch, dS, D, A2, A1, A0; cdouble Sg[9], N[9]; int dim; } dfl_girs_t;
 void dfl_girsanov(int model, double c, cdouble t, dfl_girs_t *G);
 cdouble dfl_eta1(double c, cdouble t);
@@ -185,6 +186,22 @@ int dfl_double(int kind, int n, const double *x, int model, double c, double c0,
  * (0, v0) (P(V < v0) included), nbrk kinks brks (Pregion of wap.jl) */
 int dfl_adfmax(int kind, int n, const double *x, int model, double c, bool stat, const dfl_double_opts *o, double *out, dfl_double_info *info, char *err, size_t errlen);
 int dfl_region(int type, const double *par, double v0, int nbrk, const double *brks, double c, const dfl_double_opts *o, double *out, dfl_double_info *info, char *err, size_t errlen);
+
+/* ---- the linear form U - aV and the power envelope (dfl_gilpelaez.c) ---- */
+/* the trapezoidal rule of the inversion formula of Gil-Pelaez in u = sinh(v): N steps (60000) up to umax (4000), from u = 1e-7 */
+typedef struct { int N; double umax; } dfl_gp_opts;
+void dfl_gp_defaults(dfl_gp_opts *o);
+/* P(U - aV <= b) at the points b[0..n-1], local-to-unity parameter c, zero start, no drift: model 1 (case DK; also the constant case with
+ * GLS demeaning) or 4 (case DG, the GLS-detrended trend case of Elliott, Rothenberg and Stock (1996) detrended at cbar,
+ * DFL_CBAR_GLS for the DF-GLS tests; cbar is not used in case DK); a = NaN gives P(V <= b) (case DK only).  By
+ * P(X < b) = 1/2 - (1/pi) int_0^inf Im[phi(u) e^{-iub}]/u du (tr_gilpelaez and ltratio_lincdf of DFExact.jl).  Non-finite
+ * b: 0 at -Inf, 1 at Inf, NaN at NaN.  NULL options take the defaults. */
+int dfl_lincdf(int n, const double *b, double a, int model, double c, double cbar, const dfl_gp_opts *o, double *out, char *err, size_t errlen);
+/* the asymptotic power envelope of Elliott, Rothenberg and Stock (1996) at the points c[0..n-1], level alpha (0.05 in the other
+ * implementations), zero start, no drift: model 1 (case DK, also the constant case DU) or 4 (case DG, the data GLS-detrended
+ * at c): the power at c of the point-optimal test against c, which rejects for small U - aV, a = c/2, at its critical value
+ * at c = 0 (bisection on [-50, 50] to 1e-9); alpha for c >= 0, NaN at NaN (power_envelope of DFExact.jl) */
+int dfl_power_envelope(int n, const double *c, int model, double alpha, const dfl_gp_opts *o, double *out, char *err, size_t errlen);
 
 /* ---- the user-level entry points (dfl_api.c) ---- */
 /* the validation shared by the entry points (and dfl_moments): the model, c (finite, at least DFL_CMIN), c0, g0, the start */
