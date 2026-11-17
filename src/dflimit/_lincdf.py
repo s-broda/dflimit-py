@@ -19,10 +19,11 @@ def ltratio_lincdf(b, a, cas, c=0, cbar=-13.5):
 
     The limit of P(U - aV <= b) under phi = 1 + c/n, zero start, no drift, with U and V as in `ltratio_cdf`: case
     ``"DK"`` (no deterministic terms, and the constant case with GLS demeaning, whose limit is the same) or ``"DG"``
-    (the GLS-detrended trend case of Elliott, Rothenberg and Stock (1996), detrended at ``cbar``). With
-    a = cbar/2, cbar < 0, the point-optimal test of Elliott, Rothenberg and Stock against cbar rejects for
-    U - aV < b (its log likelihood ratio is cbar U - cbar^2 V/2); see `power_envelope`. ``a = nan`` gives
-    P(V <= b) (case DK).
+    (the GLS-detrended trend case of Elliott, Rothenberg and Stock (1996), detrended at ``cbar``). The
+    point-optimal test of Elliott, Rothenberg and Stock against cbar < 0 rejects for U - aV < b: in case DK with
+    a = cbar/2 (its log likelihood ratio is cbar U - cbar^2 V/2), in case DG, with the data detrended at cbar, with
+    a = cbar^2/(2 (cbar - 1)) (it rejects for small cbar^2 V + (1 - cbar) J(1)^2, J(1)^2 = 2U + 1); see
+    `power_envelope`. ``a = nan`` gives P(V <= b) (case DK).
 
     Parameters
     ----------
@@ -117,8 +118,9 @@ def power_envelope(c, cas="DK", alpha=0.05):
 
     Notes
     -----
-    The test against cbar rejects for small U - aV, a = cbar/2 (`ltratio_lincdf`): its critical value is the
-    ``alpha``-quantile at ``c = 0``, found by bisection on [-50, 50] to the width 1e-9, and the envelope is its power
+    The test against cbar rejects for small U - aV (`ltratio_lincdf`), a = cbar/2 in case DK and
+    a = cbar^2/(2 (cbar - 1)) in case DG (where the limit of the invariant statistic of Elliott, Rothenberg and Stock
+    is cbar^2 V + (1 - cbar) J(1)^2, J(1)^2 = 2U + 1): its critical value is the ``alpha``-quantile at ``c = 0``, found by bisection on [-50, 50] to the width 1e-9, and the envelope is its power
     at cbar = c; ``alpha`` for ``c >= 0``. As ``power_envelope`` of the MATLAB and Julia programs.
 
     References
@@ -131,7 +133,7 @@ def power_envelope(c, cas="DK", alpha=0.05):
     >>> power_envelope(-7, "DK")            # 0.4994: at c = -7 the envelope has power one half
     0.4994019826...
     >>> power_envelope([-5, -13.5], "DG")
-    array([0.114837..., 0.514384...])
+    array([0.114845..., 0.514413...])
     """
     _, model, _ = dfl_case(cas, ("DK", "DU", "DG"))
     x = dfl_real(c, "c")

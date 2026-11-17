@@ -17,7 +17,7 @@ int dfl_check_args(int model, double c, double c0, double g0, bool stat, char *e
     if (!isfinite(c)) { snprintf(err, errlen, "c must be a finite real scalar"); return 1; }
     if (!isfinite(c0)) { snprintf(err, errlen, "c0 must be a finite real scalar"); return 1; }
     if (!isfinite(g0)) { snprintf(err, errlen, "g0 must be a finite real scalar"); return 1; }
-    if (stat && !(c < 0)) { snprintf(err, errlen, "a stationary start (cases SK, SU, ST) requires c < 0"); return 1; }
+    if (stat && !(c <= DFL_CSTAT)) { snprintf(err, errlen, "%s", DFL_STAT_MSG); return 1; }
     if (stat && g0 != 0) { snprintf(err, errlen, "g0 (a fixed start) applies to cases DK, DU, DT only"); return 1; }
     if (c < DFL_CMIN) { snprintf(err, errlen, "%s", DFL_CMIN_MSG); return 1; }
     if (g0 != 0 && !stat && !dfl_fixed_ok(model, c, g0)) { snprintf(err, errlen, "%s", DFL_FIXED_MSG); return 1; }

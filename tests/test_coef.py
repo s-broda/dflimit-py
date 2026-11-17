@@ -52,7 +52,7 @@ def test_shape_and_argument_checks():
         coef_cdf(0, "XX")
     with pytest.raises(ValueError, match="method must be"):
         coef_cdf(0, "DU", method="fast")
-    with pytest.raises(ValueError, match="requires c < 0"):
+    with pytest.raises(ValueError, match=r"requires c <= -1e-4"):
         coef_cdf(-1, "SU", 1)
     with pytest.raises(ValueError, match=r"\(0, 1\)"):
         coef_icdf(0, "DU")

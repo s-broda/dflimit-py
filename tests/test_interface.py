@@ -77,7 +77,7 @@ def test_info_results():
 def test_engine_errors_become_value_errors():
     cases = [
         (lambda: ltratio_cdf(0, "DU", -600), "at least -550"),
-        (lambda: ltratio_cdf(0, "SU", 1), "requires c < 0"),
+        (lambda: ltratio_cdf(0, "SU", 1), r"requires c <= -1e-4"),
         (lambda: ltratio_cdf(0, "DU", -5, g0=3), "fixed start"),
         (lambda: ltratio_cdf(0, "SU", -5, g0=1), "applies to cases DK, DU, DT"),
         (lambda: ltratio_mom(2, "DG"), "not available"),
@@ -216,3 +216,19 @@ def test_version_and_upstream():
     with open(up) as fh:
         text = fh.read()
     assert "upstream_commit: " in text
+
+
+def test_stationary_start_near_the_unit_root():
+    # for c > -1e-4 the engine refuses: the variance -1/(2c) of the start is too large for the quadrature
+    for f in (lambda: ltratio_cdf(-1.94087, "SK", -9e-5), lambda: ltratio_pdf(-2, "SU", -9e-5),
+              lambda: ltratio_mom(2, "ST", -9e-5), lambda: ltratio_icdf(0.05, "SK", -9e-5),
+              lambda: coef_cdf(-8.039, "SK", -9e-5), lambda: adfmax_cdf(-2.4, "SU", -9e-5)):
+        with pytest.raises(ValueError, match=r"requires c <= -1e-4"):
+            f()
+    # at c = -1e-4 the values of the Julia engine (julia/quickcheck.jl of DF-Limit, section 18b)
+    assert abs(ltratio_cdf(-1.94087, "SK", -1e-4) - 0.028490044498374834) < 1e-11
+    assert abs(coef_cdf(-8.039, "SK", -1e-4) - 0.00032997244558452543) < 1e-12
+    assert abs(adfmax_cdf(-2.43542, "SU", -1e-4) - 0.050000718603976146) < 1e-11
+    # case SK: the coefficient statistic at c = -0.001, which the lower end of the conditional integral had put at 6e-6
+    assert abs(coef_cdf(-8.039, "SK", -0.001) - 0.0010438037922007037) < 1e-12
+    assert abs(ltratio_cdf(-1.94087, "SK", -0.1) - 0.059510986573375835) < 1e-11

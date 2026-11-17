@@ -109,6 +109,13 @@ static inline bool dfl_autodouble(double c, double c0, double g0, bool stat) { r
    DFL_CMIN_MSG (the same check and message as ltratio_args in DFExact.jl and LTRATIO_ARGS) */
 #define DFL_CMIN (-550.0)
 #define DFL_CMIN_MSG "c must be at least -550 (the range in which the programs are checked; the moments fail from about c = -600, the line integral from about c = -650)"
+/* the range of c with a stationary start: c <= DFL_CSTAT, or an error with DFL_STAT_MSG, in the user-level functions
+   (dfl_check_args: dfl_single, dfl_dist, dfl_icdf, dfl_moments, dfl_adfmax) and in dfl_double (CSTAT and STAT_MSG of
+   DFExact.jl, where the measurements are; LTRATIO_ARGS): the variance -1/(2c) of the start grows without bound as c -> 0-,
+   and in case SK the double integral flags points off by up to 2e-8 from |c| ~ 1e-4 and is off by 1e-3 without a flag at
+   c = -1e-6 */
+#define DFL_CSTAT (-1e-4)
+#define DFL_STAT_MSG "a stationary start (cases SK, SU, ST) requires c <= -1e-4: closer to zero the variance -1/(2c) of the start is too large for the quadrature"
 /* the region of a fixed start g0 != 0 (fixed_ok in DFExact.jl; LTRATIO_ARGS adds c >= -20): outside it the user-level functions
    return an error with DFL_FIXED_MSG */
 #define DFL_FIXED_MSG "with a fixed start g0 != 0 the programs are checked in case DK for c <= 2, |g0| <= 2 (|g0| <= 1 for c > 0), in case DU for -100 <= c <= 2, |g0| <= 1.5 and (c g0)^2/2 <= 4050, in case DT for -100 <= c <= 2, |g0| <= 3 and (c g0)^2/2 <= 7200"
@@ -207,8 +214,9 @@ void dfl_gp_defaults(dfl_gp_opts *o);
 int dfl_lincdf(int n, const double *b, double a, int model, double c, double cbar, const dfl_gp_opts *o, double *out, char *err, size_t errlen);
 /* the asymptotic power envelope of Elliott, Rothenberg and Stock (1996) at the points c[0..n-1], level alpha (0.05 in the other
  * implementations), zero start, no drift: model 1 (case DK, also the constant case DU) or 4 (case DG, the data GLS-detrended
- * at c): the power at c of the point-optimal test against c, which rejects for small U - aV, a = c/2, at its critical value
- * at c = 0 (bisection on [-50, 50] to 1e-9); alpha for c >= 0, NaN at NaN (power_envelope of DFExact.jl) */
+ * at c): the power at c of the point-optimal test against c, which rejects for small U - aV, a = c/2 in case DK and
+ * a = c^2/(2 (c - 1)) in case DG, at its critical value at c = 0 (bisection on [-50, 50] to 1e-9); alpha for c >= 0, NaN at
+ * NaN (power_envelope of DFExact.jl) */
 int dfl_power_envelope(int n, const double *c, int model, double alpha, const dfl_gp_opts *o, double *out, char *err, size_t errlen);
 
 /* ---- the user-level entry points (dfl_api.c) ---- */

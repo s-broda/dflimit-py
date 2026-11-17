@@ -1,5 +1,5 @@
 # The C engine in csrc/ was copied from DF-Limit by tools/sync-engine.sh
-upstream_commit: a24a44831e17e9b4bdf36412aa9517daf3ff4602
-upstream_commit_date: 2026-11-14T20:44:04+01:00
+upstream_commit: 47723d07b9046c7be81456a32dcc3d39fb9da6fa
+upstream_commit_date: 2026-11-18T00:13:16+01:00
 upstream_c_modified: no
 patches:

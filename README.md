@@ -30,7 +30,7 @@ arguments, exist in R, MATLAB and Julia.
 | `power_envelope(c, cas="DK", alpha=0.05)` | the asymptotic power envelope of Elliott, Rothenberg and Stock (cases DK, DU, DG) |
 | `ltratio_threads(n)` | the number of worker threads of the engine |
 
-The case `cas` is a two-letter code: `D` (fixed start, `g0`, default 0) or `S` (stationary start, c < 0),
+The case `cas` is a two-letter code: `D` (fixed start, `g0`, default 0) or `S` (stationary start, c <= -1e-4),
 followed by `K` (no deterministic terms, tau), `U` (intercept, tau_mu) or `T` (intercept and trend, tau_tau);
 `"DG"` is the GLS-detrended trend case (DF-GLS, cbar = -13.5). `method` is `"auto"` (the faster representation at
 each point), `"single"` (the line integral, Theorem 2) or `"double"` (the conditional integral, Theorem S1). The
@@ -74,7 +74,7 @@ array([ -2.18135582,   5.32067592, -14.0358001 ,  39.5544305 ])
 >>> ltratio_lincdf(-0.2639, -3.5, "DK", -7)     # power of the point-optimal test against cbar = -7 at c = -7
 0.4993815721046887
 >>> power_envelope([-5, -10], "DG")             # the power envelope of the trend case
-array([0.11483717, 0.3100271 ])
+array([0.11484596, 0.31005163])
 
 ```
 

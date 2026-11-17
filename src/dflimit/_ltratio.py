@@ -7,7 +7,8 @@ from ._utils import Result, cint, dfl_case, dfl_method, dfl_num, dfl_posint, dfl
 
 CASES_DOC = """\
 **Cases.** ``cas`` is a two-letter code, the initial observation (``D``: deterministic, i.e. fixed; ``S``: drawn
-from the stationary distribution, which requires ``c < 0``) followed by the deterministic terms of the regression
+from the stationary distribution, which requires ``c <= -1e-4``: closer to zero the variance -1/(2c) of the start
+is too large for the quadrature, and the functions raise an error) followed by the deterministic terms of the regression
 (``K``: none, the intercept is known to be zero; ``U``: an unknown intercept; ``T``: an intercept and a trend):
 
 - ``"DK"``, ``"DU"``, ``"DT"``: the statistics tau, tau_mu, tau_tau, with the start y_0 = g0 sigma sqrt(n) (``g0``,

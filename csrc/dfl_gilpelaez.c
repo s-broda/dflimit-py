@@ -171,14 +171,17 @@ int dfl_lincdf(int n, const double *b, double a, int model, double c, double cba
     return 0;
 }
 
-/* the envelope at one c: the critical value of the test against cbar = c (a = c/2) at c = 0 by bisection on [-50, 50] to
- * 1e-9 (ltratio_bisect of DFExact.jl), then its power at c; 1: no sign change (flo, fhi), 2: out of memory */
+/* the envelope at one c: the critical value of the test against cbar = c, which rejects for small U - aV, at c = 0 by
+ * bisection on [-50, 50] to 1e-9 (ltratio_bisect of DFExact.jl), then its power at c; the weight a = c/2 in case DK (log
+ * likelihood ratio c U - c^2 V/2) and a = c^2/(2 (c - 1)) in case DG (the invariant statistic c^2 V + (1 - c) J(1)^2 of
+ * the data GLS-detrended at c, J(1)^2 = 2U + 1; po_weight of DFExact.jl); 1: no sign change (flo, fhi), 2: out of memory */
 static int envelope_one(double ck, int model, double alpha, const dfl_gp_opts *o, bool par, double *P, double *flo_out, double *fhi_out)
 {
     if (isnan(ck)) { *P = NAN; return 0; }
     if (!(ck < 0)) { *P = alpha; return 0; }
+    double a = model == 4 ? ck * ck / (2 * (ck - 1)) : ck / 2;
     gp_t G;
-    if (gp_init(&G, model, ck / 2, 0.0, ck, o)) { gp_free(&G); return 2; }
+    if (gp_init(&G, model, a, 0.0, ck, o)) { gp_free(&G); return 2; }
     gp_phi(&G, par);
     double lo = -50, hi = 50, flo = gp_P(&G, lo, par) - alpha, fhi = gp_P(&G, hi, par) - alpha;
     if (!(flo * fhi < 0)) { *flo_out = flo; *fhi_out = fhi; gp_free(&G); return 1; }

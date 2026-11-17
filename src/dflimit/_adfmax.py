@@ -17,7 +17,7 @@ the numerators U and -U - 1, so that ADFmax converges to (|R| - 1/2)/sqrt(V), R 
 computed by the conditional integral (Section 6 of the paper).
 
 The cases are ``"DU"`` and ``"DT"`` (a constant, or a constant and a trend, zero start) and ``"SU"`` and ``"ST"``
-(the same with a stationary start, ``c < 0``). The values are accurate to about 1e-11."""
+(the same with a stationary start, ``c <= -1e-4``). The values are accurate to about 1e-11."""
 
 ADFMAX_PARAMS_DOC = """\
 cas : str

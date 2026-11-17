@@ -944,7 +944,11 @@ static int double_start_x(int kind, int nx, const double *x, int model, double c
     S.dkfixed = model == 1 && !S.st;
     if (S.useg && !S.pdfm) { cdouble s0 = ZERO, L, k1, k2, mq, m2; nodepar(&S, 1, &s0, &L, &k1, &k2, &mq, &m2); S.k10 = k1; S.k20 = k2; S.mq0 = mq; }
     const orules_t *OR = outer_rules(S.M);
-    double lo = log(EB) - o->blo, hi = log(EB) + o->bhi, blo_ = exp(lo); S.brng = exp(hi) - blo_;
+    /* the lower end in log b: E V e^{-blo}, with a stationary start at most bmin (as in case DK of the zero start): in case SK,
+     * E V ~ 1/(2|c|) as c -> 0-, while V keeps the mass of the start's chi-square law near 0, and E V e^{-8} left out 1e-4 of
+     * F at c = -0.005 and 1e-3 at c = -0.001 without a flag (cases SU, ST, whose E V stays below 1, are unchanged;
+     * double_start of DFExact.jl) */
+    double lo = stat ? fmin(log(o->bmin), log(EB) - o->blo) : log(EB) - o->blo, hi = log(EB) + o->bhi, blo_ = exp(lo); S.brng = exp(hi) - blo_;
     double q0 = S.dkfixed ? (1 + S.g0 * S.g0) / 2 : 0.5;
     for (int i = 0; i < nx; i++) {
         double xx = x[i]; S.xx = xx; S.nbad = 0; S.nunres = 0;
@@ -1172,7 +1176,7 @@ int dfl_double(int kind, int n, const double *x, int model, double c, double c0,
 {
     if (model == 4) { snprintf(err, errlen, "the GLS-detrended case (model 4) has the single integral only"); return 1; }
     if (stat && g0 != 0) { snprintf(err, errlen, "a fixed start g0 applies to the zero-start cases only"); return 1; }
-    if (stat && !(c < 0)) { snprintf(err, errlen, "a stationary start requires c < 0"); return 1; }
+    if (stat && !(c <= DFL_CSTAT)) { snprintf(err, errlen, "%s", DFL_STAT_MSG); return 1; }
     if (!stat && g0 == 0) return double_zero(kind, n, x, model, c, c0, o, out, info);
     /* the domain end of the zero-start M_V: an error, not NaN, where no zero of D(0, t) is found */
     if (!isfinite(dfl_tstar(model, c, false))) { snprintf(err, errlen, "no zero of D(0, t) was found (t_*), c = %g", c); return 1; }
