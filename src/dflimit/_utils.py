@@ -12,8 +12,8 @@ import warnings
 import numpy as np
 
 CASES = ("DK", "DU", "DT", "SK", "SU", "ST", "DG")
-_METHODS = {"auto": 0, "single": 1, "line": 1, "double": 2, "conditional": 2}
-_METHOD_MSG = 'method must be "auto", "single" ("line") or "double" ("conditional")'
+_METHODS = {"auto": 0, "single": 1, "line": 1, "double": 2, "conditional": 2, "contour": 3}
+_METHOD_MSG = 'method must be "auto", "single" ("line"), "double" ("conditional") or "contour"'
 
 
 def dfl_case(cas, allowed=CASES):
@@ -31,6 +31,13 @@ def dfl_case(cas, allowed=CASES):
     if cas == "DG":
         return cas, 4, 0
     return cas, "KUT".index(cas[1]) + 1, int(cas[0] == "S")
+
+
+def dfl_flag(v, name):
+    """A boolean flag, as 0 or 1 for the engine."""
+    if not isinstance(v, (bool, np.bool_)):
+        raise TypeError(f"{name} must be True or False")
+    return int(bool(v))
 
 
 def dfl_num(v, name):
@@ -61,7 +68,8 @@ def dfl_posint(v, name):
 
 
 def dfl_method(method):
-    """The method: 0 automatic, 1 the line (single) integral, 2 the conditional (double) integral."""
+    """The method: 0 automatic, 1 the line (single) integral, 2 the conditional (double) integral, 3 the contour
+    integral."""
     if not isinstance(method, str):
         raise TypeError(_METHOD_MSG)
     try:

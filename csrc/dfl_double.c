@@ -300,8 +300,11 @@ static void paths_accept(const double *Iv, const double *E, int p, int q, double
 }
 static bool paths_inconsistent(const double *Iv, const double *E, int b, int q) { return q != b && isfinite(Iv[q]) && fabs(Iv[b] - Iv[q]) > 10 * (E[b] + E[q]); }
 static int paths_best(const double *E, int np) { int b = 0; for (int p = 1; p < np; p++) if (E[p] < E[b]) b = p; return b; }
-static void agreepaths(pathfn_t evalpath, void *ctx, int np, int NN, double tol, double *H, double *Eout)
+/* (verified = false: one evaluation, the second path, the vertical line, once with NN nodes: the oscillating tails that alias
+ * on the parabola do not fool it; ONEPATH of julia/DFExact.jl) */
+static void agreepaths(pathfn_t evalpath, void *ctx, int np, int NN, double tol, double *H, double *Eout, bool verified)
 {
+    if (!verified) { evalpath(np >= 2 ? 2 : 1, NN, ctx, H, Eout); return; }
     double Iv[3], E[3]; int N[3];
     for (int p = 0; p < np; p++) { Iv[p] = NAN; E[p] = INFINITY; N[p] = NN; }
     for (int p = 0; p < np; p++) {
@@ -341,7 +344,7 @@ static void dkpath(int pth, int NNq, void *v, double *Iv, double *Eq)
         pathW(dk_lk, &d1, p->b, p->sad->B.s, p->sad->B.a1 / 2, NNq, false, &IB, &EB); pathT(dk_lk, &d2, p->b, p->a, p->sad->C.s, p->sad->C.a1, NNq, p->c, false, false, &IC, &EC, &dummy);
         *Iv = IB - IC; *Eq = EB + EC; }
 }
-static void dkpair(double b, double a, double c, bool pdfm, int NN, const dksad_t *sad, double *H, double *E)
+static void dkpair(double b, double a, double c, bool pdfm, int NN, const dksad_t *sad, double *H, double *E, bool verified)
 {
     *H = 0; *E = 0;
     if (!(a > 0)) return;
@@ -351,7 +354,7 @@ static void dkpair(double b, double a, double c, bool pdfm, int NN, const dksad_
     double Lh = L0 - log(2 * M_PI * fmax(g2, 1e-6 * b * b)) / 2, lw = pdfm ? 1.5 * log(b) : log(b);
     if (Lh + lw < -35) return;
     dkpath_ctx pc = {b, c, a, v, k0, sad};
-    agreepaths(dkpath, &pc, pdfm ? 2 : 3, NN, tol, H, E);
+    agreepaths(dkpath, &pc, pdfm ? 2 : 3, NN, tol, H, E, verified);
 }
 
 /* ---- cases DU, DT, zero start ---- */
@@ -415,7 +418,7 @@ static void iipath(int pth, int NNq, void *v, double *Iv, double *Eq)
         if (!p->pdfm && sA < 0) *Iv += creal(cexp(CPX(ii_real(0, &d), 0)));
     }
 }
-static void iipair(double b, double r, double c, int model, bool pdfm, int NN, const sad_t *sad, double *H, double *E)
+static void iipair(double b, double r, double c, int model, bool pdfm, int NN, const sad_t *sad, double *H, double *E, bool verified)
 {
     double tol = 1e-13; r = rfloor(r, c);
     iictx d = {b, c, r, model}; double sab = iiabs(c, model);
@@ -426,7 +429,7 @@ static void iipair(double b, double r, double c, int model, bool pdfm, int NN, c
     *H = 0; *E = 0;
     if (Lh + lw < -35) { if (!pdfm && s < 0) *H = creal(cexp(CPX(ii_real(0, &d), 0))); return; }
     iipath_ctx pc = {d, b, r, c, s, a1, sab, pdfm};
-    agreepaths(iipath, &pc, 2, NN, tol, H, E);
+    agreepaths(iipath, &pc, 2, NN, tol, H, E, verified);
 }
 /* P[k1 Z1^2 + k2 Z2^2 <= a] for real weights: composite Gauss-Legendre over [l0, l0 + 40 sd] */
 static double Pk0(double k1, double k2, double a)
@@ -552,7 +555,7 @@ static double EVdk(double c) { return fabs(c) < 1e-8 ? 0.5 : (exp(2 * c) - 1 - 2
 /* ---- the zero-start route ---- */
 typedef struct { int model, M, Nv; double c, c0; bool pdfm; const double *x; void *sads;
                  double (*bnd)(double b, const void *ctx); const void *bctx;   /* a general boundary a(b) (case DK; dfl_region) */
-                 bool two; void *sads2; } zctx;                              /* the region |R| <= a(b) (cases DU, DT; dfl_adfmax) */
+                 bool two; void *sads2; bool verified; } zctx;                              /* the region |R| <= a(b) (cases DU, DT; dfl_adfmax) */
 typedef struct { int n, M; const double *B; const int *IX; zctx *z; void *sads; } blockjob;
 static void zsweep_body(int p, void *v)
 {
@@ -568,9 +571,9 @@ typedef struct { const double *B; const int *IX; double *H, *E; zctx *z; void *s
 static void zpair_body(int i, void *v)
 {
     pairjob *j = v; zctx *z = j->z; double b = j->B[i], xx = z->x[j->IX[i]], a = z->bnd ? z->bnd(b, z->bctx) : 0.5 + xx * sqrt(b) + z->c0 * b, h, e;
-    if (z->model == 1) { dksad_t *S = j->sads; dkpair(b, a, z->c, z->pdfm, z->Nv, S[i].valid ? &S[i] : NULL, &h, &e); if (z->pdfm) { h *= sqrt(b); e *= sqrt(b); } }
-    else { sad_t *S = j->sads; iipair(b, a, z->c, z->model, z->pdfm, z->Nv, &S[i], &h, &e);
-        if (z->two) { sad_t *S2 = z->sads2; double h2, e2; iipair(b, -a, z->c, z->model, z->pdfm, z->Nv, &S2[i], &h2, &e2); h += h2; e += e2; }
+    if (z->model == 1) { dksad_t *S = j->sads; dkpair(b, a, z->c, z->pdfm, z->Nv, S[i].valid ? &S[i] : NULL, &h, &e, z->verified); if (z->pdfm) { h *= sqrt(b); e *= sqrt(b); } }
+    else { sad_t *S = j->sads; iipair(b, a, z->c, z->model, z->pdfm, z->Nv, &S[i], &h, &e, z->verified);
+        if (z->two) { sad_t *S2 = z->sads2; double h2, e2; iipair(b, -a, z->c, z->model, z->pdfm, z->Nv, &S2[i], &h2, &e2, z->verified); h += h2; e += e2; }
         double fac = z->pdfm ? sqrt(b) : xx / (2 * sqrt(b)) + z->c0; h *= fac; e *= fabs(fac); }
     j->H[i] = h; j->E[i] = e;
 }
@@ -593,9 +596,11 @@ static int double_zero(int kind, int nx, const double *x, int model, double c, d
     double EB = EVdk(c), lo = model == 1 ? fmin(log(o->bmin), log(EB) - o->blo) : (c < -20 ? fmin(log(o->bmin), log(EB) - 3.0) : log(o->bmin)), hi = log(EB) + o->bhi;
     const orules_t *OR = outer_rules(M);
     pieces_t P = {0}; pieces_logb(nx, x, model, c, c0, lo, hi, o->plen, o->stepw, model == 1, &P);
-    zctx z = {model, M, o->Nv, c, c0, pdfm, x, NULL, NULL, NULL, false, NULL};
+    zctx z = {model, M, o->Nv, c, c0, pdfm, x, NULL, NULL, NULL, false, NULL, o->verified != 0};
     double *err = malloc(nx * sizeof(double)); int *nun = malloc(nx * sizeof(int)), *nref = malloc(nx * sizeof(int));
     adapt_out ao = {F, err, nun, nref, 0};
+    /* (verified = false: one evaluation: one path per inner inversion; the adaptive outer rule stays, without its bisection
+     * the values far from the unit root were off by up to 1e-2) */
     adaptb(P.n, P.PA, P.PL, P.PEL, P.PER, P.PX, nx, OR->u, OR->gw, model == 1 ? OR->z1 : OR->z2, model == 1 ? OR->w1 : OR->w2, OR, zero_evalH, &z, o->otol, o->maxlev, &ao);
     if (model != 1 && !pdfm) {
         dfl_girs_t G0; dfl_girsanov(model, c, ZERO, &G0); cdouble S0 = csqrt(csub(cmul(G0.A1, G0.A1), cscale(4, cmul(G0.A0, G0.A2))));
@@ -618,6 +623,7 @@ typedef struct {
     int model, kind, M, Nv, Nl; double c, c0, g0, s02, smax0, smax, mumin, tdec, brng; bool stat, st, nz, nzR, useg, dkfixed, pdfm;
     cdouble k10, k20, mq0; double xx; int nbad, nunres;
     bool two;                                  /* the region |R| <= a(b): also r = -a(b) on the same nodes (dfl_adfmax) */
+    bool verified;                             /* false: one evaluation (no recomputation of unresolved columns) */
 } sctx_t;
 /* log M_V(s) at real s with the initial-value terms; ok: s in the domain */
 static double LB(const sctx_t *S, double s, bool *ok)
@@ -885,7 +891,7 @@ static void Hb(sctx_t *S, int nb, const double *bv, double *H)
     if (S->two) for (int jj = 0; jj < na; jj++) sc = fmax(sc, fabs(Iv2[jj]));
     double tabs = 1e-11 / S->brng;
 #define HBBAD(jj) ((fabs(Iv[jj] - Ih[jj]) > 1e-9 * sc && fabs(Iv[jj] - Ih[jj]) > tabs) || (S->two && fabs(Iv2[jj] - Ih2[jj]) > 1e-9 * sc && fabs(Iv2[jj] - Ih2[jj]) > tabs))
-    for (int rf = 1; rf <= 2; rf++) {
+    for (int rf = 1; rf <= (S->verified ? 2 : 0); rf++) {
         bool any = false;
         for (int jj = 0; jj < na; jj++) {
             if (!HBBAD(jj)) continue;
@@ -930,7 +936,7 @@ static int double_start(int kind, int nx, const double *x, int model, double c, 
  * when x < 0 (stat_two of julia/DFExact.jl) */
 static int double_start_x(int kind, int nx, const double *x, int model, double c, double c0, double g0, bool stat, const dfl_double_opts *o, double *F, dfl_double_info *info, bool two)
 {
-    sctx_t S = {0}; S.two = two;
+    sctx_t S = {0}; S.two = two; S.verified = two || o->verified;           /* (the ADFmax statistic as before) */
     S.model = model; S.kind = kind; S.M = o->M > 0 ? o->M : 64; S.Nv = o->Nv; S.Nl = o->Nl; S.c = c; S.c0 = c0; S.g0 = stat ? 0 : g0; S.stat = stat; S.pdfm = kind == 1;
     S.s02 = stat ? -1 / (2 * c) : 0; S.st = stat && model == 1; S.nz = S.st || (S.g0 != 0 && model == 1); S.nzR = model != 1 && (stat || S.g0 != 0);
     S.mumin = o->mumin; S.tdec = o->tdec;
@@ -1050,7 +1056,7 @@ static int adfmax_zero(int kind, int nx, const double *x, int model, double c, c
         if (lv0 <= lo) { F[i] = 0; continue; }
         double ls[16], ws[16]; int ns = steproots_sg(Gr, 1, xk, o->stepw, ls, ws); ns += steproots_sg(Gr, -1, xk, o->stepw, ls + ns, ws + ns);
         pieces_t P = {0}; pieces_two(lo, hi, lv0, true, o->plen, ns, ls, ws, &P);
-        zctx z = {model, M, o->Nv, c, 0, pdfm, &xk, NULL, NULL, NULL, true, NULL};
+        zctx z = {model, M, o->Nv, c, 0, pdfm, &xk, NULL, NULL, NULL, true, NULL, true};
         double err; int nun, nref; adapt_out ao = {&F[i], &err, &nun, &nref, 0};
         adaptb(P.n, P.PA, P.PL, P.PEL, P.PER, P.PX, 1, OR->u, OR->gw, OR->z2, OR->w2, OR, zero_evalH, &z, o->otol, o->maxlev, &ao);
         if (!pdfm) { double alo = 0.5 + xk * sqrt(exp(lo)); F[i] += (alo >= 0 ? Pk0(k10, k20, alo) : Pk0_neg(k10, k20, alo)) - (alo <= 0 ? Pk0(k10, k20, -alo) : Pk0_neg(k10, k20, -alo)); }
@@ -1159,7 +1165,7 @@ int dfl_region(int type, const double *par, double v0, int nbrk, const double *b
     }
     free(pts);
     const orules_t *OR = outer_rules(M);
-    double x0 = 0; zctx z = {1, M, o->Nv, c, 0, false, &x0, NULL, bnd_a, &B, false, NULL};
+    double x0 = 0; zctx z = {1, M, o->Nv, c, 0, false, &x0, NULL, bnd_a, &B, false, NULL, true};
     double erri; int nun, nref; adapt_out ao = {out, &erri, &nun, &nref, 0};
     adaptb(P.n, P.PA, P.PL, P.PEL, P.PER, P.PX, 1, OR->u, OR->gw, OR->z1, OR->w1, OR, zero_evalH, &z, o->otol, o->maxlev, &ao);
     if (v0 > 0) *out += gp_V(c, v0);
@@ -1171,6 +1177,7 @@ int dfl_region(int type, const double *par, double v0, int nbrk, const double *b
 void dfl_double_defaults(dfl_double_opts *o)
 {
     o->M = 0; o->Nv = 96; o->Nl = 96; o->maxlev = 12; o->plen = 2.0; o->otol = 1e-12; o->stepw = 0.1; o->errtol = 1e-10; o->blo = 8.0; o->bhi = 6.0; o->bmin = 3e-3; o->mumin = 4.5; o->tdec = 41.5;
+    o->verified = 0;
 }
 int dfl_double(int kind, int n, const double *x, int model, double c, double c0, double g0, bool stat, const dfl_double_opts *o, double *out, dfl_double_info *info, char *err, size_t errlen)
 {

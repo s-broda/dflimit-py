@@ -32,8 +32,11 @@ arguments, exist in R, MATLAB and Julia.
 
 The case `cas` is a two-letter code: `D` (fixed start, `g0`, default 0) or `S` (stationary start, c <= -1e-4),
 followed by `K` (no deterministic terms, tau), `U` (intercept, tau_mu) or `T` (intercept and trend, tau_tau);
-`"DG"` is the GLS-detrended trend case (DF-GLS, cbar = -13.5). `method` is `"auto"` (the faster representation at
-each point), `"single"` (the line integral, Theorem 2) or `"double"` (the conditional integral, Theorem S1). The
+`"DG"` is the GLS-detrended trend case (DF-GLS, cbar = -13.5). `method` is `"auto"` (at each point the fastest
+representation that one evaluation gives to well below 1e-5), `"single"` (the line integral, Theorem 2), `"double"`
+(the conditional integral, Theorem S1) or `"contour"` (the contour integral, a fixed start in cases DU, DT only). Every
+value is one evaluation by one method, with a warning where the parameters lie in a regime in which one evaluation is
+known to be brittle; `verified=True` gives the checked computation (error estimates and fallbacks). The
 boundary `bnd` of `ltratio_region` is a dict: `{"type": "line", "a": a, "b": b}`, `{"type": "parabola", "x": x,
 "c0": c0}` or `{"type": "wap", "k": k, "omega": omega}`, with the optional keys `"v0"` and `"brks"`.
 
@@ -97,7 +100,7 @@ compilers of the distribution on Linux, e.g. `build-essential`, the Microsoft C+
 pip install git+https://github.com/s-broda/dflimit-py
 ```
 
-or, from a downloaded source distribution, `pip install dflimit-0.2.0.tar.gz`.
+or, from a downloaded source distribution, `pip install dflimit-0.3.0.tar.gz`.
 
 **From a wheel** (no compiler needed): the releases of the GitHub repository (the Releases page of
 `s-broda/dflimit-py`) carry wheels for Linux (x86_64 and aarch64, manylinux), macOS (Apple silicon and Intel) and
@@ -105,7 +108,7 @@ Windows (x86_64). There is one wheel per platform, which serves every CPython fr
 Download the one for your platform and
 
 ```sh
-pip install dflimit-0.2.0-cp39-abi3-macosx_11_0_arm64.whl      # macOS, Apple silicon (the name of the file you downloaded)
+pip install dflimit-0.3.0-cp39-abi3-macosx_11_0_arm64.whl      # macOS, Apple silicon (the name of the file you downloaded)
 ```
 
 The package is not on PyPI (yet).

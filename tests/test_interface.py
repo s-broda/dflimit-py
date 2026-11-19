@@ -176,11 +176,12 @@ class _FakeEngine:
     """The engine's entry points with flags set, for the warnings (which the real engine gives rarely)."""
 
     def dist(self, kind, x, *args):
-        return bytearray(x), len(x) // 8
+        return bytearray(x), len(x) // 8, ""
 
     def icdf(self, p, *args):
         n = len(p) // 8
-        return bytearray(p), bytearray(p), bytearray(np.full(n, 60, np.intc).tobytes()), bytearray(np.zeros(n, np.intc).tobytes())
+        return (bytearray(p), bytearray(p), bytearray(np.full(n, 60, np.intc).tobytes()), bytearray(np.zeros(n, np.intc).tobytes()),
+                "")
 
     def adfmax(self, kind, x, *args):
         n = len(x) // 8
@@ -199,7 +200,7 @@ def test_warnings(monkeypatch):
         warnings.simplefilter("error")
         ltratio_cdf([-1, 0], "DU", method="auto")                        # (no warning without method double)
     cases = [
-        (lambda: ltratio_cdf([-1, 0], "DU", method="double"), "did not meet its error estimate at 2 of 2 points"),
+        (lambda: ltratio_cdf([-1, 0], "DU", method="double", verified=True), "did not meet its error estimate at 2 of 2 points"),
         (lambda: ltratio_icdf([0.1, 0.2, 0.3], "DU"), "Newton's method did not converge at 3 of 3 points"),
         (lambda: adfmax_cdf(-2, "DU"), "at 1 of 1 points; the result may be inaccurate there"),
         (lambda: ltratio_region({"type": "line", "a": -3.5, "b": 0}), "the error estimate 1.0e-03 is above"),

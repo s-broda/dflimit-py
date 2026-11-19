@@ -83,39 +83,45 @@ static int check(int rc, const char *err)
     return -1;
 }
 
-/* dist(kind, x, model, c, c0, g0, stat, method) -> (bytearray out, int nstatus): dfl_dist */
+/* dist(kind, x, model, c, c0, g0, stat, method, verified) -> (bytearray out, int nstatus, str brittle-regime message or
+ * ""): dfl_dist, dfl_brittle */
 static PyObject *py_dist(PyObject *self, PyObject *args)
 {
-    int kind, model, stat, method, n = 0, ns = 0, rc = 0;
+    int kind, model, stat, method, verified = 0, n = 0, ns = 0, rc = 0;
     double c, c0, g0, *xc = NULL, *out = NULL;
     PyObject *xb, *res = NULL;
     char err[ERRLEN] = "";
-    if (!PyArg_ParseTuple(args, "iOidddii:dist", &kind, &xb, &model, &c, &c0, &g0, &stat, &method)) return NULL;
+    if (!PyArg_ParseTuple(args, "iOidddii|i:dist", &kind, &xb, &model, &c, &c0, &g0, &stat, &method, &verified)) return NULL;
     const double *x = in_doubles(xb, "x", &n, &xc);
     if (x == NULL || (out = scratch(n, sizeof(double))) == NULL) goto done;
-    ENGINE_CALL(rc = dfl_dist(kind, n, x, model, c, c0, g0, stat != 0, method, NULL, NULL, out, &ns, err, sizeof err));
+    dfl_double_opts dv; dfl_double_defaults(&dv); dv.verified = verified != 0;
+    ENGINE_CALL(rc = dfl_dist(kind, n, x, model, c, c0, g0, stat != 0, method, NULL, &dv, out, &ns, err, sizeof err));
     if (check(rc, err)) goto done;
-    res = Py_BuildValue("(Ni)", out_bytes(out, n, sizeof(double)), ns);
+    const char *bm = verified ? NULL : dfl_brittle(kind, model, c, c0, g0, stat != 0, method);
+    res = Py_BuildValue("(Nis)", out_bytes(out, n, sizeof(double)), ns, bm ? bm : "");
 done:
     PyMem_Free(out); PyMem_Free(xc);
     return res;
 }
 
-/* icdf(p, model, c, c0, g0, stat, method, tol) -> (q, F, iter, conv) as bytearrays (iter, conv: C int): dfl_icdf */
+/* icdf(p, model, c, c0, g0, stat, method, tol, verified) -> (q, F, iter, conv) as bytearrays (iter, conv: C int) and the
+ * brittle-regime message: dfl_icdf */
 static PyObject *py_icdf(PyObject *self, PyObject *args)
 {
-    int model, stat, method, n = 0, rc = 0, *it = NULL, *cv = NULL;
+    int model, stat, method, verified = 0, n = 0, rc = 0, *it = NULL, *cv = NULL;
     double c, c0, g0, tol, *pc = NULL, *q = NULL, *F = NULL;
     PyObject *pb, *res = NULL;
     char err[ERRLEN] = "";
-    if (!PyArg_ParseTuple(args, "Oidddiid:icdf", &pb, &model, &c, &c0, &g0, &stat, &method, &tol)) return NULL;
+    if (!PyArg_ParseTuple(args, "Oidddiid|i:icdf", &pb, &model, &c, &c0, &g0, &stat, &method, &tol, &verified)) return NULL;
     const double *p = in_doubles(pb, "p", &n, &pc);
     if (p == NULL || (q = scratch(n, sizeof(double))) == NULL || (F = scratch(n, sizeof(double))) == NULL ||
         (it = scratch(n, sizeof(int))) == NULL || (cv = scratch(n, sizeof(int))) == NULL) goto done;
-    ENGINE_CALL(rc = dfl_icdf(n, p, model, c, c0, g0, stat != 0, method, tol, NULL, NULL, q, F, it, cv, err, sizeof err));
+    dfl_double_opts dv; dfl_double_defaults(&dv); dv.verified = verified != 0;
+    ENGINE_CALL(rc = dfl_icdf(n, p, model, c, c0, g0, stat != 0, method, tol, NULL, &dv, q, F, it, cv, err, sizeof err));
     if (check(rc, err)) goto done;
-    res = Py_BuildValue("(NNNN)", out_bytes(q, n, sizeof(double)), out_bytes(F, n, sizeof(double)),
-                        out_bytes(it, n, sizeof(int)), out_bytes(cv, n, sizeof(int)));
+    const char *bm = verified ? NULL : dfl_brittle(2, model, c, c0, g0, stat != 0, method);
+    res = Py_BuildValue("(NNNNs)", out_bytes(q, n, sizeof(double)), out_bytes(F, n, sizeof(double)),
+                        out_bytes(it, n, sizeof(int)), out_bytes(cv, n, sizeof(int)), bm ? bm : "");
 done:
     PyMem_Free(q); PyMem_Free(F); PyMem_Free(it); PyMem_Free(cv); PyMem_Free(pc);
     return res;

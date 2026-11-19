@@ -3,7 +3,7 @@
 import numpy as np
 
 from . import _engine
-from ._utils import Result, cint, dfl_case, dfl_method, dfl_num, dfl_posint, dfl_real, dfl_shape, f64, fill_doc, warn
+from ._utils import Result, cint, dfl_case, dfl_flag, dfl_method, dfl_num, dfl_posint, dfl_real, dfl_shape, f64, fill_doc, warn
 
 CASES_DOC = """\
 **Cases.** ``cas`` is a two-letter code, the initial observation (``D``: deterministic, i.e. fixed; ``S``: drawn
@@ -18,15 +18,28 @@ is too large for the quadrature, and the functions raise an error) followed by t
   DF-GLS tests): zero start, the line integral only, no moments."""
 
 METHODS_DOC = """\
-**Methods and ranges.** Two exact representations are implemented: the line integral of Theorem 2 of the paper
-(``method="single"``, or ``"line"``) and the conditional integral of Theorem S1 of its Supplementary Material
-(``"double"``, or ``"conditional"``). ``"auto"`` (the default) takes the faster of the two at each point: the line
-integral at ``c0 = 0`` and with a fixed start, and with ``c0 != 0`` and a zero start the conditional integral, except
-for ``c0 > 0`` at ``x >= 0``. With ``"auto"`` the values of the line integral below 1e-3 are recomputed by the
-conditional integral (whose accuracy is relative where that of the line integral is absolute), a point at which the
-conditional integral reports that its error estimate is not met gets the line integral's value, and a computed
-density below zero is returned as zero. Far from the unit root (a stationary start at ``c < -50``; ``c0 != 0`` with a
-zero start at ``c < -100``) the line integral serves alone.
+**Methods and ranges.** Three exact representations are implemented: the line integral of Theorem 2 of the paper
+(``method="single"``, or ``"line"``), the conditional integral of Theorem S1 of its Supplementary Material
+(``"double"``, or ``"conditional"``) and, for a fixed start ``g0 != 0`` in cases DU and DT only, the contour integral
+(``"contour"``): the double integral of Theorem 1 of the paper with the integral over v in closed form and the paths in
+s and t deformed, an explicit integrand where the line integral needs a noncentral kernel that is itself an integral.
+
+By default (``verified=False``) every value is one evaluation by one method: no second evaluation, no refinement driven
+by an error estimate, no fallback to another representation and no recomputation. ``"auto"`` (the default) takes at
+each point the fastest representation that one evaluation gives to well below 1e-5: the contour integral with a fixed
+start in cases DU, DT (the conditional integral there for ``c > 1`` with ``c0 < 0`` and, in case DU, for ``c > 1.5``
+with ``c0 > 3``, where the contour integral fails), the line integral with a fixed start in case DK, at ``c0 = 0``, with a
+zero start and ``c0 > 0`` (but the conditional integral at ``x < 0`` for ``c >= 0`` in cases DU, DT), in case DK with
+``c0 < 0`` for ``c > -5``, with a stationary start in cases SU, ST and in case
+SK for ``c > -0.5``, and far from the unit root (``c < -100`` with a zero start, ``c < -50`` with a stationary start), and
+the conditional integral otherwise. Where the parameters lie in a regime in which one evaluation is known to be brittle a
+``RuntimeWarning`` names it (once per call). ``verified=True`` gives the checked computation, at 1 to 4.5 times the
+cost of the default (about 1.8 with the contour integral; more in the tails below 1e-3, which it recomputes): the
+conditional integral with the agreement of two paths and the refinement of their rules, the contour integral
+as two evaluations on different paths refined until they agree, a warning where the error estimate of ``"double"`` or
+``"contour"`` is not met, and with ``"auto"`` the rule before (the conditional integral with ``c0 != 0`` and a zero start
+except for ``c0 > 0`` at ``x >= 0``), the flagged values given another representation's value and the values below
+1e-3 recomputed by the conditional integral. A computed density below zero is returned as zero.
 
 ``c`` must be at least -550 (the range in which the programs are checked); the rules are set for ``c`` from about
 -480 to 10. With a fixed start ``g0 != 0`` the functions are checked, and an error is raised outside, in case DK for
@@ -46,8 +59,10 @@ c0 : float, default 0
     The local null value c0, phi0 = 1 + c0/n.
 g0 : float, default 0
     The fixed start, y_0 = g0 sigma sqrt(n) (cases DK, DU, DT).
-method : {"auto", "single", "line", "double", "conditional"}, default "auto"
-    The representation; see Notes."""
+method : {"auto", "single", "line", "double", "conditional", "contour"}, default "auto"
+    The representation (``"contour"``: a fixed start in cases DU, DT only); see Notes.
+verified : bool, default False
+    False: one evaluation by one method; True: the checked computation (see Notes)."""
 
 ERRORS_DOC = """\
 TypeError
@@ -61,7 +76,7 @@ REFERENCES_DOC = """\
 
 
 @fill_doc(params=PARAMS_DOC, errors=ERRORS_DOC, cases=CASES_DOC, methods=METHODS_DOC, references=REFERENCES_DOC)
-def ltratio_cdf(x, cas, c=0, c0=0, g0=0, method="auto"):
+def ltratio_cdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False):
     """Distribution function of the limit of the Dickey-Fuller t-ratio.
 
     The limit, as the sample size grows, of the distribution function of the least squares t-ratio of the
@@ -86,8 +101,8 @@ def ltratio_cdf(x, cas, c=0, c0=0, g0=0, method="auto"):
     Warns
     -----
     RuntimeWarning
-        With ``method="double"``, if the conditional integral reports, at some points, that its error estimate is
-        not met.
+        In a regime in which one evaluation is known to be brittle; with ``verified=True`` and ``method="double"``
+        or ``"contour"``, if the integral reports at some points that its error estimate is not met.
 
     Raises
     ------
@@ -119,11 +134,11 @@ def ltratio_cdf(x, cas, c=0, c0=0, g0=0, method="auto"):
     >>> ltratio_cdf(0, "DK", 2, c0=2)        # t-ratio centred at the true value
     0.6504355619...
     """
-    return _dist(2, x, cas, c, c0, g0, method)
+    return _dist(2, x, cas, c, c0, g0, method, verified)
 
 
 @fill_doc(params=PARAMS_DOC, errors=ERRORS_DOC, cases=CASES_DOC, methods=METHODS_DOC, references=REFERENCES_DOC)
-def ltratio_pdf(x, cas, c=0, c0=0, g0=0, method="auto"):
+def ltratio_pdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False):
     """Density of the limit of the Dickey-Fuller t-ratio.
 
     The density of the limit tau = (U - c0 V)/sqrt(V) of `ltratio_cdf`, under phi = 1 + c/n, phi0 = 1 + c0/n.
@@ -142,8 +157,8 @@ def ltratio_pdf(x, cas, c=0, c0=0, g0=0, method="auto"):
     Warns
     -----
     RuntimeWarning
-        With ``method="double"``, if the conditional integral reports, at some points, that its error estimate is
-        not met.
+        In a regime in which one evaluation is known to be brittle; with ``verified=True`` and ``method="double"``
+        or ``"contour"``, if the integral reports at some points that its error estimate is not met.
 
     Raises
     ------
@@ -169,21 +184,26 @@ def ltratio_pdf(x, cas, c=0, c0=0, g0=0, method="auto"):
     >>> ltratio_pdf([-3, -2, -1], "DT", -5)  # density
     array([0.405856..., 0.508800..., 0.040584...])
     """
-    return _dist(1, x, cas, c, c0, g0, method)
+    return _dist(1, x, cas, c, c0, g0, method, verified)
 
 
-def _dist(kind, x, cas, c, c0, g0, method):
+def _dist(kind, x, cas, c, c0, g0, method, verified=False):
     _, model, stat = dfl_case(cas)
     me = dfl_method(method)
+    ve = dfl_flag(verified, "verified")
     a = dfl_real(x, "x")
-    out, ns = _engine.dist(kind, a.tobytes(), model, dfl_num(c, "c"), dfl_num(c0, "c0"), dfl_num(g0, "g0"), stat, me)
-    if me == 2 and ns > 0:
-        warn(f"the conditional integral did not meet its error estimate at {ns} of {a.size} points")
+    out, ns, bm = _engine.dist(kind, a.tobytes(), model, dfl_num(c, "c"), dfl_num(c0, "c0"), dfl_num(g0, "g0"), stat,
+                               me, ve)
+    if ve and me >= 2 and ns > 0:
+        name = "conditional" if me == 2 else "contour"
+        warn(f"the {name} integral did not meet its error estimate at {ns} of {a.size} points")
+    if bm:
+        warn(bm)
     return dfl_shape(f64(out), a)
 
 
 @fill_doc(params=PARAMS_DOC, errors=ERRORS_DOC, cases=CASES_DOC, references=REFERENCES_DOC)
-def ltratio_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-10, info=False):
+def ltratio_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-10, info=False, verified=False):
     """Quantiles of the limit of the Dickey-Fuller t-ratio.
 
     The p-quantiles of the limit of `ltratio_cdf`, by Newton's method with `ltratio_pdf` as the derivative,
@@ -236,8 +256,10 @@ def ltratio_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-10, info=False):
     """
     _, model, stat = dfl_case(cas)
     a = dfl_real(p, "p")
-    q, F, it, cv = _engine.icdf(a.tobytes(), model, dfl_num(c, "c"), dfl_num(c0, "c0"), dfl_num(g0, "g0"), stat,
-                                dfl_method(method), dfl_num(tol, "tol"))
+    q, F, it, cv, bm = _engine.icdf(a.tobytes(), model, dfl_num(c, "c"), dfl_num(c0, "c0"), dfl_num(g0, "g0"), stat,
+                                    dfl_method(method), dfl_num(tol, "tol"), dfl_flag(verified, "verified"))
+    if bm:
+        warn(bm)
     conv = cint(cv) != 0
     if not conv.all():
         warn(f"Newton's method did not converge at {int(np.count_nonzero(~conv))} of {conv.size} points")

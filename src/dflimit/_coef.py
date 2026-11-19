@@ -1,10 +1,11 @@
 """The coefficient statistic n(phi^ - phi0): coef_cdf, coef_icdf (R/coef.R of the R package dflimit)."""
 import math
+import warnings
 
 import numpy as np
 
 from ._ltratio import CASES_DOC, ERRORS_DOC, ltratio_cdf
-from ._utils import dfl_case, dfl_method, dfl_num, dfl_real, dfl_shape, fill_doc
+from ._utils import dfl_case, dfl_method, dfl_num, dfl_real, dfl_shape, fill_doc, warn
 
 COEF_PARAMS_DOC = """\
 cas : str
@@ -15,8 +16,10 @@ c0 : float, default 0
     The local null value c0 of the statistic n(phi^ - phi0), phi0 = 1 + c0/n.
 g0 : float, default 0
     The fixed start, y_0 = g0 sigma sqrt(n) (cases DK, DU, DT).
-method : {"auto", "single", "line", "double", "conditional"}, default "auto"
-    The representation, as in `ltratio_cdf`."""
+method : {"auto", "single", "line", "double", "conditional", "contour"}, default "auto"
+    The representation, as in `ltratio_cdf`.
+verified : bool, default False
+    One evaluation (False) or the checked computation (True), as in `ltratio_cdf`."""
 
 COEF_NOTES_DOC = """\
 The limit is (U - c0 V)/V, so that P[(U - c0 V)/V <= y] = P[U - (c0 + y)V <= 0]: the distribution function of the
@@ -28,7 +31,7 @@ on a bracket grown from [-40, 10] until its width is below ``tol`` (about ten ev
 
 
 @fill_doc(params=COEF_PARAMS_DOC, errors=ERRORS_DOC, notes=COEF_NOTES_DOC, cases=CASES_DOC)
-def coef_cdf(y, cas, c=0, c0=0, g0=0, method="auto"):
+def coef_cdf(y, cas, c=0, c0=0, g0=0, method="auto", verified=False):
     """Distribution function of the limit of the Dickey-Fuller coefficient statistic.
 
     The limit of P[n(phi^ - phi0) <= y] for the least squares estimate phi^ of phi in the regression of
@@ -72,6 +75,11 @@ def coef_cdf(y, cas, c=0, c0=0, g0=0, method="auto"):
     g0 = dfl_num(g0, "g0")
     dfl_method(method)
     a = dfl_real(y, "y")
+    with _once():
+        return _coef_cdf(a, cas, c, c0, g0, method, verified)
+
+
+def _coef_cdf(a, cas, c, c0, g0, method, verified):
     F = np.empty(a.size)
     for k, yk in enumerate(a.ravel()):
         if math.isnan(yk):
@@ -81,12 +89,12 @@ def coef_cdf(y, cas, c=0, c0=0, g0=0, method="auto"):
         elif yk == -math.inf:
             F[k] = 0.0
         else:
-            F[k] = ltratio_cdf(0.0, cas, c, c0=c0 + yk, g0=g0, method=method)
+            F[k] = ltratio_cdf(0.0, cas, c, c0=c0 + yk, g0=g0, method=method, verified=verified)
     return dfl_shape(F, a)
 
 
 @fill_doc(params=COEF_PARAMS_DOC, errors=ERRORS_DOC, notes=COEF_NOTES_DOC, cases=CASES_DOC)
-def coef_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-9):
+def coef_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-9, verified=False):
     """Quantiles of the limit of the Dickey-Fuller coefficient statistic.
 
     The p-quantiles of the limit of n(phi^ - phi0) of `coef_cdf`.
@@ -134,15 +142,16 @@ def coef_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-9):
     g0 = dfl_num(g0, "g0")
     dfl_method(method)
     y = np.empty(a.size)
-    for k, pk in enumerate(a.ravel()):
-        y[k] = _coef_quantile(pk, cas, c, c0, g0, method, tol)
+    with _once():
+        for k, pk in enumerate(a.ravel()):
+            y[k] = _coef_quantile(pk, cas, c, c0, g0, method, tol, verified)
     return dfl_shape(y, a)
 
 
-def _coef_quantile(pk, cas, c, c0, g0, method, tol):
+def _coef_quantile(pk, cas, c, c0, g0, method, tol, verified=False):
     """One quantile by the Illinois variant of regula falsi (coef_icdf of the R package and of the MATLAB programs)."""
     def f(x):
-        return coef_cdf(x, cas, c, c0, g0, method) - pk
+        return coef_cdf(x, cas, c, c0, g0, method, verified) - pk
 
     lo, hi = -40.0, 10.0
     flo, fhi = f(lo), f(hi)
@@ -175,3 +184,23 @@ def _coef_quantile(pk, cas, c, c0, g0, method, tol):
             x = (lo * fhi - hi * flo) / (fhi - flo)
             break
     return x
+
+
+class _once:
+    """Gives each distinct warning once: the calls of ltratio_cdf inside coef_cdf and coef_icdf would repeat the warning of
+    a brittle regime at every point."""
+    def __enter__(self):
+        self._cm = warnings.catch_warnings(record=True)
+        self._log = self._cm.__enter__()
+        warnings.simplefilter("always")
+        return self
+
+    def __exit__(self, *exc):
+        self._cm.__exit__(*exc)
+        seen = set()
+        for w in self._log:
+            m = str(w.message)
+            if m not in seen:
+                seen.add(m)
+                warn(m)
+        return False

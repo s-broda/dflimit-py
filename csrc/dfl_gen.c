@@ -4,7 +4,8 @@
  * breakpoints on three-piece steepest-descent paths.  With a fixed start the density of R under the tilt is the
  * noncentral one (nckernel, phialg): elementary in case DK, a one-dimensional l-integral (ncG) in cases DU, DT.  A port
  * of breakpts / inner_gen / segint / pieces_nodes / phase_nodes / descent / outer_gen / nckernel / ncG of DFExact.jl
- * (Raymond Kan's extension of the MATLAB port). */
+ * (Raymond Kan's extension of the MATLAB port).  At the end of the file the contour integral representation of a fixed
+ * start in cases DU, DT (dfl_contour; ctr_* and tr_contour of DFExact.jl). */
 #include "dflimit.h"
 #include "dfl_vmath.h"
 #include <math.h>
@@ -945,4 +946,552 @@ void dfl_debug_inner_gen(int model, double c, double c0, double x, bool stat, in
     printf("part %d t %.15g%+.15gi s1 %.15g%+.15gi s2 %.15g%+.15gi M0 %.15g%+.15gi\nIs %.15g%+.15gi Ie1 %.15g%+.15gi Ie2 %.15g%+.15gi\n",
            part, creal(ts[1]), cimag(ts[1]), creal(s1[1]), cimag(s1[1]), creal(s2[1]), cimag(s2[1]), creal(M0[1]), cimag(M0[1]),
            creal(Is), cimag(Is), creal(Ie[0]), cimag(Ie[0]), creal(Ie[1]), cimag(Ie[1]));
+}
+
+/* =====================================================================================================================
+ * The contour integral representation (dfl_contour): a fixed start g0 != 0 in cases DU, DT (models 2, 3) as a double
+ * integral with an explicit integrand; a port of ctr_h / ctr_rend / ctr_moments / ctr_kernel / ctr_pieces / ctr_logM /
+ * ctr_kbound / ctr_xscale / ctr_bound / ctr_golden / ctr_place / ctr_seg / ctr_upath / ctr_inner_n / ctr_layout / ctr_phi
+ * / ctr_path / ctr_eval / ctr_level! / ctr_sum / ctr_value / tr_contour of DFExact.jl (November 2026), where the derivation
+ * is described:
+ *   f(x) = (1/2 pi i) int_C I_f(t) dt,  F(x) = (1/2 pi i) int_C I_F(t) dt/t,
+ * C the hyperbola t(u) = tau + a (cosh u - 1) + i b sinh u (trapezoidal rule in u >= 0), and at each node two U-shaped
+ * paths in s, G+ around the root s1 (opening right) and G- around s2 (opening left), of Mt(s,t) times the v-integrals in
+ * closed form (incomplete Gaussian integrals: ctr_h, ctr_moments) over the pieces of {v > 0} where X(v) = c0 v^2 + x v
+ * + 1/2 is positive (G+) or negative (G-) (at each node the pieces with Re(t) a^2 <= 50, ctr_active), and for the
+ * distribution function the kernels (1 - e^{-s/2})/s on G+ and -1/s on G-.  Two structurally different evaluations:
+ * A (the hyperbola at the angle ctr_phi(c), the placement weight 0.5, 64 nodes per panel and per ray) and B (the angle
+ * larger by pi/24, the weight 1, 48 nodes); the error estimate is |A - B| plus 10 eps times the sums of the largest terms
+ * of both; while it exceeds 1e-10 both get the next level (A 96, 128, 192; B 64, 96, 128) at all their nodes; the value
+ * is A at the last level, status 2 where the estimate still exceeds 1e-10 or the value is not finite.
+ * ===================================================================================================================== */
+#include "dfl_lock.h"
+
+#define CTR_NL 4
+static const int CTR_LEVELS[CTR_NL] = {64, 96, 128, 192};      /* nodes per panel and per ray of evaluation A: the levels of the refinement */
+static const int CTR_LEVELS_B[CTR_NL] = {48, 64, 96, 128};     /* ... of evaluation B (one level lower, so that the difference also changes the rule) */
+#define CTR_DPHI (M_PI / 24)      /* evaluation B: the asymptotic angle of its hyperbola exceeds that of A by 7.5 degrees */
+#define CTR_PEN_B 1.0             /* ... and its placement weighs the grading cost by 1 (A: CTR_PEN) */
+#define CTR_NGRID 24              /* the grid of the placement scan */
+#define CTR_MARG 1e-3             /* the admissible abscissas keep this fraction of |Re s1 - Re s2| from the roots */
+#define CTR_PEN 0.5               /* the weight of the grading cost in the placement objective (evaluation A) */
+#define CTR_RMAX 1e5              /* the outer contour ends at |t - tau| = CTR_RMAX */
+#define CTR_SUB 8                 /* points per outer step for the continuation of the branches */
+#define CTR_ERRTOL 1e-10
+#define CTR_CHUNK 32              /* the outer nodes in chunks of 32, until a chunk whose terms all stay below 1e-18 */
+
+/* max, min and clamp of Julia (NaN propagates) */
+static inline double ctr_max(double a, double b) { return (a != a || b != b) ? NAN : (a > b ? a : b); }
+static inline double ctr_min(double a, double b) { return (a != a || b != b) ? NAN : (a < b ? a : b); }
+static inline double ctr_clamp(double x, double lo, double hi) { return x > hi ? hi : x < lo ? lo : x; }
+static inline cdouble ctr_inv(cdouble z) { return cdiv(ONE, z); }
+static inline cdouble ctr_erfcx(cdouble z) { return dfl_faddw(CPX(-cimag(z), creal(z))); }   /* erfcx(z) = w(i z) */
+
+/* h_k(z) = int_0^inf u^k exp(-u^2 - 2 z u) du, k = 0, 1, 2, Re z >= 0: (sqrt(pi)/2) erfcx(z) and the recurrence forward
+ * for |z| < 6, the asymptotic series to its smallest term otherwise */
+static void ctr_h(cdouble z, cdouble *h)
+{
+    if (cabs(z) < 6) {
+        cdouble z2 = cscale(2, z);
+        cdouble h0 = cscale(sqrt(M_PI) / 2, ctr_erfcx(z));
+        cdouble h1 = cscale(0.5, csub(ONE, cmul(z2, h0)));
+        h[0] = h0; h[1] = h1; h[2] = cscale(0.5, csub(h0, cmul(z2, h1)));
+        return;
+    }
+    cdouble w = ctr_inv(cscale(2, z)), w2 = cmul(w, w);
+    cdouble a0 = w, a1 = w2, a2 = cmul(cscale(2, w2), w);
+    cdouble s0 = a0, s1 = a1, s2 = a2;
+    for (int j = 0; ; ) {
+        cdouble r0 = cscale((double) (-(2 * j + 1) * (2 * j + 2)) / (j + 1), w2);
+        cdouble r1 = cscale((double) (-(2 * j + 2) * (2 * j + 3)) / (j + 1), w2);
+        cdouble r2 = cscale((double) (-(2 * j + 3) * (2 * j + 4)) / (j + 1), w2);
+        if (!(cabs(r2) < 1)) break;        /* (abs(r2) >= 1 in DFExact.jl, which loops forever at z = NaN) */
+        a0 = cmul(a0, r0); a1 = cmul(a1, r1); a2 = cmul(a2, r2);
+        s0 = cadd(s0, a0); s1 = cadd(s1, a1); s2 = cadd(s2, a2);
+        j++;
+        if (cabs(a0) < 1e-17 * cabs(s0) && cabs(a2) < 1e-17 * cabs(s2)) break;
+    }
+    h[0] = s0; h[1] = s1; h[2] = s2;
+}
+/* the remainders R_m(a) = int_a^inf v^m e^{-t v^2 - s X(v)} dv less the full-line Gaussian when it belongs to a (the
+ * returned flag 1: Re z_a < 0), m = 0, 1, 2; sa = sqrt(t + c0 s), beta = x s, Ea = e^{-t a^2 - s X(a)} */
+static int ctr_rend(double a, cdouble sa, cdouble beta, cdouble Ea, cdouble *R)
+{
+    cdouble z = cadd(cscale(a, sa), cdiv(beta, cscale(2, sa))), g[3]; int n;
+    if (creal(z) >= 0) { n = 0; ctr_h(z, g); }
+    else { cdouble hh[3]; n = 1; ctr_h(cneg(z), hh); g[0] = cneg(hh[0]); g[1] = hh[1]; g[2] = cneg(hh[2]); }
+    cdouble i1 = ctr_inv(sa), i2 = cmul(i1, i1), i3 = cmul(i2, i1);
+    R[0] = cmul(cmul(Ea, i1), g[0]);
+    R[1] = cmul(Ea, cadd(cmul(cscale(a, i1), g[0]), cmul(i2, g[1])));
+    R[2] = cmul(Ea, cadd(cadd(cmul(cscale(a * a, i1), g[0]), cmul(cscale(2 * a, i2), g[1])), cmul(i3, g[2])));
+    return n;
+}
+/* the pieces (a, b) of {v > 0} (b may be Inf), at most three */
+typedef struct { int n; double a[3], b[3]; } ctr_pcs;
+/* int over the pieces of v^m e^{-t v^2 - s X(v)} dv, m = 0, 1, 2: the endpoint remainders and the full-line Gaussian as
+ * often as the flags at the lower ends exceed those at the upper ends */
+static void ctr_moments(cdouble t, cdouble s, double c0, double q, const ctr_pcs *pc, cdouble *M)
+{
+    cdouble alpha = cadd(t, cscale(c0, s)), beta = cscale(q, s), sa = csqrt(alpha), mt = cneg(t);
+    cdouble M0 = ZERO, M1 = ZERO, M2 = ZERO, R[3]; int nf = 0;
+    for (int k = 0; k < pc->n; k++) {
+        double a = pc->a[k], b = pc->b[k];
+        int na = ctr_rend(a, sa, beta, cexp(csub(cscale(a, cscale(a, mt)), cscale(c0 * a * a + q * a + 0.5, s))), R);
+        M0 = cadd(M0, R[0]); M1 = cadd(M1, R[1]); M2 = cadd(M2, R[2]); nf += na;
+        if (isfinite(b)) {
+            int nb = ctr_rend(b, sa, beta, cexp(csub(cscale(b, cscale(b, mt)), cscale(c0 * b * b + q * b + 0.5, s))), R);
+            M0 = csub(M0, R[0]); M1 = csub(M1, R[1]); M2 = csub(M2, R[2]); nf -= nb;
+        }
+    }
+    if (nf != 0) {
+        cdouble G0 = cmul(cscale(sqrt(M_PI), ctr_inv(sa)), cexp(csub(cdiv(cmul(beta, beta), cscale(4, alpha)), cscale(0.5, s))));
+        cdouble b2 = cdiv(beta, cscale(2, alpha));
+        M0 = cadd(M0, cscale(nf, G0));
+        M1 = csub(M1, cmul(cscale(nf, b2), G0));
+        M2 = cadd(M2, cmul(cscale(nf, cadd(cmul(b2, b2), ctr_inv(cscale(2, alpha)))), G0));
+    }
+    M[0] = M0; M[1] = M1; M[2] = M2;
+}
+/* the v-kernel of the density (kind 1, 2 v^2) or the distribution function (kind 2, X'(v) = q + 2 c0 v) */
+static cdouble ctr_kernel(int kind, cdouble t, cdouble s, double c0, double q, const ctr_pcs *pc)
+{
+    if (pc->n == 0) return ZERO;
+    cdouble M[3]; ctr_moments(t, s, c0, q, pc, M);
+    return kind == 1 ? cscale(2, M[2]) : cadd(cscale(q, M[0]), cscale(2 * c0, M[1]));
+}
+/* the pieces of {v > 0} with X(v) > 0 (plus) and < 0 (minus), split at the positive roots of X (a double root is no split) */
+static void ctr_pieces(double q, double c0, ctr_pcs *plus, ctr_pcs *minus)
+{
+    double r[2]; int nr = 0;
+    if (c0 == 0) { if (q < 0) r[nr++] = -0.5 / q; }
+    else {
+        double dsc = q * q - 2 * c0;
+        if (dsc > 0) {
+            double x1 = (-q - sqrt(dsc)) / (2 * c0), x2 = (-q + sqrt(dsc)) / (2 * c0);
+            if (x1 > 0) r[nr++] = x1;
+            if (x2 > 0) r[nr++] = x2;
+            if (nr == 2 && r[1] < r[0]) { double tmp = r[0]; r[0] = r[1]; r[1] = tmp; }
+        }
+    }
+    double bk[4]; int nb = 0; bk[nb++] = 0; for (int k = 0; k < nr; k++) bk[nb++] = r[k]; bk[nb++] = INFINITY;
+    plus->n = minus->n = 0;
+    for (int j = 0; j < nb - 1; j++) { ctr_pcs *p = j % 2 == 0 ? plus : minus; p->a[p->n] = bk[j]; p->b[p->n] = bk[j + 1]; p->n++; }
+}
+static bool ctr_semi(const ctr_pcs *pc) { for (int k = 0; k < pc->n; k++) if (!isfinite(pc->b[k])) return true; return false; }
+/* the pieces that are not negligible at a point t of the outer contour: a piece (a, b) with Re(t) a^2 > 50 (its Gaussian
+ * factor below e^{-50} from its start; far out at x -> 0- with c0 = 0 the root of X runs off to 1/(2|x|)) is dropped */
+static void ctr_active(const ctr_pcs *in, double tr, ctr_pcs *out)
+{
+    out->n = 0;
+    for (int k = 0; k < in->n; k++) if (tr * in->a[k] * in->a[k] <= 50) { out->a[out->n] = in->a[k]; out->b[out->n] = in->b[k]; out->n++; }
+}
+
+/* the data of a point t of the outer contour: the roots (s1 the one with Re > 0 at tau, s2 the other), P(t) and
+ * KQ = c^{2d} e^c g(z) P^2 */
+typedef struct { cdouble t, s1, s2, P, KQ; } ctr_t;
+/* log Mt(s,t) - log P: -(log(s1 - s) + log(s - s2))/2 + g0^2 Q(s,t) (principal logarithms) */
+static inline cdouble ctr_logM(const ctr_t *d, cdouble s, double g0, double c)
+{
+    cdouble a = csub(d->s1, s), b = csub(s, d->s2);
+    cdouble num = cadd(cadd(d->t, cscale(0.5, cmul(s, s))), cscale(c, s));
+    return cadd(cscale(-0.5, cadd(clog(a), clog(b))), cdiv(cmul(cscale(g0 * g0, d->KQ), num), cmul(a, b)));
+}
+/* max over v in the pieces of Re(-t v^2) - sig X(v): +Inf when a semi-infinite piece has a growing Gaussian */
+static double ctr_kbound(double tr, double sig, double c0, double q, const ctr_pcs *pc)
+{
+    double m = -INFINITY;
+    for (int k = 0; k < pc->n; k++) {
+        double a = pc->a[k], b = pc->b[k], A = tr + sig * c0;
+#define CTR_HV(v) (-A * (v) * (v) - sig * q * (v) - sig / 2)
+        if (A > 0) { double v = ctr_clamp(-sig * q / (2 * A), a, b); m = ctr_max(m, CTR_HV(v)); }
+        else { if (!isfinite(b)) return INFINITY; m = ctr_max(ctr_max(m, CTR_HV(a)), CTR_HV(b)); }
+#undef CTR_HV
+    }
+    return pc->n == 0 ? 0.0 : m;
+}
+/* the slowest decay scale along the rays of the v-kernel of the pieces (1/min(max|X|, |X(v0)|) per piece; semi-infinite
+ * pieces cut where e^{-Re(t) v^2} = e^{-18}); 0 without pieces */
+static double ctr_xscale(double tr, double c0, double q, const ctr_pcs *pc)
+{
+    if (pc->n == 0) return 0.0;
+    double sc = 0.0;
+    for (int j = 0; j < pc->n; j++) {
+        double a = pc->a[j], b = pc->b[j], bb = isfinite(b) ? b : a + 6 / sqrt(tr), m = 0.0;
+        for (int k = 0; k <= 32; k++) { double v = a + (bb - a) * k / 32; m = ctr_max(m, fabs(c0 * v * v + q * v + 0.5)); }
+        double sp = 0.0;
+        if (c0 != 0) {
+            double v0 = -q / (2 * c0); if (a < v0 && v0 < b) m = ctr_min(m, fabs(c0 * v0 * v0 + q * v0 + 0.5));
+            /* at an end that is a root v_j of X the kernel decays like s^(-1/2) (the Gaussian width of c0 (v - v_j)^2) up to
+             * |s| ~ |c0|/X'(v_j)^2 before the slope takes over: near a tangency of X (two close roots) on the pieces beside
+             * it as well as between them, where the vertex is not inside the piece */
+            double e[2] = {a, b};
+            for (int i = 0; i < 2; i++) {
+                if (!(e[i] > 0 && isfinite(e[i]))) continue;
+                double sl = 2 * c0 * e[i] + q; sp = ctr_max(sp, fabs(c0) / ctr_max(sl * sl, 1e-12));
+            }
+        }
+        sc = ctr_max(sc, ctr_max(1 / ctr_max(m, 1e-12), sp));
+    }
+    return sc;
+}
+/* the placement problem of one U-shape: around sk (side +1: opening right, -1: left), so the other root, the pieces of
+ * its v-kernel, the focus points, and kbx: 1 the exponent bound of the kernel taken at least max(0, -sig/2) (the kernel
+ * (1 - e^{-s/2})/s of the distribution function on G+), 2 at least 0 (-1/s on G-), 0 the v-kernel's alone */
+typedef struct { const ctr_t *d; double g0, c, tr, c0, q; const ctr_pcs *pc; cdouble sk, so; int side, nfoc; const cdouble *foc; int kbx; double pen; } ctr_pctx;
+static double ctr_kb(const ctr_pctx *p, double x)
+{
+    double k = ctr_kbound(p->tr, x, p->c0, p->q, p->pc);
+    return p->kbx == 1 ? ctr_max(k, ctr_max(0.0, -x / 2)) : p->kbx == 2 ? ctr_max(k, 0.0) : k;
+}
+/* the largest of log|Mt| + kb(Re s) over the 8 probe points of the U-shape with its segment at sig */
+static double ctr_bound(const ctr_pctx *p, double sig)
+{
+    double dd = fabs(creal(p->sk) - sig), y0 = cimag(p->sk), yo = ctr_clamp(cimag(p->so), y0 - dd, y0 + dd);
+    double rs = creal(p->sk), rx = rs + p->side * dd;
+    cdouble pr[8] = {CPX(sig, y0), CPX(sig, y0 + dd), CPX(sig, y0 - dd), CPX(rs, y0 + dd), CPX(rs, y0 - dd), CPX(rx, y0 + dd), CPX(rx, y0 - dd), CPX(sig, yo)};
+    double m = -INFINITY;
+    for (int k = 0; k < 8; k++) m = ctr_max(m, creal(ctr_logM(p->d, pr[k], p->g0, p->c)) + ctr_kb(p, creal(pr[k])));
+    return m;
+}
+/* the objective B of the placement: ctr_bound plus the grading cost toward the focus points */
+static double ctr_obj(const ctr_pctx *p, double sig)
+{
+    double v = ctr_bound(p, sig), dd = fabs(creal(p->sk) - sig);
+    for (int k = 0; k < p->nfoc; k++) {
+        double dist = hypot(sig - creal(p->foc[k]), ctr_max(0.0, fabs(cimag(p->foc[k]) - cimag(p->sk)) - dd));
+        v += p->pen * log(1 + dd / ctr_max(dist, 1e-300));
+    }
+    return v;
+}
+/* golden-section minimum of the objective on [a, b], n steps */
+static double ctr_golden(const ctr_pctx *p, double a, double b, int n)
+{
+    double g = (sqrt(5.0) - 1) / 2;
+    double x1 = b - g * (b - a), x2 = a + g * (b - a), f1 = ctr_obj(p, x1), f2 = ctr_obj(p, x2);
+    for (int i = 0; i < n; i++) {
+        if (f1 < f2) { b = x2; x2 = x1; f2 = f1; x1 = b - g * (b - a); f1 = ctr_obj(p, x1); }
+        else { a = x1; x1 = x2; f1 = f2; x2 = a + g * (b - a); f2 = ctr_obj(p, x2); }
+    }
+    return f1 < f2 ? x1 : x2;
+}
+/* the abscissa of the U-shape in the admissible interval [lo, hi]: the objective scanned on a geometric grid of CTR_NGRID
+ * distances d = |Re sk - sig| and refined by 12 golden-section steps between the neighbours of the best */
+static double ctr_place(const ctr_pctx *p, double lo, double hi)
+{
+    double rs = creal(p->sk), dmin, dmax;
+    if (p->side == 1) { dmin = rs - hi; dmax = rs - lo; } else { dmin = lo - rs; dmax = hi - rs; }
+    dmin = ctr_max(dmin, 1e-3 * dmax);
+    /* an empty admissible interval (the branch point -t/c0 or the condition Re s < 0 of G- beyond the root; not met in the
+     * supported region, met for c > 2): NaN, so that the value is not finite and flagged (status 2) */
+    if (!(dmax > 0 && dmin < dmax)) return NAN;
+    double best = INFINITY, sgs[CTR_NGRID]; int jb = 0;
+    for (int k = 0; k < CTR_NGRID; k++) {
+        double dk = dmin * pow(dmax / dmin, (double) k / (CTR_NGRID - 1));
+        sgs[k] = p->side == 1 ? rs - dk : rs + dk;
+        double v = ctr_obj(p, sgs[k]); if (v < best) { best = v; jb = k; }
+    }
+    double a = sgs[jb > 0 ? jb - 1 : 0], b = sgs[jb + 1 < CTR_NGRID ? jb + 1 : CTR_NGRID - 1];
+    return ctr_golden(p, ctr_min(a, b), ctr_max(a, b), 12);
+}
+/* the integrand on G+ (minus = 0) or G- (minus = 1): Mt/P times the v-kernel, plus (1 - e^{-s/2})/s on G+ and -1/s on G-
+ * for the distribution function */
+typedef struct { const ctr_t *d; int kind, minus; double q, c0, c, g0; const ctr_pcs *pc; } ctr_fctx;
+static cdouble ctr_f(const ctr_fctx *x, cdouble s)
+{
+    cdouble e = cexp(ctr_logM(x->d, s, x->g0, x->c)), k = ctr_kernel(x->kind, x->d->t, s, x->c0, x->q, x->pc);
+    if (x->kind == 2) {
+        if (x->minus) k = csub(k, ctr_inv(s));
+        else k = cadd(k, cabs(s) < 1e-8 ? CPX(0.5 - creal(s) / 8, -(cimag(s) / 8)) : cdiv(csub(ONE, cexp(cscale(-0.5, s))), s));
+    }
+    return cmul(e, k);
+}
+/* int of f(sig + i y) i dy between st and en by Gauss-Legendre panels (n nodes) graded from st: the first length h0
+ * (h0 = Inf: one panel), growing by the factor 3; the sum into *acc, the largest |term| into *mx */
+static void ctr_seg(const ctr_fctx *f, double sig, double st, double en, double h0, const double *z, const double *w, int n, cdouble *acc, double *mx)
+{
+    double len = fabs(en - st), dir = en >= st ? 1.0 : -1.0, a = 0.0, h = isfinite(h0) ? ctr_min(h0, len) : len, m = 0.0;
+    cdouble sum = ZERO;
+    while (a < len * (1 - 1e-14)) {
+        double b = ctr_min(a + h, len); if ((len - b) < 0.5 * h) b = len;
+        for (int k = 0; k < n; k++) {
+            double y = (b - a) * w[k];
+            cdouble fv = ctr_f(f, CPX(sig, st + dir * (a + (b - a) * z[k]))), val = CPX(-(cimag(fv) * y), creal(fv) * y);   /* f i y */
+            sum = cadd(sum, val); m = ctr_max(m, cabs(val));
+        }
+        a = b; h *= 3;
+    }
+    *acc = sum; *mx = m;
+}
+/* (1/2 pi i) int over the U-shape around sk with its segment at sig of f(s) ds: the segment split and graded toward the
+ * focus points, the rays r = rho u/(1 - u), rho = max(d, rscale), with graded panels up to rho first when rho > 2d;
+ * returns the value and max |term|/(2 pi) */
+static void ctr_upath(const ctr_fctx *f, cdouble sk, double sig, int side, int n, const double *z, const double *w, double rscale,
+                      const cdouble *foc, int nf, cdouble *value, double *mxo)
+{
+    double dd = fabs(creal(sk) - sig), y0 = cimag(sk), ylo = y0 - dd, yhi = y0 + dd, rho = ctr_max(dd, rscale);
+    cdouble acc = ZERO, v; double mx = 0.0, m;
+    /* the breakpoints: the ends (no grading) and the focus levels with their first panel lengths */
+    double lev[3], hs[3]; int ord[3];
+    for (int k = 0; k < nf; k++) { lev[k] = ctr_clamp(cimag(foc[k]), ylo, yhi); hs[k] = ctr_max(fabs(sig - creal(foc[k])), 1e-6 * dd); }
+    /* the focus points in the order of their scales: one whose level lies within its own scale of a level already kept is
+     * dropped (stable sorts, as sortperm) */
+    for (int k = 0; k < nf; k++) ord[k] = k;
+    for (int i = 1; i < nf; i++) { int o = ord[i], j = i - 1; while (j >= 0 && hs[ord[j]] > hs[o]) { ord[j + 1] = ord[j]; j--; } ord[j + 1] = o; }
+    double kl[3], kh[3]; int nk = 0;
+    for (int i = 0; i < nf; i++) {
+        int k = ord[i]; bool near_ = false;
+        for (int j = 0; j < nk; j++) if (fabs(lev[k] - kl[j]) <= hs[k]) { near_ = true; break; }
+        if (near_) continue;
+        kl[nk] = lev[k]; kh[nk] = hs[k]; nk++;
+    }
+    for (int k = 0; k < nk; k++) ord[k] = k;
+    for (int i = 1; i < nk; i++) { int o = ord[i], j = i - 1; while (j >= 0 && kl[ord[j]] > kl[o]) { ord[j + 1] = ord[j]; j--; } ord[j + 1] = o; }
+    double py[5], ph[5], tol = 1e-12 * ctr_max(dd, 1.0); int np = 0;
+    py[np] = ylo; ph[np] = INFINITY; np++;
+    for (int i = 0; i < nk; i++) {
+        int k = ord[i];
+        if (fabs(kl[k] - py[np - 1]) <= tol) ph[np - 1] = ctr_min(ph[np - 1], kh[k]);
+        else { py[np] = kl[k]; ph[np] = kh[k]; np++; }
+    }
+    if (!(fabs(yhi - py[np - 1]) <= tol)) { py[np] = yhi; ph[np] = INFINITY; np++; }
+    for (int k = 0; k < np - 1; k++) {
+        double A = py[k], hA = ph[k], B = py[k + 1], hB = ph[k + 1];
+        if (B - A <= 0) continue;
+        if (!isfinite(hA) && !isfinite(hB)) { ctr_seg(f, sig, A, B, INFINITY, z, w, n, &v, &m); acc = cadd(acc, v); mx = ctr_max(mx, m); }
+        else if (!isfinite(hA)) { ctr_seg(f, sig, B, A, hB, z, w, n, &v, &m); acc = cadd(acc, v); mx = ctr_max(mx, m); }
+        else if (!isfinite(hB)) { ctr_seg(f, sig, A, B, hA, z, w, n, &v, &m); acc = cadd(acc, v); mx = ctr_max(mx, m); }
+        else {
+            double M = (A + B) / 2;
+            ctr_seg(f, sig, A, M, hA, z, w, n, &v, &m); acc = cadd(acc, v); mx = ctr_max(mx, m);
+            ctr_seg(f, sig, B, M, hB, z, w, n, &v, &m); acc = cadd(acc, v); mx = ctr_max(mx, m);
+        }
+    }
+    for (int r = 0; r < 2; r++) {
+        double yc = r == 0 ? yhi : ylo; int dir = r == 0 ? 1 : -1, sgn = side == 1 ? dir : -dir;
+        double r0 = 0.0;
+        if (rho > 2 * dd) {
+            /* two scales: graded panels from the corner (first length d, growing by 3) up to rho, the map beyond */
+            double a = 0.0, h = dd;
+            while (a < rho * (1 - 1e-14)) {
+                double b = ctr_min(a + h, rho); if ((rho - b) < 0.5 * h) b = rho;
+                for (int k = 0; k < n; k++) {
+                    cdouble val = cscale(sgn * (b - a) * w[k], ctr_f(f, CPX(sig + side * (a + (b - a) * z[k]), yc)));
+                    acc = cadd(acc, val); mx = ctr_max(mx, cabs(val));
+                }
+                a = b; h *= 3;
+            }
+            r0 = rho;
+        }
+        for (int k = 0; k < n; k++) {
+            double u = z[k], rr = r0 + rho * u / (1 - u);
+            cdouble val = cscale(sgn * rho / ((1 - u) * (1 - u)) * w[k], ctr_f(f, CPX(sig + side * rr, yc)));
+            acc = cadd(acc, val); mx = ctr_max(mx, cabs(val));
+        }
+    }
+    *value = CPX(cimag(acc) / (2 * M_PI), -creal(acc) / (2 * M_PI));   /* acc/(2 pi i) */
+    *mxo = mx / (2 * M_PI);
+}
+/* the placement at one point t: the abscissas, the focus points and the ray scales of G+ and G- */
+typedef struct { double sp, sm, rsp, rsm; int nfp, nfm; cdouble focp[3], focm[3]; ctr_pcs pl, mi; } ctr_lay;   /* (pl, mi: the active pieces) */
+/* the inner function I_f(t) (kind 1) or I_F(t) (kind 2) at one point t, n nodes per panel and per ray; *mx the largest
+ * |term| */
+static void ctr_inner_n(int kind, const ctr_t *d, double q, double c0, double c, double g0, const ctr_pcs *plus, const ctr_pcs *minus,
+                        int n, const double *z, const double *w, const ctr_lay *L, cdouble *Iv, double *mx)
+{
+    ctr_fctx fp = {d, kind, 0, q, c0, c, g0, plus}, fm = {d, kind, 1, q, c0, c, g0, minus};
+    cdouble vp, vm = ZERO; double mp, mm = 0.0;
+    /* no admissible abscissa (ctr_place: NaN): the value is NaN, hence flagged */
+    if (isnan(L->sp) || ((minus->n > 0 || kind == 2) && isnan(L->sm))) { *Iv = CPX(NAN, NAN); *mx = 0.0; return; }
+    ctr_upath(&fp, d->s1, L->sp, 1, n, z, w, L->rsp, L->focp, L->nfp, &vp, &mp);
+    if (minus->n > 0 || kind == 2) ctr_upath(&fm, d->s2, L->sm, -1, n, z, w, L->rsm, L->focm, L->nfm, &vm, &mm);
+    *Iv = cmul(d->P, cadd(vp, vm)); *mx = cabs(d->P) * ctr_max(mp, mm);
+}
+static void ctr_layout(int kind, const ctr_t *d, double q, double c0, double c, double g0, const ctr_pcs *plus, const ctr_pcs *minus, double pen, ctr_lay *L)
+{
+    cdouble s1 = d->s1, s2 = d->s2; double tr = creal(d->t);
+    double lo = creal(s2), hi = creal(s1), Lw = hi - lo;
+    cdouble sb = c0 == 0 ? ZERO : CPX(-creal(d->t) / c0, -cimag(d->t) / c0);
+    bool semip = c0 > 0 && ctr_semi(plus);
+    L->nfp = 0; L->focp[L->nfp++] = ZERO; if (semip) L->focp[L->nfp++] = sb; L->focp[L->nfp++] = s2;
+    double lop = lo + CTR_MARG * Lw; if (semip) lop = ctr_max(lop, creal(sb) + CTR_MARG * Lw);
+    /* the exponent bound of the kernel on G+ (and on G- below): for the distribution function also that of the kernels of
+     * Psi_t(1/2), so that a negligible v-kernel does not leave the placement blind to Mt */
+    ctr_pctx pp = {d, g0, c, tr, c0, q, plus, s1, s2, 1, L->nfp, L->focp, kind == 2 ? 1 : 0, pen};
+    L->sp = ctr_place(&pp, lop, hi - CTR_MARG * Lw);
+    bool semim = c0 < 0 && ctr_semi(minus);
+    L->nfm = 0; L->focm[L->nfm++] = ZERO; if (semim) L->focm[L->nfm++] = sb; L->focm[L->nfm++] = s1;
+    L->sm = NAN;
+    if (minus->n > 0 || kind == 2) {
+        double him = hi - CTR_MARG * Lw; if (semim) him = ctr_min(him, creal(sb) - CTR_MARG * Lw);
+        if (kind == 2) him = ctr_min(him, -CTR_MARG * Lw);                      /* Re s < 0 on G- (the kernel -1/s) */
+        ctr_pctx pm = {d, g0, c, tr, c0, q, minus, s2, s1, -1, L->nfm, L->focm, kind == 2 ? 2 : 0, pen};
+        L->sm = ctr_place(&pm, lo + CTR_MARG * Lw, him);
+    }
+    /* (the kernel (1 - e^{-s/2})/s of the distribution function on G+ decays on the scale 2 = 1/X(0)) */
+    L->rsp = kind == 2 ? ctr_max(ctr_xscale(tr, c0, q, plus), 2.0) : ctr_xscale(tr, c0, q, plus);
+    L->rsm = ctr_xscale(tr, c0, q, minus);
+}
+
+/* the asymptotic angle of the outer hyperbola: 45 degrees for c >= -10, rising linearly to 70 degrees at c = -40, 70 below */
+static double ctr_phi(double c) { return (45 + 25 * ctr_clamp((-c - 10) / 30, 0.0, 1.0)) * M_PI / 180; }
+/* the outer contour of (model, c) (variant 1: evaluation A, the angle ctr_phi(c); variant 2: evaluation B, the angle
+ * ctr_phi(c) + CTR_DPHI): the nodes u_k = k h, the data along it (branches continued on CTR_SUB points per step) and
+ * t'(u_k); cached per (model, c, variant) under a lock (CTR_PMAX entries; beyond, each call builds its own) */
+typedef struct { int model, variant; double c, h; int K1; ctr_t *T; cdouble *dt; } ctr_path_t;
+#define CTR_PMAX 256
+static ctr_path_t *CTRPATH[CTR_PMAX]; static int nctrpath = 0; static dfl_lock_t ctrlock = DFL_LOCK_INIT;
+static ctr_path_t *ctr_path_new(int model, double c, int variant)
+{
+    double tau = dfl_default_tau(model, c, false), ts = dfl_tstar(model, c, false);
+    double phi = ctr_phi(c) + (variant == 2 ? CTR_DPHI : 0.0), y = ctr_min(0.5, 0.9 * (M_PI / 2 - phi));
+    double b = 0.9 * ctr_min(tau, ts - tau) / sin(y), a = b / tan(phi);
+    double h = 2 * M_PI * y / (37 + 37 * tan(phi) * y);
+    int K = (int) ceil(asinh(CTR_RMAX / hypot(a, b)) / h), nd = CTR_SUB * K + 1;
+    cdouble *tt = malloc(nd * sizeof(cdouble)), *P = malloc(nd * sizeof(cdouble)), *s1e = malloc(nd * sizeof(cdouble)), *s2e = malloc(nd * sizeof(cdouble)), *M0 = malloc(nd * sizeof(cdouble));
+    for (int j = 0; j < nd; j++) { double u = j * h / CTR_SUB; tt[j] = CPX(tau + a * (cosh(u) - 1), b * sinh(u)); }
+    dfl_tparts(model, c, nd, tt, false, P, s1e, s2e, M0);            /* (engine labels: s1e the root with Re < 0 at tau) */
+    ctr_path_t *C = malloc(sizeof *C);
+    C->model = model; C->variant = variant; C->c = c; C->h = h; C->K1 = K + 1;
+    C->T = malloc((K + 1) * sizeof(ctr_t)); C->dt = malloc((K + 1) * sizeof(cdouble));
+    double ek = (model == 2 ? c * c : pow(c, 4)) * exp(c);
+    for (int k = 0; k <= K; k++) {
+        int j = CTR_SUB * k; cdouble t = tt[j];
+        cdouble KQ = cmul(cscale(ek, dfl_gstat(model, CPX(c * c - 2 * creal(t), -2 * cimag(t)))), cmul(P[j], P[j]));
+        ctr_t d = {t, s2e[j], s1e[j], P[j], KQ}; C->T[k] = d;
+        C->dt[k] = CPX(a * sinh(k * h), b * cosh(k * h));
+    }
+    free(tt); free(P); free(s1e); free(s2e); free(M0);
+    return C;
+}
+static void ctr_path_free(ctr_path_t *C) { if (C) { free(C->T); free(C->dt); free(C); } }
+static ctr_path_t *ctr_path(int model, double c, int variant, bool *owned)
+{
+    *owned = false;
+#define CTR_HIT(k) (CTRPATH[k]->model == model && CTRPATH[k]->c == c && CTRPATH[k]->variant == variant)
+    dfl_lock(&ctrlock);
+    for (int k = 0; k < nctrpath; k++) if (CTR_HIT(k)) { ctr_path_t *r = CTRPATH[k]; dfl_unlock(&ctrlock); return r; }
+    dfl_unlock(&ctrlock);
+    ctr_path_t *C = ctr_path_new(model, c, variant);
+    dfl_lock(&ctrlock);
+    for (int k = 0; k < nctrpath; k++) if (CTR_HIT(k)) { ctr_path_t *r = CTRPATH[k]; dfl_unlock(&ctrlock); ctr_path_free(C); return r; }
+#undef CTR_HIT
+    if (nctrpath < CTR_PMAX) CTRPATH[nctrpath++] = C; else *owned = true;
+    dfl_unlock(&ctrlock);
+    return C;
+}
+/* one evaluation (variant 1: A, 2: B; ctr_eval of DFExact.jl): the path, the pieces, the per-node layouts and values G
+ * (outer node k, level l at G[k CTR_NL + l]), the largest terms gm at the first level, the nodes done, the levels and
+ * their rules; the outer nodes in chunks of CTR_CHUNK on the workers */
+typedef struct {
+    int kind, variant, lev, k1, done; bool owned; double x, c, c0, g0, pen; ctr_path_t *C; ctr_pcs plus, minus;
+    double *G, *gm; ctr_lay *lay; const int *levels; const double *z[CTR_NL], *w[CTR_NL];
+} ctr_eval_t;
+static cdouble ctr_wt(const ctr_eval_t *o, int k) { return o->kind == 1 ? o->C->dt[k] : cdiv(o->C->dt[k], o->C->T[k].t); }
+static void ctr_body_first(int j, void *v)
+{
+    ctr_eval_t *o = v; int k = o->k1 + j; const ctr_t *d = &o->C->T[k]; ctr_lay *L = &o->lay[k];
+    ctr_active(&o->plus, creal(d->t), &L->pl); ctr_active(&o->minus, creal(d->t), &L->mi);
+    ctr_layout(o->kind, d, o->x, o->c0, o->c, o->g0, &L->pl, &L->mi, o->pen, L);
+    cdouble wt = ctr_wt(o, k), Iv; double mx;
+    ctr_inner_n(o->kind, d, o->x, o->c0, o->c, o->g0, &L->pl, &L->mi, o->levels[0], o->z[0], o->w[0], L, &Iv, &mx);
+    o->G[k * CTR_NL] = cimag(cmul(Iv, wt)); o->gm[k] = mx * cabs(wt);
+}
+static void ctr_body_level(int k, void *v)
+{
+    ctr_eval_t *o = v; const ctr_t *d = &o->C->T[k]; int l = o->lev;
+    cdouble Iv; double mx;
+    ctr_inner_n(o->kind, d, o->x, o->c0, o->c, o->g0, &o->lay[k].pl, &o->lay[k].mi, o->levels[l], o->z[l], o->w[l], &o->lay[k], &Iv, &mx);
+    o->G[k * CTR_NL + l] = cimag(cmul(Iv, ctr_wt(o, k)));
+}
+/* the evaluation at its first level, until a chunk whose terms all stay below 1e-18 */
+static void ctr_eval(ctr_eval_t *o, int kind, double x, int model, double c, double c0, double g0, int variant)
+{
+    memset(o, 0, sizeof *o);
+    o->kind = kind; o->variant = variant; o->x = x; o->c = c; o->c0 = c0; o->g0 = g0;
+    o->C = ctr_path(model, c, variant, &o->owned);
+    ctr_pieces(x, c0, &o->plus, &o->minus);
+    o->pen = variant == 2 ? CTR_PEN_B : CTR_PEN; o->levels = variant == 2 ? CTR_LEVELS_B : CTR_LEVELS;
+    int K1 = o->C->K1;
+    o->G = calloc((size_t) K1 * CTR_NL, sizeof(double)); o->gm = calloc(K1, sizeof(double)); o->lay = malloc(K1 * sizeof(ctr_lay));
+    for (int l = 0; l < CTR_NL; l++) o->z[l] = dfl_rule(o->levels[l], &o->w[l]);
+    int done = 0;
+    while (done < K1) {
+        int k1 = done, k2 = done + CTR_CHUNK < K1 ? done + CTR_CHUNK : K1;
+        o->k1 = k1; dfl_parfor(k2 - k1, ctr_body_first, o);
+        done = k2;
+        double mg = 0, mm = 0;
+        for (int k = k1; k < k2; k++) { mg = ctr_max(mg, fabs(o->G[k * CTR_NL])); mm = ctr_max(mm, o->gm[k]); }
+        if (mg < 1e-18 && mm < 1e-18) break;
+    }
+    o->done = done;
+}
+/* the next level l (0-based) of an evaluation, at all its nodes */
+static void ctr_level(ctr_eval_t *o, int l) { o->lev = l; dfl_parfor(o->done, ctr_body_level, o); }
+static double ctr_sum(const ctr_eval_t *o, int l)
+{
+    double w = o->C->h / M_PI, s = 0;
+    for (int k = 0; k < o->done; k++) s += (k == 0 ? w / 2 : w) * o->G[k * CTR_NL + l];
+    return s;
+}
+static double ctr_gmsum(const ctr_eval_t *o)
+{
+    double w = o->C->h / M_PI, s = 0;
+    for (int k = 0; k < o->done; k++) s += (k == 0 ? w / 2 : w) * o->gm[k];
+    return s;
+}
+static void ctr_eval_free(ctr_eval_t *o) { free(o->G); free(o->gm); free(o->lay); if (o->owned) ctr_path_free(o->C); }
+/* the value: evaluations A and B, the error estimate |A - B| plus the cancellation, both refined while it exceeds
+ * CTR_ERRTOL, the value A at the last level (ctr_value of DFExact.jl); level 1-based (1..CTR_NL), nodes the outer nodes
+ * of A and B together */
+static double ctr_value(int kind, double x, int model, double c, double c0, double g0, int verified, double *err, int *status, int *nodes, int *level)
+{
+    ctr_eval_t A, B;
+    ctr_eval(&A, kind, x, model, c, c0, g0, 1);
+    if (!verified) {                                  /* one evaluation: A at the first level, no estimate */
+        double v = ctr_sum(&A, 0);
+        if (err) *err = NAN;
+        if (status) *status = isfinite(v) ? 0 : 2;
+        if (nodes) *nodes = A.done;
+        if (level) *level = 1;
+        ctr_eval_free(&A);
+        return v;
+    }
+    ctr_eval(&B, kind, x, model, c, c0, g0, 2);
+    double canc = 10 * 2.220446049250313e-16 * (ctr_gmsum(&A) + ctr_gmsum(&B));
+    int l = 0; double e = fabs(ctr_sum(&A, 0) - ctr_sum(&B, 0)) + canc;
+    while (e > CTR_ERRTOL && l < CTR_NL - 1) {
+        l++; ctr_level(&A, l); ctr_level(&B, l);
+        e = fabs(ctr_sum(&A, l) - ctr_sum(&B, l)) + canc;
+    }
+    double v = ctr_sum(&A, l);
+    if (err) *err = e;
+    if (status) *status = (e > CTR_ERRTOL || !isfinite(v)) ? 2 : 0;
+    if (nodes) *nodes = A.done + B.done;
+    if (level) *level = l + 1;
+    ctr_eval_free(&A); ctr_eval_free(&B);
+    return v;
+}
+
+int dfl_contour_lev(int kind, int n, const double *x, int model, double c, double c0, double g0, int verified, double *out, double *err, int *status, int *nodes, int *level, char *errmsg, size_t errlen)
+{
+    if (kind != 1 && kind != 2) { snprintf(errmsg, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
+    /* the checks of dfl_check_args but the region of a fixed start (dfl_fixed_ok), which the user-level functions check
+     * (dfl_dist, dfl_icdf): like tr_contour of DFExact.jl and dfl_double, the engine function computes outside it too */
+    if (!isfinite(g0)) { snprintf(errmsg, errlen, "g0 must be a finite real scalar"); return 1; }
+    if (dfl_check_args(model, c, c0, 0.0, false, errmsg, errlen)) return 1;
+    if (!((model == 2 || model == 3) && g0 != 0)) { snprintf(errmsg, errlen, "%s", DFL_CONTOUR_MSG); return 1; }
+    if (!isfinite(dfl_tstar(model, c, false))) { snprintf(errmsg, errlen, "no zero of D(0, t) was found (t_*), c = %g", c); return 1; }
+    for (int k = 0; k < n; k++) {
+        if (!isfinite(x[k])) {
+            out[k] = isnan(x[k]) ? NAN : (x[k] > 0 && kind == 2) ? 1.0 : 0.0;
+            if (err) err[k] = 0; if (status) status[k] = 0; if (nodes) nodes[k] = 0; if (level) level[k] = 0;
+            continue;
+        }
+        out[k] = ctr_value(kind, x[k], model, c, c0, g0, verified, err ? &err[k] : NULL, status ? &status[k] : NULL, nodes ? &nodes[k] : NULL, level ? &level[k] : NULL);
+    }
+    return 0;
+}
+int dfl_contour(int kind, int n, const double *x, int model, double c, double c0, double g0, int verified, double *out, double *err, int *status, int *nodes, char *errmsg, size_t errlen)
+{
+    return dfl_contour_lev(kind, n, x, model, c, c0, g0, verified, out, err, status, nodes, NULL, errmsg, errlen);
 }

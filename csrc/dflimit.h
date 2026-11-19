@@ -76,6 +76,18 @@ static inline cdouble cscale(double a, cdouble b) { return a * b; }
 static inline cdouble cneg(cdouble a) { return -a; }
 #endif
 
+/* the principal square root also where the libm csqrt fails: on macOS csqrt(-6.5e153 - 1.3e154 i) is 0 - inf i (|z| just
+ * above sqrt(DBL_MAX); correct at 1e153 and 1e154), which made the roots of D(., t) infinite at |t| ~ 1e5 in case DT at c = 0
+ * (the outer contour of dfl_contour); the argument is scaled by an even power of two (exact) when its larger component
+ * lies outside [1e-150, 1e150] */
+static inline cdouble dfl_csqrt(cdouble z)
+{
+    double m = fmax(fabs(creal(z)), fabs(cimag(z)));
+    if (!(m > 1e150 || (m < 1e-150 && m > 0)) || !isfinite(m)) return csqrt(z);
+    int e; frexp(m, &e); int k = e / 2;
+    return cscale(ldexp(1.0, k), csqrt(cscale(ldexp(1.0, -2 * k), z)));
+}
+
 /* ---- the constant tables (tables.c) ---- */
 extern const double GT[45], GE[46];                 /* tanh(th)/th and sech th as series in q = th^2 */
 extern const double G2SER[30], G3SER[30];           /* g(z) of the stationary start */
@@ -176,6 +188,22 @@ typedef struct {
 void dfl_single_defaults(dfl_single_opts *o);
 /* kind 1: density, 2: distribution function; stat: stationary start; returns 0, or an error code with a message */
 int dfl_single(int kind, int n, const double *x, int model, double c, double c0, double g0, bool stat, const dfl_single_opts *o, double *out, char *err, size_t errlen);
+/* the contour integral representation (dfl_gen.c; tr_contour of DFExact.jl), a fixed start g0 != 0 in cases DU, DT (models
+ * 2, 3) only: Theorem 1 with the integral over v in closed form (incomplete Gaussian integrals), for each t of the outer
+ * hyperbola t = tau + a (cosh u - 1) + i b sinh u (trapezoidal rule in u, cached per (model, c)) two U-shaped paths in s
+ * around the roots of D(., t), a double integral with an explicit integrand, computed twice on different paths with
+ * different rules (A: 64 nodes per panel and ray, B: a steeper hyperbola, other placements, 48 nodes).  kind 1 density,
+ * 2 distribution function; verified 0 (the default of the user-level functions): one evaluation, A at its first level,
+ * err NaN, status 0 (2 where the value is not finite), nodes those of A; verified 1: err (the error estimate: |A - B| plus
+ * the cancellation; both are refined while it exceeds 1e-10), status (0, or 2 where the estimate exceeds 1e-10 or the
+ * value is not finite) and nodes (the outer nodes of A and B together); err, status, nodes may be NULL; level (dfl_contour_lev) is the level at which the value of A was taken (1: 64 nodes per panel
+ * and ray, 2: 96, 3: 128, 4: 192).
+ * Non-finite x: 0 at -Inf, 1 (cdf) or 0 (density) at Inf, NaN at NaN (status 0, nodes 0, level 0).  Returns 0, or an
+ * error code with a message: the checks of dfl_check_args except the region of a fixed start (dfl_fixed_ok, checked by
+ * dfl_dist and dfl_icdf; as tr_contour of DFExact.jl), and the scope of the method (DFL_CONTOUR_MSG). */
+#define DFL_CONTOUR_MSG "method 3 (the contour integral) applies to a fixed start g0 != 0 in cases DU, DT"
+int dfl_contour(int kind, int n, const double *x, int model, double c, double c0, double g0, int verified, double *out, double *err, int *status, int *nodes, char *errmsg, size_t errlen);
+int dfl_contour_lev(int kind, int n, const double *x, int model, double c, double c0, double g0, int verified, double *out, double *err, int *status, int *nodes, int *level, char *errmsg, size_t errlen);
 double dfl_single_value_c0(int kind, double x, int model, double c, bool stat, const dfl_single_opts *o);      /* one value at c0 = 0, zero or stationary start */
 double dfl_single_value_gen(int kind, double x, int model, double c, double c0, double g0, bool stat, const dfl_single_opts *o);   /* the general kernel (c0 != 0 or a fixed start g0 != 0) */
 extern int DFL_NLNC;                                /* nodes of the l-rule of the noncentral kernel of a fixed start (40) */
@@ -184,7 +212,11 @@ extern int DFL_NLNC;                                /* nodes of the l-rule of th
 int dfl_moments(int model, double c, double c0, double g0, bool stat, int pmax, double *m, double *errest, char *err, size_t errlen);
 
 /* ---- the double integral (dfl_double.c) ---- */
-typedef struct { int M, Nv, Nl, maxlev; double plen, otol, stepw, errtol, blo, bhi, bmin, mumin, tdec; } dfl_double_opts;
+/* verified (0 by default): 1 the agreement of two (three) paths in the inner inversions, the doubling of their rules and the
+ * recomputation of unresolved columns, which the error estimates and the status rest on; 0 one evaluation (one path, the
+ * vertical line, at the first rule; the adaptive outer rule in log b stays); in dfl_dist and dfl_icdf it also selects the
+ * one-evaluation default of method 0 */
+typedef struct { int M, Nv, Nl, maxlev; double plen, otol, stepw, errtol, blo, bhi, bmin, mumin, tdec; int verified; } dfl_double_opts;
 void dfl_double_defaults(dfl_double_opts *o);
 typedef struct { double err; int status, nbad, nunres, nrefine; } dfl_double_info;
 /* the noncentral probability P[kap_1 Z_1^2 + kap_2 Z_2^2 <= a] (nc: with the squared means m1s, m2s) or its derivative in a
@@ -222,13 +254,23 @@ int dfl_power_envelope(int n, const double *c, int model, double alpha, const df
 /* ---- the user-level entry points (dfl_api.c) ---- */
 /* the validation shared by the entry points (and dfl_moments): the model, c (finite, at least DFL_CMIN), c0, g0, the start */
 int dfl_check_args(int model, double c, double c0, double g0, bool stat, char *err, size_t errlen);
-/* method 0: automatic (dfl_automethod at each x), 1: the single integral, 2: the double integral.  NULL options take the defaults.  nstatus (may be NULL) counts the points at which the double
- * integral reports that its error estimate is not met; with method 0 those points get the single integral's value, with method 2 the flagged value is returned.  Non-finite x: 0 at -Inf, 1 (cdf) or
- * 0 (density) at Inf, NaN at NaN. */
+/* method 0: automatic (dfl_automethod, from the parameters: 3 for a fixed start g0 != 0 in models 2, 3, otherwise 1 or 2), 1: the single integral, 2: the double integral, 3: the contour
+ * integral (dfl_contour; a fixed start g0 != 0 in models 2, 3 only, otherwise an error with DFL_CONTOUR_MSG).  NULL options take the defaults.  With dopt->verified = 0 (the default) every
+ * value is one evaluation by one method (no second evaluation, no refinement driven by an estimate, no fallback, no recomputation) and nstatus is 0; the regimes in which that is brittle are
+ * named by dfl_brittle.  With dopt->verified = 1 the checked behaviour before November 2026: nstatus (may be NULL) counts the points at which the double or the contour integral reports that its
+ * error estimate is not met (each point once); method 0 then follows the rule before (the double integral with c0 != 0 and a zero start except for c0 > 0 at x >= 0), a point flagged by the
+ * double integral gets the single integral's value, a point flagged by the contour integral the double integral's value and, where that is flagged too, the single integral's, and the values of
+ * the single and the contour integral below 1e-3 (a density in absolute value, a distribution function in the lower tail) are recomputed by the double integral (kept where it flags them);
+ * with methods 2 and 3 the flagged value is returned.  Non-finite x: 0 at -Inf, 1 (cdf) or 0 (density) at Inf, NaN at NaN. */
 int dfl_automethod(int model, double c, double c0, double g0, bool stat, double x);
+/* the regimes in which the one-evaluation default (verified = 0) is known to be brittle, decided from the parameters alone
+ * (no computed diagnostics, so that they cost nothing): a message naming the regime and suggesting verified = true, or NULL;
+ * method as in dfl_dist (the method requested, 0 automatic).  The user-level wrappers (R, Python, the MEX file) give it as
+ * a warning once per call; dfl_dist itself does not warn */
+const char *dfl_brittle(int kind, int model, double c, double c0, double g0, bool stat, int method);
 int dfl_dist(int kind, int n, const double *x, int model, double c, double c0, double g0, bool stat, int method,
              const dfl_single_opts *so, const dfl_double_opts *dopt, double *out, int *nstatus, char *err, size_t errlen);
-/* quantiles q of the probabilities p (in (0, 1)) by safeguarded Newton to the tolerance tol (1e-10); Fq, iter, conv
+/* quantiles q of the probabilities p (in (0, 1)) by safeguarded Newton to the tolerance tol (1e-10), method as in dfl_dist; Fq, iter, conv
  * (may be NULL) receive the distribution function at q, the iteration counts and the convergence flags */
 int dfl_icdf(int n, const double *p, int model, double c, double c0, double g0, bool stat, int method, double tol,
              const dfl_single_opts *so, const dfl_double_opts *dopt, double *q, double *Fq, int *iter, int *conv, char *err, size_t errlen);

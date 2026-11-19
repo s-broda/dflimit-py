@@ -240,8 +240,8 @@ cdouble dfl_qstart(int model, double c, cdouble u, cdouble v)
 {
     dfl_girs_t G; dfl_girsanov(model, c, v, &G);
     if (model == 1) {
-        cdouble S = cexp(G.lsh), S2 = cmul(S, S);
-        cdouble t3 = cdiv(u, cscale(2, cmul(cmul(S2, G.eta), csub(G.eta, u))));
+        /* (1/S^2 = e^{-2 lsh}: S = e^{lsh} overflows at large tilts, c <= -280 in the moments, where S * S = Inf + NaN i) */
+        cdouble t3 = cdiv(cmul(u, cexp(cscale(-2, G.lsh))), cscale(2, cmul(G.eta, csub(G.eta, u))));
         return cadd(csub(cdiv(v, G.eta), cscale(0.5, u)), t3);
     }
     cdouble d = detNuK(&G, model, u);
@@ -354,7 +354,7 @@ void dfl_tparts(int model, double c, int nt, const cdouble *t, bool stat, cdoubl
     for (int j = 0; j < nt; j++) {
         if (girs) {
             dfl_girs_t G; dfl_girsanov(model, c, t[j], &G);
-            cdouble disc = csqrt(csub(cmul(G.A1, G.A1), cscale(4, cmul(G.A0, G.A2))));
+            cdouble disc = dfl_csqrt(csub(cmul(G.A1, G.A1), cscale(4, cmul(G.A0, G.A2))));
             double sw = creal(cmul(conj(G.A1), disc)) < 0 ? -1 : 1;
             cdouble rb = cdiv(cadd(G.A1, cscale(sw, disc)), cscale(2, G.A0)), rs = cdiv(G.A2, cmul(G.A0, rb));
             sa[j] = rb; sb[j] = rs;
@@ -363,7 +363,7 @@ void dfl_tparts(int model, double c, int nt, const cdouble *t, bool stat, cdoubl
             cdouble s0 = ZERO, sp = CPX(-1, 0), sm = CPX(1, 0);
             cdouble d0 = dfl_Dfun(model, c, s0, t[j], stat), dp = dfl_Dfun(model, c, sp, t[j], stat), dm = dfl_Dfun(model, c, sm, t[j], stat);
             cdouble a2 = csub(cscale(0.5, cadd(dp, dm)), d0), a1 = cscale(0.5, csub(dp, dm)), a0 = d0;
-            cdouble disc = csqrt(csub(cmul(a1, a1), cscale(4, cmul(a2, a0))));
+            cdouble disc = dfl_csqrt(csub(cmul(a1, a1), cscale(4, cmul(a2, a0))));   /* (dfl_csqrt: the libm csqrt fails near |z| = 1e154 on macOS) */
             double sw = creal(cmul(conj(a1), disc)) < 0 ? -1 : 1;
             cdouble rb = cdiv(csub(cneg(a1), cscale(sw, disc)), cscale(2, a2)), rs = cdiv(a0, cmul(a2, rb));
             sa[j] = cneg(rb); sb[j] = cneg(rs); ma2[j] = cneg(a2);
