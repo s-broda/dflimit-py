@@ -6,7 +6,7 @@ The exact limiting distribution of the Dickey-Fuller t-ratio in Python.
 t-ratios under local alternatives, phi = 1 + c/n, by the exact representations of
 
 > Bao, Y., Broda, S. A. and Kan, R., "The Exact Limiting Distribution of the Dickey-Fuller t-Ratio and Some Related
-> Statistics", working paper.
+> Statistics", working paper, 2026, available at <https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7725619>.
 
 for the regression without deterministic terms, with an intercept and with an intercept and a trend; with a zero,
 a fixed or a stationary initial observation; for the t-ratio centred at the unit root or at a local null value c0;

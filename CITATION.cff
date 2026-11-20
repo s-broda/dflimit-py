@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the paper below."
+type: software
+title: "dflimit: Exact Limiting Distribution of the Dickey-Fuller t-Ratio (Python package)"
+authors:
+  - family-names: Bao
+    given-names: Yong
+  - family-names: Broda
+    given-names: Simon A.
+  - family-names: Kan
+    given-names: Raymond
+version: 0.4.0
+date-released: 2026-11-20
+license: MIT
+repository-code: "https://github.com/s-broda/dflimit-py"
+preferred-citation:
+  type: unpublished
+  title: "The Exact Limiting Distribution of the Dickey-Fuller t-Ratio and Some Related Statistics"
+  authors:
+    - family-names: Bao
+      given-names: Yong
+    - family-names: Broda
+      given-names: Simon A.
+    - family-names: Kan
+      given-names: Raymond
+  year: 2026
+  notes: "Working paper, available at SSRN"
+  url: "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7725619"
