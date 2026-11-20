@@ -1,4 +1,4 @@
-/* dfl_moments.c: the moments E tau^p for any c, c0 and start (Proposition S1 of the Supplementary Material): Cauchy integrals in u of the moment
+/* dfl_moments.c: the moments E tau^p for any c, c0 and start (the moments of the limit in the Supplementary Material): Cauchy integrals in u of the moment
  * generating function at real tilts, the Girsanov forms with a zero start, g0^2 Q(u, v) for a fixed start, D_S for
  * the stationary start; the integral over s by the trapezoidal rule in log s.  A port of moments_err of DFExact.jl. */
 #include "dflimit.h"

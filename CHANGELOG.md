@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- The documentation and the comments refer to the representations by name (the line integral, the contour integral
+  and the conditional integral representation) instead of by the paper's theorem and equation numbers. The C engine
+  is re-synced from DF-Limit; the results are unchanged.
+
 ## 0.3.0
 
 - Every value is now one evaluation by one method by default: no second evaluation, no refinement driven by an error
@@ -15,9 +21,9 @@
   regimes the default values agree with the verified ones to well below 1e-5 (to 5e-9 at the reference points of the
   contour integral).
 - A third representation, the contour integral (`method="contour"`), for a fixed start `g0 != 0` in cases DU and DT:
-  the double integral of Theorem 1 of the paper with the integral over v in closed form, the paths in s around the
-  roots of the determinant and a hyperbola in t, an explicit integrand where the line integral needs the noncentral
-  kernel, itself an integral. `"auto"` takes it there (one evaluation takes 5 to 12 ms a value on ten threads, against 8 to 89 ms for the line integral with its noncentral kernel and 0.24 to 0.28 s for the conditional integral), except for `c > 1` with `c0 < 0` and, in case DU,
+  a double integral from the inversion formula of the paper on paths around the singularities of the moment
+  generating function, with the integral over v in closed form, the paths in s around the roots of the determinant and a hyperbola in t, an explicit integrand where the line
+  integral needs the noncentral kernel, itself an integral. `"auto"` takes it there (one evaluation takes 5 to 12 ms a value on ten threads, against 8 to 89 ms for the line integral with its noncentral kernel and 0.24 to 0.28 s for the conditional integral), except for `c > 1` with `c0 < 0` and, in case DU,
   for `c > 1.5` with `c0 > 3`, where it fails and the conditional integral serves. Where the line integral was
   accurate the values change by at most 4e-13 (3.5e-10 at the corner `(c g0)^2/2 = 7200` of case DT, where the line
   integral is the less accurate); with `c0 > 0` at `c` below about -60 the line integral, which `"auto"` took before,

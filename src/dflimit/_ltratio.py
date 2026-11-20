@@ -18,11 +18,12 @@ is too large for the quadrature, and the functions raise an error) followed by t
   DF-GLS tests): zero start, the line integral only, no moments."""
 
 METHODS_DOC = """\
-**Methods and ranges.** Three exact representations are implemented: the line integral of Theorem 2 of the paper
-(``method="single"``, or ``"line"``), the conditional integral of Theorem S1 of its Supplementary Material
-(``"double"``, or ``"conditional"``) and, for a fixed start ``g0 != 0`` in cases DU and DT only, the contour integral
-(``"contour"``): the double integral of Theorem 1 of the paper with the integral over v in closed form and the paths in
-s and t deformed, an explicit integrand where the line integral needs a noncentral kernel that is itself an integral.
+**Methods and ranges.** Three exact representations of the paper are implemented: the line integral representation
+(``method="single"``, or ``"line"``), the conditional integral representation (``"double"``, or ``"conditional"``) and,
+for a fixed start ``g0 != 0`` in cases DU and DT only, the contour integral representation (``"contour"``): a double
+integral from the inversion formula on paths around the singularities of the moment generating function,
+with the integral over v in closed form and the paths in s and t deformed, an explicit integrand where the line
+integral needs a noncentral kernel that is itself an integral.
 
 By default (``verified=False``) every value is one evaluation by one method: no second evaluation, no refinement driven
 by an error estimate, no fallback to another representation and no recomputation. ``"auto"`` (the default) takes at
@@ -273,8 +274,8 @@ def ltratio_mom(p, cas, c=0, c0=0, g0=0, info=False):
     """Moments of the limit of the Dickey-Fuller t-ratio.
 
     The moments E[tau^j], j = 1, ..., p, of the limit tau = (U - c0 V)/sqrt(V) of `ltratio_cdf`, as one-dimensional
-    integrals of the joint moment generating function of (U, V) (Proposition S1 of the Supplementary Material of the
-    paper). Not available for case DG.
+    integrals of the joint moment generating function of (U, V) (the moments of the limit in the Supplementary
+    Material of the paper). Not available for case DG.
 
     Parameters
     ----------

@@ -189,7 +189,8 @@ void dfl_single_defaults(dfl_single_opts *o);
 /* kind 1: density, 2: distribution function; stat: stationary start; returns 0, or an error code with a message */
 int dfl_single(int kind, int n, const double *x, int model, double c, double c0, double g0, bool stat, const dfl_single_opts *o, double *out, char *err, size_t errlen);
 /* the contour integral representation (dfl_gen.c; tr_contour of DFExact.jl), a fixed start g0 != 0 in cases DU, DT (models
- * 2, 3) only: Theorem 1 with the integral over v in closed form (incomplete Gaussian integrals), for each t of the outer
+ * 2, 3) only: the inversion formula on paths around the singularities of the moment generating function, with the
+ * integral over v in closed form (incomplete Gaussian integrals), for each t of the outer
  * hyperbola t = tau + a (cosh u - 1) + i b sinh u (trapezoidal rule in u, cached per (model, c)) two U-shaped paths in s
  * around the roots of D(., t), a double integral with an explicit integrand, computed twice on different paths with
  * different rules (A: 64 nodes per panel and ray, B: a steeper hyperbola, other placements, 48 nodes).  kind 1 density,

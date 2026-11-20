@@ -1,5 +1,5 @@
-/* dfl_single.c: the single integral (Theorem 2) at c0 = 0: the inner transforms of the tilted density along paths in
- * the complex plane (adaptive Gauss-Legendre rules), the outer integral along Re t = tau (trapezoidal rule in u for
+/* dfl_single.c: the single integral (the line integral representation) at c0 = 0: the inner transforms of the
+ * tilted density along paths in the complex plane (adaptive Gauss-Legendre rules), the outer integral along Re t = tau (trapezoidal rule in u for
  * the smooth part, Filon's rule for the edge part), zero and stationary start.  A port of outer / inner_density /
  * inner_cdf of DFExact.jl; the fixed node layouts (the batched fast path) and the general kernel for c0 != 0 are in
  * dfl_batch.c and dfl_gen.c. */

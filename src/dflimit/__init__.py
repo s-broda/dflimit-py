@@ -28,7 +28,7 @@ from ._threads import default_threads as _default_threads
 from ._threads import ltratio_threads
 from ._utils import Result
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "ltratio_cdf", "ltratio_pdf", "ltratio_icdf", "ltratio_mom",

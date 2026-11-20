@@ -1,5 +1,6 @@
 /* dfl_api.c: the user-level entry points of the C engine, with the argument conventions of the MATLAB programs:
- * dfl_single (the single integral of Theorem 2 for a vector of x, the general kernel when c0 != 0), dfl_dist (the
+ * dfl_single (the single integral of the line integral representation for a vector of x, the general kernel when
+ * c0 != 0), dfl_dist (the
  * automatic choice between the single, the double and the contour integral at each x, as ltratio_cdf/ltratio_pdf with
  * method 'auto'), dfl_icdf (quantiles by safeguarded Newton from the normal approximation), and the validation shared
  * by all. */
