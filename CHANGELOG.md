@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1
+
+- Documentation only; the code and the results are those of 0.4.0. The package is on PyPI (`pip install dflimit`); the
+  README gives the paper's address on SSRN; `CITATION.cff` names the paper as the suggested citation, and
+  `.zenodo.json` describes the package for its archive on Zenodo.
+
 ## 0.4.0
 
 - The documentation and the comments refer to the representations by name (the line integral, the contour integral

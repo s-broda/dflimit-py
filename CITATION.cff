@@ -5,11 +5,14 @@ title: "dflimit: Exact Limiting Distribution of the Dickey-Fuller t-Ratio (Pytho
 authors:
   - family-names: Bao
     given-names: Yong
+    orcid: "https://orcid.org/0000-0001-6513-1683"
   - family-names: Broda
     given-names: Simon A.
+    orcid: "https://orcid.org/0000-0003-1686-9512"
   - family-names: Kan
     given-names: Raymond
-version: 0.4.0
+    orcid: "https://orcid.org/0000-0002-0578-9974"
+version: 0.4.1
 date-released: 2026-11-20
 license: MIT
 repository-code: "https://github.com/s-broda/dflimit-py"
@@ -19,10 +22,13 @@ preferred-citation:
   authors:
     - family-names: Bao
       given-names: Yong
+      orcid: "https://orcid.org/0000-0001-6513-1683"
     - family-names: Broda
       given-names: Simon A.
+      orcid: "https://orcid.org/0000-0003-1686-9512"
     - family-names: Kan
       given-names: Raymond
+      orcid: "https://orcid.org/0000-0002-0578-9974"
   year: 2026
   notes: "Working paper, available at SSRN"
   url: "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7725619"

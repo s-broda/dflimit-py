@@ -94,25 +94,21 @@ each on all the worker threads.
 `dflimit` is an ordinary Python package with a C extension (the engine is C11 and the C++ of the Faddeeva package);
 it needs Python 3.9 or later and NumPy.
 
-**From source** (needs a C and C++ compiler: the Xcode command line tools on macOS (`xcode-select --install`), the
-compilers of the distribution on Linux, e.g. `build-essential`, the Microsoft C++ Build Tools on Windows):
+```sh
+pip install dflimit
+```
+
+installs it from PyPI, which carries wheels for Linux (x86_64 and aarch64, manylinux), macOS (Apple silicon and Intel) and
+Windows (x86_64); there is one wheel per platform, which serves every CPython from 3.9 on (the tag `cp39-abi3`), and no
+compiler is needed. The same files are on the Releases page of the GitHub repository `s-broda/dflimit-py`.
+
+**From source** (on other platforms, or for the development version; needs a C and C++ compiler: the Xcode command line
+tools on macOS (`xcode-select --install`), the compilers of the distribution on Linux, e.g. `build-essential`, the
+Microsoft C++ Build Tools on Windows):
 
 ```sh
 pip install git+https://github.com/s-broda/dflimit-py
 ```
-
-or, from a downloaded source distribution, `pip install dflimit-0.4.0.tar.gz`.
-
-**From a wheel** (no compiler needed): the releases of the GitHub repository (the Releases page of
-`s-broda/dflimit-py`) carry wheels for Linux (x86_64 and aarch64, manylinux), macOS (Apple silicon and Intel) and
-Windows (x86_64). There is one wheel per platform, which serves every CPython from 3.9 on (the tag `cp39-abi3`).
-Download the one for your platform and
-
-```sh
-pip install dflimit-0.4.0-cp39-abi3-macosx_11_0_arm64.whl      # macOS, Apple silicon (the name of the file you downloaded)
-```
-
-The package is not on PyPI (yet).
 
 The tests (`pip install pytest`, then `pytest tests` in a copy of the repository) compare the installed package with
 the stored reference values of the Julia engine, as the tests of the R package do.
