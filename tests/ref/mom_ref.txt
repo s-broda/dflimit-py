@@ -1,4 +1,4 @@
-# a subset (24 of 50 rows) of c/test/mom_ref.txt of DF-Limit (Julia reference values); columns: m c c0 g0 st m1 m2 m3 m4
+# a subset (24 of 50 rows) of c/test/mom_ref.txt of dflimit-matlab (Julia reference values); columns: m c c0 g0 st m1 m2 m3 m4
 2 -5 0 0 0 -2.0960388308147815 4.800599215009008 -11.831241818896208 31.111768159371806
 2 -5 0 0 1 -2.1225609303807977 4.917946293318515 -12.247149370467838 32.50495318874006
 1 -2.5 0 0 1 -1.3590274563731615 2.2694138037808678 -4.2881593075748956 9.0284449648171883

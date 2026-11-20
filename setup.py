@@ -1,10 +1,10 @@
 """setup.py: the extension module dflimit._engine (the metadata is in pyproject.toml).
 
-The extension is the gateway src/dflimit/_engine.c and the C engine in csrc/ (copied from DF-Limit's c/ by
+The extension is the gateway src/dflimit/_engine.c and the C engine in csrc/ (copied from c/ of dflimit-matlab by
 tools/sync-engine.sh): C11 (dfl_*.c, tables.c) and the C++ of the Faddeeva package (Faddeeva.cc, faddeeva_shim.cpp).
 The two languages need different flags (-std=c11 on a C++ file is an error under clang), so build_ext below compiles
 the engine's sources itself, each with the flags of its language, and links the objects into the extension, with the
-C++ driver (language="c++": the C++ runtime) and -pthread.  The flags are those of DF-Limit's c/build.sh (gcc, clang)
+C++ driver (language="c++": the C++ runtime) and -pthread.  The flags are those of c/build.sh of dflimit-matlab (gcc, clang)
 and of .github/workflows/c.yml and mex.yml (MSVC: cl /O2 /std:c11); -DDFL_QUIET compiles out the debugging output of
 dfl_gen.c.  The compiler is the one setuptools configures from the running Python (and ARCHFLAGS, CC, CXX, CFLAGS on
 macOS and Linux), so the architecture flags of a wheel build apply to the engine as well.
@@ -31,7 +31,7 @@ def c_flags(compiler_type, src=None):
     """The flags of the C files (the engine's and the gateway's)."""
     if compiler_type == "msvc":
         # /GL- switches off the whole-program optimization that setuptools turns on (/GL): the engine is built and
-        # checked with cl /O2 /std:c11 (c.yml of DF-Limit)
+        # checked with cl /O2 /std:c11 (c.yml of dflimit-matlab)
         return ["/O2", "/std:c11", "/GL-"]
     # -O3 for dfl_gen.c as in c/build.sh: the l-rule of the noncentral kernel is written to be vectorized;
     # -Wno-unused-function as in c/build.sh (after the -Wall of Python's CFLAGS)

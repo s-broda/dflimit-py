@@ -4,8 +4,8 @@ The package (the Python code, the gateway src/dflimit/_engine.c, the C engine in
 tests and documentation):
   Copyright (c) 2026 Yong Bao, Simon A. Broda and Raymond Kan
   MIT License (see the file LICENSE of the package and https://opensource.org/license/mit).
-  The C engine is copied from the DF-Limit repository (directory c/) by tools/sync-engine.sh; the upstream commit
-  is recorded in the file src/dflimit/UPSTREAM.
+  The C engine is copied from the dflimit-matlab repository (directory c/) by tools/sync-engine.sh; the upstream
+  commit is recorded in the file src/dflimit/UPSTREAM.
 
 csrc/Faddeeva.cc, csrc/Faddeeva.h (Faddeeva.hh upstream): the Faddeeva package (http://ab-initio.mit.edu/Faddeeva),
   by Steven G. Johnson, Massachusetts Institute of Technology.

@@ -120,13 +120,16 @@ the stored reference values of the Julia engine, as the tests of the R package d
 ## Sibling implementations
 
 The same functions, with the same names and arguments: the R package
-[`dflimit`](https://github.com/s-broda/dflimit) (the same C engine, the same tests), and the MATLAB programs and
-the Julia reference implementation in the paper's repository.
+[`dflimit`](https://github.com/s-broda/dflimit) (the same C engine, the same tests), the MATLAB package dflimit-matlab
+(the MATLAB programs, and the C engine with a MEX gateway) and the Julia package
+[`DFLimit.jl`](https://github.com/s-broda/DFLimit.jl), the Julia reference implementation.
 
 ## Licence and citation
 
 MIT (see `LICENSE`); the Faddeeva package in `csrc/Faddeeva.cc` is by Steven G. Johnson, MIT licence (see
 `COPYRIGHTS`). Please cite the paper when using the package.
 
-The C engine in `csrc/` is copied from the paper's repository by `tools/sync-engine.sh` (the upstream commit is in
-`src/dflimit/UPSTREAM`, which is installed with the package); do not edit those files here.
+The C engine in `csrc/` is copied from dflimit-matlab, the repository of the MATLAB package, which holds the C engine
+(its directory `c/`), by `tools/sync-engine.sh` (the upstream commit is in `src/dflimit/UPSTREAM`, which is installed
+with the package); do not edit those files here. The engine was developed in the paper's repository up to commit
+b484d4f.

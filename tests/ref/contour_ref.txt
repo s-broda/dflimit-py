@@ -1,4 +1,4 @@
-# a subset (12 of 30 rows) of c/test/contour_ref.txt of DF-Limit (Julia reference values); columns: m c c0 g0 x F f errF errf
+# a subset (12 of 30 rows) of c/test/contour_ref.txt of dflimit-matlab (Julia reference values); columns: m c c0 g0 x F f errF errf
 2 -5 0 0.31622776601683794 -2.8599999999999999 0.12484216310046495 0.28821207043794761 8.262e-17 1.884e-16
 2 -5 0 1.5 -2 0.8649772400771647 0.33128663780386036 7.514e-16 3.645e-16
 2 -10 0 0.67082039324993692 -4 0.037477901860310615 0.11793798741289027 5.086e-16 2.839e-15

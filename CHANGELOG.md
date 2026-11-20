@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- The C engine is now copied from dflimit-matlab, the repository of the MATLAB package, which holds the C engine since
+  it left the paper's repository (`tools/sync-engine.sh /path/to/dflimit-matlab`); the sources are unchanged.
+
 ## 0.4.0
 
 - The documentation and the comments refer to the representations by name (the line integral, the contour integral

@@ -226,7 +226,7 @@ def test_stationary_start_near_the_unit_root():
               lambda: coef_cdf(-8.039, "SK", -9e-5), lambda: adfmax_cdf(-2.4, "SU", -9e-5)):
         with pytest.raises(ValueError, match=r"requires c <= -1e-4"):
             f()
-    # at c = -1e-4 the values of the Julia engine (julia/quickcheck.jl of DF-Limit, section 18b)
+    # at c = -1e-4 the values of the Julia engine (test/engine/quickcheck.jl of DFLimit.jl, section 18b)
     assert abs(ltratio_cdf(-1.94087, "SK", -1e-4) - 0.028490044498374834) < 1e-11
     assert abs(coef_cdf(-8.039, "SK", -1e-4) - 0.00032997244558452543) < 1e-12
     assert abs(adfmax_cdf(-2.43542, "SU", -1e-4) - 0.050000718603976146) < 1e-11

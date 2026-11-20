@@ -1,4 +1,4 @@
-/* _engine.c: the Python gateway to the C engine (the files of csrc/ are copied from DF-Limit's c/ by
+/* _engine.c: the Python gateway to the C engine (the files of csrc/ are copied from c/ of dflimit-matlab by
  * tools/sync-engine.sh and are not edited here; this file is the counterpart of src/dflimit_r.c of the R package).
  * The functions of the Python layer (dflimit/_*.py) check and convert the arguments (the case code to the model and
  * the start, the method name to its number); this file checks their types again and calls the engine.

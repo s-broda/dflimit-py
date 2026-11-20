@@ -1,4 +1,4 @@
-# a subset (30 of 118 rows) of c/test/gen_ref.txt of DF-Limit (Julia reference values); columns: m c c0 st x F f
+# a subset (30 of 118 rows) of c/test/gen_ref.txt of dflimit-matlab (Julia reference values); columns: m c c0 st x F f
 1 2 2 0 0 0.65043556197800989 0.32575018255161015
 1 2 2 0 1.5 0.96080515738567962 0.07988415915624951
 1 2 2 0 3 0.9993025911137231 0.002339841175715254

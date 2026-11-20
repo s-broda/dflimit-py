@@ -1,7 +1,7 @@
 """Helpers of the tests (tests/testthat/helper-ref.R of the R package dflimit).
 
 The reference files in ref/ are copied unchanged from tests/testthat/ref/ of the R package dflimit: subsets of the
-Julia reference values in c/test/*_ref.txt of DF-Limit, the paper's repository (see the first line of each file).
+Julia reference values in c/test/*_ref.txt of dflimit-matlab, the home of the C engine (see the first line of each file).
 """
 import math
 import os
