@@ -1,5 +1,7 @@
 # dflimit
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24404482.svg)](https://doi.org/10.5281/zenodo.24404482)
+
 The exact limiting distribution of the Dickey-Fuller t-ratio in Python.
 
 `dflimit` computes the distribution function, density, quantiles and moments of the limits of the Dickey-Fuller
