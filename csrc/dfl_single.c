@@ -19,10 +19,14 @@ double DFL_FILONW = 300.0;
 
 /* ---- quadrature primitives: f(y, ctx) complex ---- */
 typedef cdouble (*fn_t)(double y, const void *ctx);
+static const char RULE_WHAT[] = "a Gauss-Legendre rule of the inner integrals";
+/* (a rule beyond DFL_RULEMAX, or a point already refused on this thread: nothing is evaluated, the bound is recorded) */
 static cdouble glsum(fn_t f, const void *ctx, double a, double b, int n, int p)
 {
     n *= DFL_NODEFAC;
+    if (dfl_bound_hit()) return ZERO;
     const double *gw; const double *u = dfl_rule(n, &gw);
+    if (u == NULL) { dfl_bound_set(DFL_BOUND_RULE, n, RULE_WHAT); return ZERO; }
     cdouble acc = ZERO; double L = b - a;
     for (int k = 0; k < n; k++) {
         double y, dy;
@@ -33,7 +37,14 @@ static cdouble glsum(fn_t f, const void *ctx, double a, double b, int n, int p)
     }
     return acc;
 }
-static int nodes(int n, double osc, double L) { int m = 16 * (int) ceil(ceil(1.2 * osc * L) / 16); return n > m ? n : m; }
+/* the node count of an outer piece of rayint, at most 0.85 rad per node; beyond DFL_RULEMAX the bound is recorded (glsum then
+ * evaluates nothing) */
+static int nodes(int n, double osc, double L)
+{
+    double mm = 1.2 * osc * L;
+    if (mm > DFL_RULEMAX) { dfl_bound_set(DFL_BOUND_RULE, mm, RULE_WHAT); return n; }
+    int m = 16 * (int) ceil(ceil(mm) / 16); return n > m ? n : m;
+}
 static cdouble rayint(fn_t f, const void *ctx, double R, double l, int n1, int n2, int p, double osc)
 {
     double a = fmin(R, 8 * l);
@@ -306,21 +317,60 @@ static double max_phase_step(int n, const double *psi)
     return m;
 }
 
+/* ---- the bound of the rules up front (gauss_nmax, gauss_check of DFExact.jl) ----
+ * The largest node count of a piece of the segment to the saddle that gaussexp takes for the inner integrals of the central
+ * kernels at t and q > 0 (inner_density, inner_cdf), before rounding; 0 where they take another path.  Its phase 2 Im u0,
+ * u0 = -sd^2 q^2/(4t), grows like q^2 and rayint gives every piece 1.2 nodes per radian: at c = 7 in case DT the largest
+ * piece has more than DFL_RULEMAX nodes from q ~ 660.  outer_c0 refuses a line on which it exceeds DFL_RULEMAX before it
+ * evaluates anything (the same steps as gaussexp and rayint, without the integrand). */
+static double gauss_nmax(int kern, cdouble t, double q, cdouble s1, cdouble s2)
+{
+    cdouble sd = kern == 1 ? s1 : s2;
+    double at = cabs(t); cdouble e = cexp(CPX(0, -carg(t) / 2));
+    if (q <= 0 || ray_ok(sd, e, q, at) || creal(cmul(sd, e)) >= 0) return 0;
+    double lA = 1 / (cabs(kern == 1 ? s1 : cscale(0.5, csub(s2, s1))) + 2);
+    cdouble x0 = cdiv(cscale(-q * q, sd), cscale(2, t)), u0 = cdiv(cscale(-q * q, cmul(sd, sd)), cscale(4, t));
+    double ru = creal(u0), R = ru > EXPO ? 1 - sqrt(1 - EXPO / ru) : 1.0;
+    double l = fmin(lA / cabs(x0), 1 / (2 * cabs(u0) + 1)), osc = 2 * fabs(cimag(u0));
+    double a = fmin(R, 8 * l), m = 0;
+    while (a < R) { double b = fmin(R, 4 * a); m = fmax(m, 1.2 * osc * (b - a)); a = b; }
+    return m;
+}
+static const char GAUSS_WHAT[] = "the segment to the saddle of the Gaussian factor of the inner integrals, whose phase grows like x^2,";
+static int gauss_check(int kern, double q, int n, const cdouble *ts, const cdouble *s1, const cdouble *s2, dfl_bound_t *bd)
+{
+    if (!(q > 0)) return 0;
+    double m = 0;
+    for (int j = 0; j < n; j++) m = fmax(m, gauss_nmax(kern, ts[j], q, s1[j], s2[j]));
+    if (!(m > DFL_RULEMAX)) return 0;
+    bd->bound = DFL_BOUND_RULE; bd->need = m; bd->what = GAUSS_WHAT;
+    return DFL_BOUND_RULE;
+}
+
 /* ---- the outer integral ---- */
-typedef struct { int kern, kind, n; double q; const cdouble *ts, *s1, *s2, *M0, *P; const double *wt; double *g; cdouble *G; double y, cde; const double *us; double e1; } octx;
+typedef struct { int kern, kind, n; double q; const cdouble *ts, *s1, *s2, *M0, *P; const double *wt; double *g; cdouble *G; double y, cde; const double *us; double e1; dfl_bound_t *fail; } octx;
+/* (a node whose inner integrals meet a bound of the engine records it in fail, and the other nodes are skipped) */
 static void smooth_body(int j, void *v) { octx *o = v; cdouble Is, Ie;
+    if (dfl_bound_failed(o->fail)) return;
+    dfl_bound_clear();
     if (o->kind == 1) inner_density(o->kern, o->ts[j], o->q, o->s1[j], o->s2[j], 1, INFINITY, &Is, &Ie);
     else inner_cdf(o->kern, o->ts[j], o->q, o->s1[j], o->s2[j], o->M0[j], 1, INFINITY, &Is, &Ie);
+    if (dfl_bound_note(o->fail)) return;
     cdouble val = cmul(o->P[j], Is); if (o->kind == 2) val = cdiv(val, o->ts[j]);
     o->g[j] = creal(val) * o->wt[j]; }
 static void edge_body(int j, void *v) { octx *o = v; cdouble Is, Ie; cdouble t = o->ts[j + 1];
+    if (dfl_bound_failed(o->fail)) return;
+    dfl_bound_clear();
     if (o->kind == 1) inner_density(o->kern, t, o->q, o->s1[j + 1], o->s2[j + 1], 2, o->e1, &Is, &Ie);
     else inner_cdf(o->kern, t, o->q, o->s1[j + 1], o->s2[j + 1], o->M0[j + 1], 2, o->e1, &Is, &Ie);
+    if (dfl_bound_note(o->fail)) return;
     cdouble val = cmul(o->P[j + 1], Ie); if (o->kind == 2) val = cdiv(val, t);
     o->G[j] = cmul(val, cexp(cscale(o->y, t))); }
 
-static double outer_c0(int kind, int model, double c, double q, double tau, bool stat, const dfl_single_opts *o)
+/* the value in *out; 0, or the bound of the engine that the line would exceed (recorded in *bd, *out NaN) */
+static int outer_c0(int kind, int model, double c, double q, double tau, bool stat, const dfl_single_opts *o, double *out, dfl_bound_t *bd)
 {
+    *out = NAN;
     int kern = ((model == 1 || model == 4) && !stat) ? 1 : 2;
     double hu = o->hu * dfl_hufac(c), cde = tau, Wm = dfl_wmaxc(c); int N = o->N;
     /* the smooth part: the trapezoidal rule in u, w = tau sinh u */
@@ -330,8 +380,9 @@ static double outer_c0(int kind, int model, double c, double q, double tau, bool
     for (int j = 0; j < nu; j++) { double u = j * hu; ts[j] = CPX(tau, cde * sinh(u)); wt[j] = cde * cosh(u); }
     dfl_tparts(model, c, nu, ts, stat, P, s1, s2, M0);
     saddle_phase(kern, q, nu, ts, s1, s2, psi);
-    double val;
-    octx oc = {kern, kind, nu, q, ts, s1, s2, M0, P, wt, g, NULL, 0, cde, NULL};
+    double val = NAN;
+    dfl_bound_t fail = {0, 0, NULL}; *bd = fail;
+    octx oc = {kern, kind, nu, q, ts, s1, s2, M0, P, wt, g, NULL, 0, cde, NULL, 0, &fail};
     if (q > 0 && max_phase_step(nu, psi) > 0.25) {
         /* Gauss-Legendre panels with node counts following the phase */
         double w0 = fmin(0.5, tau / 2); int ne = (int) ceil(log2(Wm / w0)) + 2;
@@ -357,19 +408,20 @@ static double outer_c0(int kind, int model, double c, double q, double tau, bool
         cdouble *Pn = malloc((nn + 1) * sizeof(cdouble)), *s1n = malloc((nn + 1) * sizeof(cdouble)), *s2n = malloc((nn + 1) * sizeof(cdouble)), *M0n = malloc((nn + 1) * sizeof(cdouble));
         dfl_tparts(model, c, nn + 1, tn, stat, Pn, s1n, s2n, M0n);
         double *gn = malloc(nn * sizeof(double));
-        octx on = {kern, kind, nn, q, tn + 1, s1n + 1, s2n + 1, M0n + 1, Pn + 1, wn, gn, NULL, 0, cde, NULL};
-        dfl_parfor(nn, smooth_body, &on);
-        val = 0; for (int j = 0; j < nn; j++) val += gn[j]; val /= M_PI;
+        octx on = {kern, kind, nn, q, tn + 1, s1n + 1, s2n + 1, M0n + 1, Pn + 1, wn, gn, NULL, 0, cde, NULL, 0, &fail};
+        /* (a line on which the inner integrals need a rule beyond DFL_RULEMAX is refused before anything is evaluated) */
+        if (!gauss_check(kern, q, nn + 1, tn, s1n, s2n, &fail)) dfl_parfor(nn, smooth_body, &on);
+        if (!fail.bound) { val = 0; for (int j = 0; j < nn; j++) val += gn[j]; val /= M_PI; }
         free(edges0); free(te0); free(P0); free(s1e); free(s2e); free(M0e); free(psie); free(tn); free(wn); free(Pn); free(s1n); free(s2n); free(M0n); free(gn);
     } else {
-        dfl_parfor(nu, smooth_body, &oc);
-        g[0] *= 0.5;
-        val = 0; for (int j = 0; j < nu; j++) val += g[j]; val *= hu / M_PI;
+        if (!gauss_check(kern, q, nu, ts, s1, s2, &fail)) dfl_parfor(nu, smooth_body, &oc);
+        if (!fail.bound) { g[0] *= 0.5; val = 0; for (int j = 0; j < nu; j++) val += g[j]; val *= hu / M_PI; }
     }
     free(ts); free(P); free(s1); free(s2); free(M0); free(wt); free(g); free(psi);
+    if (fail.bound) { *bd = fail; return fail.bound; }
     /* the edge part (q < 0): Filon's rule on geometric panels */
     double y = 1 / (4 * q * q);
-    if (q > 0 || 3 * tau * y / 16 > 40) return val;
+    if (q > 0 || 3 * tau * y / 16 > 40) { *out = val; return 0; }
     double w0 = fmin(fmin(0.5, 1 / y), tau / 2);
     int ne0 = (int) ceil(log2(Wm / w0)) + 2;
     double *edges0 = malloc(ne0 * sizeof(double)); edges0[0] = 0; for (int p = 1; p < ne0; p++) edges0[p] = w0 * pow(2, p - 1); edges0[ne0 - 1] = Wm;
@@ -396,37 +448,44 @@ static double outer_c0(int kind, int model, double c, double q, double tau, bool
     cdouble *Pe = malloc((nw + 1) * sizeof(cdouble)), *s1e = malloc((nw + 1) * sizeof(cdouble)), *s2e = malloc((nw + 1) * sizeof(cdouble)), *M0e = malloc((nw + 1) * sizeof(cdouble));
     dfl_tparts(model, c, nw + 1, te, stat, Pe, s1e, s2e, M0e);
     cdouble *G = malloc(nw * sizeof(cdouble));
-    octx oe = {kern, kind, nw, q, te, s1e, s2e, M0e, Pe, NULL, NULL, G, y, cde, NULL, INFINITY};
+    octx oe = {kern, kind, nw, q, te, s1e, s2e, M0e, Pe, NULL, NULL, G, y, cde, NULL, INFINITY, &fail};
     /* the K_0 kernel for c < -20: the first piece of the edge segment is at most 1/b long, b = (s_2 - s_1)/2 at tau, the scale on
      * which K_0(b X) turns from its logarithm to its exponential decay (with a zero start b ~ c^2/2 in case U; the 48 nodes of a
      * first piece of up to 1/16 lose 5e-10 in F at c = -480); unchanged on [-20, inf) (k0first, edgehead in DFExact.jl) */
     if (kern == 2 && c < -20) { cdouble t0 = CPX(tau, 0), P0, a1, a2, m0; dfl_tparts(model, c, 1, &t0, stat, &P0, &a1, &a2, &m0); oe.e1 = 1 / fabs(creal(csub(a2, a1)) / 2); }
     dfl_parfor(nw, edge_body, &oe);
+    if (fail.bound) { free(edges0); free(edges); free(te); free(Pe); free(s1e); free(s2e); free(M0e); free(G); *bd = fail; return fail.bound; }
     cdouble acc = ZERO;
     for (int p = 0; p < np; p++) acc = cadd(acc, filon_panel(G + p * N, edges[p], edges[p + 1], y, N));
     double ev = creal(cmul(cexp(CPX(-tau * y, 0)), acc)) / M_PI;
     free(edges0); free(edges); free(te); free(Pe); free(s1e); free(s2e); free(M0e); free(G);
-    return val + ev;
+    *out = val + ev;
+    return 0;
 }
 
 /* ---- the uniform rule in w for the whole integrand (checking) ---- */
-typedef struct { int kern, kind, n; double q; const cdouble *t, *s1, *s2, *M0, *P; double *g; } uctx;
+typedef struct { int kern, kind, n; double q; const cdouble *t, *s1, *s2, *M0, *P; double *g; dfl_bound_t *fail; } uctx;
 static void uni_body(int j, void *v) { uctx *o = v; cdouble Is, Ie;
+    if (dfl_bound_failed(o->fail)) return;
+    dfl_bound_clear();
     if (o->kind == 1) inner_density(o->kern, o->t[j], o->q, o->s1[j], o->s2[j], 0, INFINITY, &Is, &Ie);
     else inner_cdf(o->kern, o->t[j], o->q, o->s1[j], o->s2[j], o->M0[j], 0, INFINITY, &Is, &Ie);
+    if (dfl_bound_note(o->fail)) return;
     cdouble val = cmul(o->P[j], cadd(Is, Ie)); if (o->kind == 2) val = cdiv(val, o->t[j]); o->g[j] = creal(val); }
-static double uniform_c0(int kind, int model, double c, double q, double tau, bool stat, double hw)
+static int uniform_c0(int kind, int model, double c, double q, double tau, bool stat, double hw, double *out, dfl_bound_t *bd)
 {
     int kern = ((model == 1 || model == 4) && !stat) ? 1 : 2; int n = (int) floor(WMAX / hw) + 1;
     cdouble *t = malloc(n * sizeof(cdouble)), *P = malloc(n * sizeof(cdouble)), *s1 = malloc(n * sizeof(cdouble)), *s2 = malloc(n * sizeof(cdouble)), *M0 = malloc(n * sizeof(cdouble));
     double *g = malloc(n * sizeof(double));
     for (int j = 0; j < n; j++) t[j] = CPX(tau, j * hw);
     dfl_tparts(model, c, n, t, stat, P, s1, s2, M0);
-    uctx u = {kern, kind, n, q, t, s1, s2, M0, P, g};
+    dfl_bound_t fail = {0, 0, NULL};
+    uctx u = {kern, kind, n, q, t, s1, s2, M0, P, g, &fail};
     dfl_parfor(n, uni_body, &u);
     g[0] *= 0.5; double v = 0; for (int j = 0; j < n; j++) v += g[j]; v *= hw / M_PI;
     free(t); free(P); free(s1); free(s2); free(M0); free(g);
-    return v;
+    *bd = fail; *out = fail.bound ? NAN : v;
+    return fail.bound;
 }
 
 void dfl_single_defaults(dfl_single_opts *o)
@@ -438,14 +497,21 @@ double dfl_default_tau(int model, double c, bool stat)
     if (c <= 0 && !stat) return 1.0;
     return fmin(1.0, dfl_tstar(model, c, stat) / 2);
 }
-/* one value through the adaptive single integral at c0 = 0 (dfl_gen.c and dfl_batch.c add the other routes) */
-double dfl_single_value_c0(int kind, double x, int model, double c, bool stat, const dfl_single_opts *o)
+/* one value through the adaptive single integral at c0 = 0 (dfl_gen.c adds the general kernel): 0, or the bound of the
+ * engine that the line integral would exceed (*bd), with *out NaN */
+int dfl_single_value_c0_b(int kind, double x, int model, double c, bool stat, const dfl_single_opts *o, double *out, dfl_bound_t *bd)
 {
     double q = x;   /* x = 0 is taken exactly by inner_density and inner_cdf */
     double tau = o->tau > 0 ? o->tau : dfl_default_tau(model, c, stat);
     DFL_NODEFAC = o->nodefac > 0 ? o->nodefac : 1;
-    if (o->uniform_hw > 0) return uniform_c0(kind, model, c, q, tau, stat, o->uniform_hw);
-    return outer_c0(kind, model, c, q, tau, stat, o);
+    dfl_bound_clear();
+    if (o->uniform_hw > 0) return uniform_c0(kind, model, c, q, tau, stat, o->uniform_hw, out, bd);
+    return outer_c0(kind, model, c, q, tau, stat, o, out, bd);
+}
+double dfl_single_value_c0(int kind, double x, int model, double c, bool stat, const dfl_single_opts *o)
+{
+    double v; dfl_bound_t bd;
+    return dfl_single_value_c0_b(kind, x, model, c, stat, o, &v, &bd) ? NAN : v;
 }
 
 /* ---- exported for dfl_gen.c and dfl_double.c ---- */

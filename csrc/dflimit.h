@@ -146,7 +146,30 @@ cdouble dfl_k0x(cdouble z);                         /* e^z K_0(z), Re z >= 0 (se
 cdouble dfl_k0scaled(cdouble z);                    /* e^z K_0(z) for any z (asymptotic form far out, Re z < 0 by the reflection... see the source) */
 void dfl_gl_rule(int n, double *x, double *w);      /* Gauss-Legendre nodes and weights on [0, 1] */
 double dfl_wtime(void);                             /* wall-clock seconds (dfl_threads.c), for timings */
-const double *dfl_rule(int n, const double **w);    /* the same, cached */
+const double *dfl_rule(int n, const double **w);    /* the same, cached; NULL for n < 1 or n > DFL_RULEMAX */
+
+/* ---- the bounds of the line integral's quadrature (dfl_special.c; RULEMAX, NODEMAX and PathTooLarge of DFExact.jl) ----
+ * A Gauss-Legendre rule has at most DFL_RULEMAX nodes (the largest that dfl_rule caches), and one path of the inner integrals
+ * of the general kernel at most DFL_NODEMAX nodes (pieces_nodes, phase_nodes in dfl_gen.c).  Two regions need more: c0 < 0
+ * near zero with x > 0, where a root of X(v) = c0 v^2 + x v + 1/2 lies far out (b ~ x/|c0|) and the paths follow the phase
+ * of e^{-t v^2} up to it (DFL_BOUND_PATH; 6e11 nodes at c0 = -1e-4, x = 1), and large x above the unit root, where the
+ * segment to the saddle of the central kernel's Gaussian factor needs a rule whose node count grows like x^2
+ * (DFL_BOUND_RULE; from x ~ 660 to 780 at c = 7).  A path beyond the bounds is refused before it is evaluated: the
+ * function that builds it records the bound on its thread (dfl_bound_set) and returns nothing for it, the outer integrals
+ * collect the record from their workers (dfl_bound_note) and return it, and dfl_dist takes the conditional integral at
+ * such a point with the automatic method or returns an error that names the arguments otherwise. */
+#define DFL_RULEMAX 4096
+#define DFL_NODEMAX 2000000
+#define DFL_BOUND_RULE 1
+#define DFL_BOUND_PATH 2
+typedef struct { int bound; double need; const char *what; } dfl_bound_t;   /* bound 0: none; need: the nodes it needs, at least */
+void dfl_bound_clear(void);                         /* on the calling thread */
+void dfl_bound_set(int bound, double need, const char *what);   /* records a bound met on the calling thread (the first one is kept) */
+bool dfl_bound_hit(void);                           /* a bound was met on the calling thread since dfl_bound_clear */
+/* the bound met on the calling thread since dfl_bound_clear into the shared record *f (the first one is kept, under a lock):
+ * 1, or 0 if none; the bodies of the parallel loops of the outer integrals call it after their inner integrals */
+int dfl_bound_note(dfl_bound_t *f);
+static inline int dfl_bound_failed(const dfl_bound_t *f) { return *(const volatile int *) &f->bound; }
 void dfl_sphbessel(double *j, int N, double x);     /* j_n(x), n = 0..N-1 */
 
 /* ---- the moment generating function (dfl_mgf.c) ---- */
@@ -186,7 +209,9 @@ typedef struct {
     bool gen;            /* the general kernel also at c0 = 0, for checking */
 } dfl_single_opts;
 void dfl_single_defaults(dfl_single_opts *o);
-/* kind 1: density, 2: distribution function; stat: stationary start; returns 0, or an error code with a message */
+/* kind 1: density, 2: distribution function; stat: stationary start; returns 0, or an error code with a message: 1, or
+ * 10 + DFL_BOUND_RULE or 10 + DFL_BOUND_PATH at a point where the line integral would exceed the bounds of the engine
+ * (DFL_RULEMAX, DFL_NODEMAX; the message of dfl_bound_msg) */
 int dfl_single(int kind, int n, const double *x, int model, double c, double c0, double g0, bool stat, const dfl_single_opts *o, double *out, char *err, size_t errlen);
 /* the contour integral representation (dfl_gen.c; tr_contour of DFExact.jl), a fixed start g0 != 0 in cases DU, DT (models
  * 2, 3) only: the inversion formula on paths around the singularities of the moment generating function, with the
@@ -207,6 +232,14 @@ int dfl_contour(int kind, int n, const double *x, int model, double c, double c0
 int dfl_contour_lev(int kind, int n, const double *x, int model, double c, double c0, double g0, int verified, double *out, double *err, int *status, int *nodes, int *level, char *errmsg, size_t errlen);
 double dfl_single_value_c0(int kind, double x, int model, double c, bool stat, const dfl_single_opts *o);      /* one value at c0 = 0, zero or stationary start */
 double dfl_single_value_gen(int kind, double x, int model, double c, double c0, double g0, bool stat, const dfl_single_opts *o);   /* the general kernel (c0 != 0 or a fixed start g0 != 0) */
+/* the same with the bounds of the engine: 0 and the value in *out, or the bound that a path of the line integral would exceed
+ * (DFL_BOUND_RULE, DFL_BOUND_PATH; recorded in *bd) and NaN in *out, the point refused before its inner integrals are
+ * evaluated (dfl_single_value_c0 and dfl_single_value_gen return NaN there) */
+int dfl_single_value_c0_b(int kind, double x, int model, double c, bool stat, const dfl_single_opts *o, double *out, dfl_bound_t *bd);
+int dfl_single_value_gen_b(int kind, double x, int model, double c, double c0, double g0, bool stat, const dfl_single_opts *o, double *out, dfl_bound_t *bd);
+/* the error message of a point that the line integral refuses (the bound bd), naming the arguments (dfl_api.c; path_error
+ * of DFExact.jl) */
+void dfl_bound_msg(char *err, size_t errlen, int kind, int model, double c, double c0, double g0, bool stat, double x, const dfl_bound_t *bd);
 extern int DFL_NLNC;                                /* nodes of the l-rule of the noncentral kernel of a fixed start (40) */
 
 /* ---- moments (dfl_moments.c) ---- */
@@ -262,7 +295,14 @@ int dfl_check_args(int model, double c, double c0, double g0, bool stat, char *e
  * error estimate is not met (each point once); method 0 then follows the rule before (the double integral with c0 != 0 and a zero start except for c0 > 0 at x >= 0), a point flagged by the
  * double integral gets the single integral's value, a point flagged by the contour integral the double integral's value and, where that is flagged too, the single integral's, and the values of
  * the single and the contour integral below 1e-3 (a density in absolute value, a distribution function in the lower tail) are recomputed by the double integral (kept where it flags them);
- * with methods 2 and 3 the flagged value is returned.  Non-finite x: 0 at -Inf, 1 (cdf) or 0 (density) at Inf, NaN at NaN. */
+ * with methods 2 and 3 the flagged value is returned.  Non-finite x: 0 at -Inf, 1 (cdf) or 0 (density) at Inf, NaN at NaN.
+ * A point at which the line integral would exceed the bounds of the engine (DFL_RULEMAX, DFL_NODEMAX: c0 < 0 near zero with
+ * x > 0, and large x above the unit root) is refused before it is evaluated: method 0 then takes the conditional integral
+ * there, with its checks (verified, whatever dopt->verified; at large x above the unit root its one evaluation where the
+ * checked value is flagged), and dfl_warning names the call where such a value near c0 = 0 is flagged; method 1, and
+ * method 0 in model 4, which has the line integral only, return the error code 10 + the bound (DFL_BOUND_RULE,
+ * DFL_BOUND_PATH) with a message that names the arguments (dfl_bound_msg; other errors return 1).  With
+ * dopt->verified = 1 a point whose fallback is the line integral keeps its flagged value there, with a warning. */
 int dfl_automethod(int model, double c, double c0, double g0, bool stat, double x);
 /* the regimes in which the one-evaluation default (verified = 0) is known to be brittle, decided from the parameters alone
  * (no computed diagnostics, so that they cost nothing): a message naming the regime and suggesting verified = true, or NULL;
@@ -271,6 +311,11 @@ int dfl_automethod(int model, double c, double c0, double g0, bool stat, double 
 const char *dfl_brittle(int kind, int model, double c, double c0, double g0, bool stat, int method);
 int dfl_dist(int kind, int n, const double *x, int model, double c, double c0, double g0, bool stat, int method,
              const dfl_single_opts *so, const dfl_double_opts *dopt, double *out, int *nstatus, char *err, size_t errlen);
+/* the warning of the last call of dfl_dist or dfl_icdf on the calling thread, or NULL: points that the line integral refused
+ * and whose values from the conditional integral are flagged (route_warn of DFExact.jl), or, with dopt->verified = 1,
+ * flagged values kept because their fallback, the line integral, refused the point.  The user-level wrappers (R, Python,
+ * the MEX file) give it as a warning once per call, as the message of dfl_brittle; dfl_dist itself does not warn */
+const char *dfl_warning(void);
 /* quantiles q of the probabilities p (in (0, 1)) by safeguarded Newton to the tolerance tol (1e-10), method as in dfl_dist; Fq, iter, conv
  * (may be NULL) receive the distribution function at q, the iteration counts and the convergence flags */
 int dfl_icdf(int n, const double *p, int model, double c, double c0, double g0, bool stat, int method, double tol,

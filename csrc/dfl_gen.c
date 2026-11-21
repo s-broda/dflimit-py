@@ -365,38 +365,43 @@ static cdouble psi_half_nc(const nck_t *nc, cdouble s1, cdouble s2, cdouble M0)
     return cmul(cmul(nc->pref, M0), ncP(s1, s2, nc->m1, nc->m2, DFL_NLNC));
 }
 
-/* ---- nodes of the pieces ---- */
+/* ---- the pieces of the paths ----
+ * A path of the inner integrals is a list of pieces [a, b], each with n Gauss-Legendre nodes (DFL_NODEFAC included) and the
+ * substitution y = a + (b - a) u^p; the callers sum over the nodes of each piece (pnode) as they go, so that a path is
+ * never stored node by node, and a path of more than DFL_NODEMAX nodes is refused before anything is evaluated on it (the
+ * bound is recorded on the thread and the list is empty; Piece, pnode, NODEMAX of DFExact.jl).  The paths follow the phase
+ * of the exponent with about 1.2 nodes per radian, and on a long segment between the support edges (a root b of X far
+ * out, as with c0 < 0 near zero at x > 0, where b ~ x/|c0|) that phase grows like Im(t) b^2: about 6e11 nodes at
+ * c0 = -1e-4, x = 1.  The largest path of the tests of DFExact.jl has 3.2e5 nodes. */
 typedef cdouble (*efn_t)(double s, const void *ctx);
-typedef struct { double *y, *w; int n, cap; } nodes_t;
-static void nodes_reserve(nodes_t *N, int extra)
+typedef struct { double a, b; int n, p; } piece_t;
+typedef struct { piece_t *pc; int np, cap; } pieces_t;
+static void pieces_add(pieces_t *P, double a, double b, int n, int p)
 {
-    if (N->n + extra <= N->cap) return;
-    int cap = N->cap ? N->cap : 1024; while (cap < N->n + extra) cap *= 2;
-    N->y = realloc(N->y, cap * sizeof(double)); N->w = realloc(N->w, cap * sizeof(double)); N->cap = cap;
+    if (P->np == P->cap) { P->cap = P->cap ? 2 * P->cap : 64; P->pc = realloc(P->pc, P->cap * sizeof(piece_t)); }
+    piece_t q = {a, b, n, p}; P->pc[P->np++] = q;
 }
-static void glnodes(double a, double b, int n, int p, nodes_t *N)
+/* node and weight k of the piece P, (u, gw) its rule */
+static inline void pnode(const piece_t *P, const double *u, const double *gw, int k, double *y, double *w)
 {
-    n *= DFL_NODEFAC;
-    nodes_reserve(N, n);
-    const double *gw; const double *u = dfl_rule(n, &gw); double L = b - a;
-    double *y = N->y, *wt = N->w; int cnt = N->n;
-    for (int k = 0; k < n; k++) {
-        if (p == 1) { y[cnt] = a + L * u[k]; wt[cnt] = L * gw[k]; }
-        else if (p == 2) { y[cnt] = a + L * u[k] * u[k]; wt[cnt] = 2 * L * u[k] * gw[k]; }
-        else { double u2 = u[k] * u[k]; y[cnt] = a + L * u2 * u2; wt[cnt] = 4 * L * u2 * u[k] * gw[k]; }
-        cnt++;
-    }
-    N->n = cnt;
+    double a = P->a, L = P->b - a;
+    if (P->p == 1) { *y = a + L * u[k]; *w = L * gw[k]; }
+    else if (P->p == 2) { *y = a + L * u[k] * u[k]; *w = 2 * L * u[k] * gw[k]; }
+    else { double u2 = u[k] * u[k]; *y = a + L * u2 * u2; *w = 4 * L * u2 * u[k] * gw[k]; }
 }
+static const char PATH_WHAT[] = "a path of the inner integrals of the general kernel";
+/* a path of at least n nodes: refused (the bound recorded on the thread, the list emptied); returns 1 */
+static int path_refuse(pieces_t *P, double n) { P->np = 0; dfl_bound_set(DFL_BOUND_PATH, n, PATH_WHAT); return 1; }
 #define NGROW 16
 #define NLEV 5
 #define NCON 16
-/* nodes for int_0^L: the first piece shortened until the exponent falls by at most 4, rises by at most 4 (the noncentral
+/* the pieces for int_0^L: the first piece shortened until the exponent falls by at most 4, rises by at most 4 (the noncentral
  * kernels rise away from the edge) and its phase changes by at most 40 rad, then pieces growing by 4 with node counts from
- * the change of the exponent, until it is below -EXPO */
-static void pieces_nodes(efn_t Ef, const void *ctx, double L, double first, int p, int nmin, nodes_t *N)
+ * the change of the exponent, until it is below -EXPO.  0, or 1 for a path of more than DFL_NODEMAX nodes (refused) */
+static int pieces_nodes(efn_t Ef, const void *ctx, double L, double first, int p, int nmin, pieces_t *P)
 {
-    N->n = 0;
+    P->np = 0;
+    if (dfl_bound_hit()) return 1;
     first = fmin(first, L);
     for (int it = 0; it < 60; it++) {
         cdouble E[9]; double mx = -INFINITY; for (int i = 0; i <= 8; i++) { E[i] = Ef(first * i / 8, ctx); mx = fmax(mx, creal(E[i])); }
@@ -404,38 +409,48 @@ static void pieces_nodes(efn_t Ef, const void *ctx, double L, double first, int 
         if ((creal(E[8]) > -4 && mx - creal(E[0]) < 4 && dph < 40) || first <= 1e-12 * L) break;
         first /= 2;
     }
-    glnodes(0, first, nmin, p, N);
+    pieces_add(P, 0, first, nmin * DFL_NODEFAC, p);
+    double tot = nmin * DFL_NODEFAC;
     double a = first;
     while (a < L) {
         double bn = fmin(L, 4 * a);
         cdouble E[9]; bool all = true; for (int i = 0; i <= 8; i++) { E[i] = Ef(a + (bn - a) * i / 8, ctx); if (creal(E[i]) >= -EXPO) all = false; }
         if (all) break;
         double dph = 0; for (int i = 0; i < 8; i++) dph += cabs(csub(E[i + 1], E[i]));
+        if (tot + (1.2 * dph + 16) * DFL_NODEFAC > DFL_NODEMAX) return path_refuse(P, tot + (1.2 * dph + 16) * DFL_NODEFAC);
         int n = (int) fmax(NGROW, 16 * ceil(ceil(1.2 * dph + 16) / 16));
         int m = (n + 159) / 160; n = 16 * (int) ceil(ceil((double) n / m) / 16);
-        for (int k = 0; k < m; k++) glnodes(a + (bn - a) * k / m, a + (bn - a) * (k + 1) / m, n, 1, N);
+        tot += (double) m * n * DFL_NODEFAC;
+        if (tot > DFL_NODEMAX) return path_refuse(P, tot);
+        for (int k = 0; k < m; k++) pieces_add(P, a + (bn - a) * k / m, a + (bn - a) * (k + 1) / m, n * DFL_NODEFAC, 1);
         if (creal(E[8]) < -EXPO) break;
         a = bn;
     }
+    return 0;
 }
-/* nodes for int_0^1 graded geometrically toward both ends, node counts from the change of the exponent, sub-pieces on
- * which the exponent is below max(E1, E2) - EXPO skipped */
-static void phase_nodes(efn_t Ef, const void *ctx, cdouble E1, cdouble E2, nodes_t *N)
+/* the pieces for int_0^1 graded geometrically toward both ends, node counts from the change of the exponent, sub-pieces on
+ * which the exponent is below max(E1, E2) - EXPO skipped.  0, or 1 for a path of more than DFL_NODEMAX nodes (refused) */
+static int phase_nodes(efn_t Ef, const void *ctx, cdouble E1, cdouble E2, pieces_t *P)
 {
-    N->n = 0;
+    P->np = 0;
+    if (dfl_bound_hit()) return 1;
     /* ss = 0, 2^-NLEV, ..., 2^-1, 1 - 2^-2, ..., 1 - 2^-NLEV, 1 (ascending) */
     double ss[2 * NLEV + 1]; int ns = 0;
     ss[ns++] = 0; for (int k = NLEV; k >= 1; k--) ss[ns++] = pow(2.0, -k);
     for (int k = 2; k <= NLEV; k++) ss[ns++] = 1 - pow(2.0, -k); ss[ns++] = 1;
-    double Emax = fmax(creal(E1), creal(E2)) - EXPO + 2;
+    double Emax = fmax(creal(E1), creal(E2)) - EXPO + 2, tot = 0;
     for (int k = 0; k < ns - 1; k++) {
         cdouble E[9]; double mx = -INFINITY; for (int i = 0; i <= 8; i++) { E[i] = Ef(ss[k] + (ss[k + 1] - ss[k]) * i / 8, ctx); mx = fmax(mx, creal(E[i])); }
         if (mx < Emax) continue;
         double dph = 0; for (int i = 0; i < 8; i++) dph += cabs(csub(E[i + 1], E[i]));
+        if (tot + (1.2 * dph + 16) * DFL_NODEFAC > DFL_NODEMAX) return path_refuse(P, tot + (1.2 * dph + 16) * DFL_NODEFAC);
         int n = (int) fmax(NCON, 8 * ceil(ceil(1.2 * dph + 16) / 8));
         int mm = (n + 159) / 160; n = 8 * (int) ceil(ceil((double) n / mm) / 8);
-        for (int i = 0; i < mm; i++) glnodes(ss[k] + (ss[k + 1] - ss[k]) * i / mm, ss[k] + (ss[k + 1] - ss[k]) * (i + 1) / mm, n, 1, N);
+        tot += (double) mm * n * DFL_NODEFAC;
+        if (tot > DFL_NODEMAX) return path_refuse(P, tot);
+        for (int i = 0; i < mm; i++) pieces_add(P, ss[k] + (ss[k + 1] - ss[k]) * i / mm, ss[k] + (ss[k + 1] - ss[k]) * (i + 1) / mm, n * DFL_NODEFAC, 1);
     }
+    return 0;
 }
 /* the direction and length of the steepest-descent piece at an end */
 static void descent(cdouble gam, cdouble alpha, int dir, double L, double dep, double sg, double deg, cdouble *u, double *l)
@@ -478,6 +493,30 @@ typedef struct { const sctx *c; cdouble leg, dv; } lctx;
 static cdouble E_leg(double s, const void *v) { const lctx *e = v; return Ez(e->c, csub(cadd(e->leg, cscale(s, e->dv)), CPX(e->c->a, 0)), e->c->a); }
 static cdouble chi_seg(const sctx *c, cdouble v) { return cscale(0.5, cadd(ONE, dfl_erf(cscale(c->kap, csub(v, CPX(c->m, 0)))))); }
 
+/* the length l of a descent piece of segint from v = o in the direction u, halved until the real part of the exponent (at 8
+ * points along it) is at most Etop, the larger exponent of the two ends of the segment plus NOCLIMB; unchanged where it is
+ * (a descent piece normally falls).  Where the exponent rises into the segment at an end, as that of the noncentral kernel
+ * of case DK at v = 0 when the mass of the noncentral density lies further in, the steepest descent points out of the
+ * segment and descent() clamps it to 80 degrees from the segment, where e^{-t v^2} grows like e^{Re(t) Im(v)^2} (at the
+ * real point t = tau straight up): the piece climbed up to its depth L/8, with a root of X far out (c0 < 0 near zero,
+ * x > 0) to e^{213} at c = 0, c0 = -0.01, g0 = 1, x = 1.5, and its terms cancelled against those of the connection back to
+ * the real axis (F off by 6e74 there, by 1e-7 to 1e143 at x = 0.5 to 2, by 2.4e-3 at c = 2, x = 1.5; noclimb of DFExact.jl) */
+#define NOCLIMB 4.0
+static double noclimb(const sctx *c, cdouble u, double o, double l, double Etop, double L)
+{
+    while (l > 1e-12 * L) {
+        double mx = -INFINITY;
+        for (int i = 1; i <= 8; i++) { double e = creal(Ez(c, cscale(l * i / 8, u), o)); if (e != e) { mx = NAN; break; } mx = fmax(mx, e); }
+        if (!(mx > Etop)) break;                                          /* (NaN: unchanged, as the maximum in DFExact.jl) */
+        l /= 2;
+    }
+    return l;
+}
+
+/* The integral over the segment [a, b] split by the partition chi into the part near b (vr) and the part near a (vs: the
+ * bump at a = 0, or vl: the edge at a), on three straight pieces: the descent pieces from a and from b and the connection
+ * between their ends.  The two sums (with 1 - chi and with chi) run node by node in the order of the path, so that the path
+ * is not stored; a path that exceeds the bounds of the engine leaves the bound on the thread and zero values. */
 static void segint(sctx *c, int pa, int pb, double ella, double ellb, bool ws, bool wl, bool wr, double sg, int ka, int kb, double dep,
                    cdouble *vs, cdouble *vl, cdouble *vr)
 {
@@ -488,22 +527,39 @@ static void segint(sctx *c, int pa, int pb, double ella, double ellb, bool ws, b
     cdouble ua, ub; double la, lb;
     descent(cadd(csub(cscale(-2 * a, c->tj), cscale(dXv(c->R, a), c->sd)), ncexp_dv(c->nc, xat(c->R, ZERO, a), c->sgn, c->s1, c->s2, dXv(c->R, a))), alpha, 1, L, dep, sg, dega, &ua, &la);
     descent(cadd(csub(cscale(-2 * b, c->tj), cscale(dXv(c->R, b), c->sd)), ncexp_dv(c->nc, xat(c->R, ZERO, b), c->sgn, c->s1, c->s2, dXv(c->R, b))), alpha, -1, L, dep, sg, degb, &ub, &lb);
+    /* a descent piece that climbs above the larger end of the segment is cut back: its terms would cancel against the
+     * connection's */
+    double Etop = (creal(Ea) != creal(Ea) || creal(Eb) != creal(Eb)) ? NAN : fmax(creal(Ea), creal(Eb)) + NOCLIMB;   /* (NaN: as max in DFExact.jl) */
+    la = noclimb(c, ua, a, la, Etop, L);
+    lb = noclimb(c, ub, b, lb, Etop, L);
     cdouble pa_ = cadd(CPX(a, 0), cscale(la, ua)), pb_ = cadd(CPX(b, 0), cscale(lb, ub));
-    nodes_t Nd = {NULL, NULL, 0, 0};
-    int capv = 4096, nv = 0; cdouble *fv = malloc(capv * sizeof(cdouble)), *vv = malloc(capv * sizeof(cdouble)), *cv = malloc(capv * sizeof(cdouble));
+    *vs = *vl = *vr = ZERO;
+    pieces_t Pc = {NULL, 0, 0};
+    long nv = 0;
     /* the integrand is evaluated only where the wanted parts of the partition (chi near b, 1 - chi near a) exceed 1e-15:
-     * the edge part skips the nodes near a, the smooth part those near b */
+     * the edge part skips the nodes near a, the smooth part those near b; the sums with 1 - chi (acca) and chi (accb) */
     bool needa = ws || wl, needb = wr;
+    cdouble acca = ZERO, accb = ZERO;
 #define KEEP(V) (chi = chi_seg(c, (V)), (needa && cabs(csub(ONE, chi)) > 1e-15) || (needb && cabs(chi) > 1e-15))
-#define PUSHV(FEXPR, V) do { cdouble chi; if (KEEP(V)) { if (nv == capv) { capv *= 2; fv = realloc(fv, capv * sizeof(cdouble)); vv = realloc(vv, capv * sizeof(cdouble)); cv = realloc(cv, capv * sizeof(cdouble)); } fv[nv] = (FEXPR); vv[nv] = (V); cv[nv] = chi; nv++; } } while (0)
-    ectx ea = {c, ua, a, Ea}; pieces_nodes(E_piece, &ea, la, fmin(la / 8, fa), pa, 48 + 16 * (pa == 1), &Nd);
-    for (int k = 0; k < Nd.n; k++) PUSHV(cmul(Fz(c, cscale(Nd.y[k], ua), a), cscale(Nd.w[k], ua)), cadd(CPX(a, 0), cscale(Nd.y[k], ua)));
-    int na_ = Nd.n;
-    ectx eb = {c, ub, b, Eb}; pieces_nodes(E_piece, &eb, lb, fmin(lb / 8, fb), pb, 48, &Nd);
-    if (getenv("DFL_DEBUG3")) { cdouble sa = ZERO, sb = ZERO, ca = ZERO, cb = ZERO; for (int k = 0; k < na_; k++) { sa = cadd(sa, fv[k]); ca = cadd(ca, cmul(fv[k], chi_seg(c, vv[k]))); }
-        for (int k = 0; k < Nd.n; k++) { cdouble f = cneg(cmul(Fz(c, cscale(Nd.y[k], ub), b), cscale(Nd.w[k], ub))); sb = cadd(sb, f); cb = cadd(cb, cmul(f, chi_seg(c, cadd(CPX(b, 0), cscale(Nd.y[k], ub))))); }
-        printf("  pieces: a-side %d nodes sum %.12g%+.12gi chi-sum %.12g%+.12gi, b-side %d nodes sum %.12g%+.12gi chi-sum %.12g%+.12gi, first nodes y %.12g %.12g, kap %.6g m %.6g\n", na_, creal(sa), cimag(sa), creal(ca), cimag(ca), Nd.n, creal(sb), cimag(sb), creal(cb), cimag(cb), Nd.y[0], Nd.y[1], c->kap, c->m); }
-    for (int k = 0; k < Nd.n; k++) PUSHV(cneg(cmul(Fz(c, cscale(Nd.y[k], ub), b), cscale(Nd.w[k], ub))), cadd(CPX(b, 0), cscale(Nd.y[k], ub)));
+#define ADDV(FEXPR) do { cdouble f_ = (FEXPR); if (needa) acca = cadd(acca, cmul(f_, csub(ONE, chi))); if (needb) accb = cadd(accb, cmul(f_, chi)); nv++; } while (0)
+    /* the descent piece from a */
+    ectx ea = {c, ua, a, Ea};
+    if (pieces_nodes(E_piece, &ea, la, fmin(la / 8, fa), pa, 48 + 16 * (pa == 1), &Pc)) goto done;
+    for (int ip = 0; ip < Pc.np; ip++) {
+        const piece_t *P = &Pc.pc[ip]; const double *gw; const double *u = dfl_rule(P->n, &gw);
+        for (int k = 0; k < P->n; k++) { double y, w; pnode(P, u, gw, k, &y, &w); cdouble chi, vc = cadd(CPX(a, 0), cscale(y, ua));
+            if (KEEP(vc)) ADDV(cmul(Fz(c, cscale(y, ua), a), cscale(w, ua))); }
+    }
+    /* the descent piece from b, from b toward the segment: reversed */
+    ectx eb = {c, ub, b, Eb};
+    if (pieces_nodes(E_piece, &eb, lb, fmin(lb / 8, fb), pb, 48, &Pc)) goto done;
+    for (int ip = 0; ip < Pc.np; ip++) {
+        const piece_t *P = &Pc.pc[ip]; const double *gw; const double *u = dfl_rule(P->n, &gw);
+        for (int k = 0; k < P->n; k++) { double y, w; pnode(P, u, gw, k, &y, &w); cdouble chi, vc = cadd(CPX(b, 0), cscale(y, ub));
+            if (KEEP(vc)) ADDV(cneg(cmul(Fz(c, cscale(y, ub), b), cscale(w, ub)))); }
+    }
+    /* the connection: the straight line, unless the exponent rises along it above the ends; then the polyline through the
+     * real axis */
     if (cabs(csub(pb_, pa_)) > 0) {
         double Emax = fmax(creal(Ea), creal(Eb)) + 2;
         cdouble legs[4] = {pa_, pb_}; int nl = 2;
@@ -512,25 +568,29 @@ static void segint(sctx *c, int pa, int pb, double ella, double ellb, bool ws, b
         if (getenv("DFL_DEBUG3")) printf("  legs %d (mx %.6g Emax %.6g Ea %.6g%+.6gi Eb %.6g%+.6gi)\n", nl, mx, Emax, creal(Ea), cimag(Ea), creal(Eb), cimag(Eb));
         for (int k = 0; k < nl - 1; k++) {
             cdouble dv = csub(legs[k + 1], legs[k]); if (cabs(dv) == 0) continue;
-            lctx lc = {c, legs[k], dv}; phase_nodes(E_leg, &lc, Ea, Eb, &Nd);
-            cdouble legsum = ZERO;
-            for (int i = 0; i < Nd.n; i++) { cdouble vc = cadd(legs[k], cscale(Nd.y[i], dv));
-                cdouble f = cabs(csub(vc, CPX(b, 0))) < cabs(csub(vc, CPX(a, 0))) ? Fz(c, csub(vc, CPX(b, 0)), b) : Fz(c, csub(vc, CPX(a, 0)), a);
-                PUSHV(cmul(f, cscale(Nd.w[i], dv)), vc); legsum = cadd(legsum, cmul(f, cscale(Nd.w[i], dv))); }
-            if (getenv("DFL_DEBUG3")) printf("  leg %d: %d nodes, sum %.12g%+.12gi\n", k, Nd.n, creal(legsum), cimag(legsum));
+            lctx lc = {c, legs[k], dv};
+            if (phase_nodes(E_leg, &lc, Ea, Eb, &Pc)) goto done;
+            for (int ip = 0; ip < Pc.np; ip++) {
+                const piece_t *P = &Pc.pc[ip]; const double *gw; const double *u = dfl_rule(P->n, &gw);
+                for (int i = 0; i < P->n; i++) { double y, w; pnode(P, u, gw, i, &y, &w); cdouble chi, vc = cadd(legs[k], cscale(y, dv));
+                    if (!KEEP(vc)) continue;
+                    cdouble f = cabs(csub(vc, CPX(b, 0))) < cabs(csub(vc, CPX(a, 0))) ? Fz(c, csub(vc, CPX(b, 0)), b) : Fz(c, csub(vc, CPX(a, 0)), a);
+                    ADDV(cmul(f, cscale(w, dv))); }
+            }
         }
     }
-    if (getenv("DFL_DEBUG3")) printf("segint a %.6g b %.6g sgn %d sd %.12g%+.12gi la %.12g lb %.12g ua %.12g%+.12gi ub %.12g%+.12gi pa_ %.12g%+.12gi pb_ %.12g%+.12gi nv %d\n",
-                                      a, b, c->sgn, creal(c->sd), cimag(c->sd), la, lb, creal(ua), cimag(ua), creal(ub), cimag(ub), creal(pa_), cimag(pa_), creal(pb_), cimag(pb_), nv);
+    if (getenv("DFL_DEBUG3")) printf("segint a %.6g b %.6g sgn %d sd %.12g%+.12gi la %.12g lb %.12g ua %.12g%+.12gi ub %.12g%+.12gi pa_ %.12g%+.12gi pb_ %.12g%+.12gi nv %ld sums %.12g%+.12gi %.12g%+.12gi\n",
+                                      a, b, c->sgn, creal(c->sd), cimag(c->sd), la, lb, creal(ua), cimag(ua), creal(ub), cimag(ub), creal(pa_), cimag(pa_), creal(pb_), cimag(pb_), nv,
+                                      creal(acca), cimag(acca), creal(accb), cimag(accb));
 #if defined(__GNUC__) || defined(__clang__)
     __atomic_add_fetch(&DFL_NCG_SEG, nv, __ATOMIC_RELAXED);
 #endif
-    *vs = *vl = *vr = ZERO;
-    if (ws || wl) { cdouble val = ZERO; for (int k = 0; k < nv; k++) val = cadd(val, cmul(fv[k], csub(ONE, cv[k]))); if (ws) *vs = val; else *vl = val; }
-    if (wr) { cdouble val = ZERO; for (int k = 0; k < nv; k++) val = cadd(val, cmul(fv[k], cv[k])); *vr = val; }
-#undef PUSHV
+    if (needa) { if (ws) *vs = acca; else *vl = acca; }
+    if (wr) *vr = accb;
+done:
+#undef ADDV
 #undef KEEP
-    free(Nd.y); free(Nd.w); free(fv); free(vv); free(cv);
+    free(Pc.pc);
 }
 
 /* ---- the transforms of the general kernel: Is and Ie[k] ---- */
@@ -638,14 +698,18 @@ static bool ray_saddle(const nrctx *x, double first, int p, double Rmax, cdouble
         if (!(Emax - E0 > 10)) return false;
         rho = CPX(rmax, 0);
     }
-    cdouble val = ZERO; nodes_t Nd = {NULL, NULL, 0, 0};
+    cdouble val = ZERO; pieces_t Pc = {NULL, 0, 0};
     cdouble E_s = Efull_nc(x, rho);
     spctx sp = {x, ZERO, rho, ZERO};                                   /* lam in [0, 1] along rho */
-    pieces_nodes(E_sp, &sp, 1.0, fmin(1.0 / 8, first / cabs(rho)), p, 48, &Nd);
-    for (int k = 0; k < Nd.n; k++) { cdouble z = cscale(Nd.y[k], rho); double E; cdouble S = Ared_sc(x, z, &E);
-        val = cadd(val, cscale(Nd.w[k], cmul(S, cexp(cadd(Efull_nc(x, z), CPX(E, 0)))))); }
+    /* (a path beyond the bounds of the engine: the bound stays on the thread, the value is not used) */
+    if (pieces_nodes(E_sp, &sp, 1.0, fmin(1.0 / 8, first / cabs(rho)), p, 48, &Pc)) { free(Pc.pc); *out = ZERO; return true; }
+    for (int ip = 0; ip < Pc.np; ip++) {
+        const piece_t *P = &Pc.pc[ip]; const double *gw; const double *u = dfl_rule(P->n, &gw);
+        for (int k = 0; k < P->n; k++) { double y, w; pnode(P, u, gw, k, &y, &w); cdouble z = cscale(y, rho); double E; cdouble S = Ared_sc(x, z, &E);
+            val = cadd(val, cscale(w, cmul(S, cexp(cadd(Efull_nc(x, z), CPX(E, 0)))))); }
+    }
     val = cmul(val, rho);
-    if (getenv("DFL_DEBUG4") && !(creal(val) == creal(val))) printf("  NaN already on the piece to the saddle: rho %g%+gi nodes %d\n", creal(rho), cimag(rho), Nd.n);
+    if (getenv("DFL_DEBUG4") && !(creal(val) == creal(val))) printf("  NaN already on the piece to the saddle: rho %g%+gi pieces %d\n", creal(rho), cimag(rho), Pc.np);
     cdouble z0 = rho; double h = 1e-6 * cabs(rho);
     cdouble d2 = cscale(1 / (2 * h), csub(dEfull_nc(x, cadd(rho, CPX(h, 0))), dEfull_nc(x, csub(rho, CPX(h, 0)))));
     cdouble d = cabs(d2) > 0 ? cexp(CPX(0, (M_PI - carg(d2)) / 2)) : ONE; if (creal(d) < 0) d = cneg(d);
@@ -663,16 +727,19 @@ static bool ray_saddle(const nrctx *x, double first, int p, double Rmax, cdouble
             Eprev = Ec; L *= 1.4;
         }
         if (isnan(Lend)) Lend = L;
-        pieces_nodes(E_sp, &sq, Lend, fmin(Lend / 8, first), 1, 48, &Nd);
-        for (int k = 0; k < Nd.n; k++) { cdouble z = cadd(z0, cscale(Nd.y[k], d)); double E; cdouble S = Ared_sc(x, z, &E);
-            val = cadd(val, cscale(Nd.w[k], cmul(cmul(S, cexp(cadd(cadd(E_sp(Nd.y[k], &sq), Ez0), CPX(E, 0)))), d))); }
-        if (getenv("DFL_DEBUG4")) printf("  piece %d: z0 %g%+gi d %g%+gi Lend %g nodes %d val %g%+gi Ez0 %g%+gi\n", piece, creal(z0), cimag(z0), creal(d), cimag(d), Lend, Nd.n, creal(val), cimag(val), creal(Ez0), cimag(Ez0));
+        if (pieces_nodes(E_sp, &sq, Lend, fmin(Lend / 8, first), 1, 48, &Pc)) { free(Pc.pc); *out = ZERO; return true; }
+        for (int ip = 0; ip < Pc.np; ip++) {
+            const piece_t *P = &Pc.pc[ip]; const double *gw; const double *u = dfl_rule(P->n, &gw);
+            for (int k = 0; k < P->n; k++) { double y, w; pnode(P, u, gw, k, &y, &w); cdouble z = cadd(z0, cscale(y, d)); double E; cdouble S = Ared_sc(x, z, &E);
+                val = cadd(val, cscale(w, cmul(cmul(S, cexp(cadd(cadd(E_sp(y, &sq), Ez0), CPX(E, 0)))), d))); }
+        }
+        if (getenv("DFL_DEBUG4")) printf("  piece %d: z0 %g%+gi d %g%+gi Lend %g pieces %d val %g%+gi Ez0 %g%+gi\n", piece, creal(z0), cimag(z0), creal(d), cimag(d), Lend, Pc.np, creal(val), cimag(val), creal(Ez0), cimag(Ez0));
         z0 = cadd(z0, cscale(Lend, d));
         if (creal(csub(Efull_nc(x, z0), E_s)) < -EXPO) break;
         cdouble g = dEfull_nc(x, z0); if (cabs(g) == 0) break;
         d = cscale(1 / cabs(g), cneg(conj(g)));
     }
-    free(Nd.y); free(Nd.w);
+    free(Pc.pc);
     if (getenv("DFL_DEBUG4") && !(creal(val) == creal(val))) {
         cdouble z = rho; double E; cdouble S = Ared_sc(x, z, &E);
         printf("ray_saddle NaN: alpha %g%+gi beta %g%+gi rho_s %g%+gi E_s %g%+gi rmax-scan Emax %g E0 %g S(rho_s) %g%+gi E %g d %g%+gi\n",
@@ -685,29 +752,35 @@ static cdouble rayexp_nc(const sctx *c, double a, cdouble alpha, cdouble beta, d
 {
     cdouble e = cexp(CPX(0, -carg(alpha) / 2)); double aa = cabs(alpha); cdouble be = cmul(beta, e);
     nrctx x = {c, alpha, beta, e, ZERO, ZERO, a, 0};
-    nodes_t Nd = {NULL, NULL, 0, 0};
+    pieces_t Pc = {NULL, 0, 0};
     cdouble val = ZERO;
+    /* (a path beyond the bounds of the engine: the bound stays on the thread, the value is not used) */
+#define RAYSUM(ACC, RHO) for (int ip = 0; ip < Pc.np; ip++) { \
+        const piece_t *P = &Pc.pc[ip]; const double *gw; const double *u = dfl_rule(P->n, &gw); \
+        for (int k = 0; k < P->n; k++) { double y, w; pnode(P, u, gw, k, &y, &w); cdouble rho = (RHO); double E; cdouble S = Ared_sc(&x, rho, &E); \
+            ACC = cadd(ACC, cscale(w, cmul(S, cexp(cadd(Efull_nc(&x, rho), CPX(E, 0)))))); } }
     if (fmax(0, -creal(be)) * fmax(0, -creal(be)) / (4 * aa) <= 2) {
         double Rr = raylen(Ef_nc, &x, (-creal(be) + sqrt(creal(be) * creal(be) + 4 * aa * EXPO)) / (2 * aa));
         if (ray_saddle(&x, first, p, Rr, &val)) return val;
-        pieces_nodes(Ef_nc, &x, Rr, fmin(Rr / 8, first), p, 48, &Nd);
-        for (int k = 0; k < Nd.n; k++) { cdouble rho = cscale(Nd.y[k], e); double E; cdouble S = Ared_sc(&x, rho, &E); val = cadd(val, cscale(Nd.w[k], cmul(S, cexp(cadd(Efull_nc(&x, rho), CPX(E, 0)))))); }
+        if (pieces_nodes(Ef_nc, &x, Rr, fmin(Rr / 8, first), p, 48, &Pc)) { free(Pc.pc); return ZERO; }
+        RAYSUM(val, cscale(y, e))
 #if defined(__GNUC__) || defined(__clang__)
-        __atomic_add_fetch(&DFL_NCG_RAY, Nd.n, __ATOMIC_RELAXED);
+        { long nn = 0; for (int ip = 0; ip < Pc.np; ip++) nn += Pc.pc[ip].n; __atomic_add_fetch(&DFL_NCG_RAY, nn, __ATOMIC_RELAXED); }
 #endif
-        free(Nd.y); free(Nd.w);
+        free(Pc.pc);
         return cmul(val, e);
     }
     x.x0 = cdiv(cneg(beta), cscale(2, alpha)); x.mode = 1;
-    pieces_nodes(Ef_nc, &x, 1.0, fmin(1.0 / 8, first / cabs(x.x0)), p, 48, &Nd);
-    for (int k = 0; k < Nd.n; k++) { cdouble rho = cscale(Nd.y[k], x.x0); double E; cdouble S = Ared_sc(&x, rho, &E); val = cadd(val, cscale(Nd.w[k], cmul(S, cexp(cadd(Efull_nc(&x, rho), CPX(E, 0)))))); }
+    if (pieces_nodes(Ef_nc, &x, 1.0, fmin(1.0 / 8, first / cabs(x.x0)), p, 48, &Pc)) { free(Pc.pc); return ZERO; }
+    RAYSUM(val, cscale(y, x.x0))
     val = cmul(val, x.x0);
     x.E0 = Efull_nc(&x, x.x0); x.mode = 2;
     double Rr = raylen(Ef_nc, &x, sqrt(EXPO / aa));
-    pieces_nodes(Ef_nc, &x, Rr, fmin(Rr / 8, first), 1, 48, &Nd);
+    if (pieces_nodes(Ef_nc, &x, Rr, fmin(Rr / 8, first), 1, 48, &Pc)) { free(Pc.pc); return ZERO; }
     cdouble v2 = ZERO;
-    for (int k = 0; k < Nd.n; k++) { cdouble rho = cadd(x.x0, cscale(Nd.y[k], e)); double E; cdouble S = Ared_sc(&x, rho, &E); v2 = cadd(v2, cscale(Nd.w[k], cmul(S, cexp(cadd(Efull_nc(&x, rho), CPX(E, 0)))))); }
-    free(Nd.y); free(Nd.w);
+    RAYSUM(v2, cadd(x.x0, cscale(y, e)))
+#undef RAYSUM
+    free(Pc.pc);
     return cadd(val, cmul(v2, e));
 }
 static void inner_gen(int kern, const nck_t *nc, cdouble tj, const breaks_t *R, cdouble s1, cdouble s2, cdouble M0, int kind, int part, cdouble *Is, cdouble *Ie)
@@ -743,12 +816,15 @@ static void inner_gen(int kern, const nck_t *nc, cdouble tj, const breaks_t *R, 
                 cdouble e = cexp(CPX(0, -carg(alpha) / 2)); double aa = cabs(alpha); cdouble be = cmul(beta, e);
                 double Rr = (-creal(be) + sqrt(creal(be) * creal(be) + 4 * aa * EXPO)) / (2 * aa);
                 pctx pc = {&ax, e, be, aa};
-                nodes_t Nd = {NULL, NULL, 0, 0};
-                pieces_nodes(pseudo_E, &pc, Rr, fmin(Rr / 8, R->ell[j - 1]), 1, 48, &Nd);
+                pieces_t Pc = {NULL, 0, 0};
+                pieces_nodes(pseudo_E, &pc, Rr, fmin(Rr / 8, R->ell[j - 1]), 1, 48, &Pc);   /* (refused: no pieces, the bound on the thread) */
                 val = ZERO;
-                for (int k = 0; k < Nd.n; k++) val = cadd(val, cscale(Nd.w[k], cmul(A_ray(cscale(Nd.y[k], e), &ax), cexp(pseudo_E(Nd.y[k], &pc)))));
+                for (int ip = 0; ip < Pc.np; ip++) {
+                    const piece_t *P = &Pc.pc[ip]; const double *gw; const double *u = dfl_rule(P->n, &gw);
+                    for (int k = 0; k < P->n; k++) { double y, w; pnode(P, u, gw, k, &y, &w); val = cadd(val, cscale(w, cmul(A_ray(cscale(y, e), &ax), cexp(pseudo_E(y, &pc))))); }
+                }
                 val = cmul(cmul(val, cst), e);
-                free(Nd.y); free(Nd.w);
+                free(Pc.pc);
             } else {
                 if (j > 0) { lv = fmin(lv, R->ell[j - 1] / 16); p = 4; }
                 val = cmul(cst, rayexp(A_ray, &ax, alpha, beta, lv, p));
@@ -800,7 +876,7 @@ static double max_step(int n, const double *psi) { double m = 0; for (int j = 0;
 
 /* ---- the outer integral for the general kernel ---- */
 typedef struct { int kern, kind, part, k; const breaks_t *R; const cdouble *ts, *s1, *s2, *M0, *P; const double *wt; double *g; cdouble *G; double y;
-                 int model; double c, g0; } gctx;
+                 int model; double c, g0; dfl_bound_t *fail; } gctx;
 /* the transforms at the node j (ts[j]), with the noncentral kernel of a fixed start when g0 != 0 */
 static void node_inner(const gctx *o, int j, int part, cdouble *Is, cdouble *Ie)
 {
@@ -808,18 +884,41 @@ static void node_inner(const gctx *o, int j, int part, cdouble *Is, cdouble *Ie)
     nck_t K; nckernel(o->model, o->c, o->ts[j], o->g0, o->s1[j], o->s2[j], &K);
     inner_gen(o->kern, &K, o->ts[j], o->R, o->s1[j], o->s2[j], cmul(K.pref, o->M0[j]), o->kind, part, Is, Ie);
 }
+/* (a node whose inner integrals meet a bound of the engine records it in fail, and the other nodes are skipped) */
 static void gsmooth_body(int j, void *v) { gctx *o = v; cdouble Is, Ie[2];
+    if (dfl_bound_failed(o->fail)) return;
+    dfl_bound_clear();
     node_inner(o, j, 1, &Is, Ie);
+    if (dfl_bound_note(o->fail)) return;
     cdouble val = cmul(o->P[j], Is); if (o->kind == 2) val = cdiv(val, o->ts[j]); o->g[j] = creal(val) * o->wt[j]; }
 static void gedge_body(int j, void *v) { gctx *o = v; cdouble Is, Ie[2], t = o->ts[j + 1];
+    if (dfl_bound_failed(o->fail)) return;
+    dfl_bound_clear();
     node_inner(o, j + 1, 10 + o->k + 1, &Is, Ie);
+    if (dfl_bound_note(o->fail)) return;
     cdouble val = cmul(o->P[j + 1], Ie[o->k]); if (o->kind == 2) val = cdiv(val, t); o->G[j] = cmul(val, cexp(cscale(o->y, t))); }
 static void guni_body(int j, void *v) { gctx *o = v; cdouble Is, Ie[2];
+    if (dfl_bound_failed(o->fail)) return;
+    dfl_bound_clear();
     node_inner(o, j, 0, &Is, Ie);
+    if (dfl_bound_note(o->fail)) return;
     cdouble val = cmul(o->P[j], cadd(Is, cadd(Ie[0], Ie[1]))); if (o->kind == 2) val = cdiv(val, o->ts[j]); o->g[j] = creal(val); }
 
-static double outer_gen(int kind, int model, double c, double q, double c0, double g0, breaks_t *R, double tau, bool stat, const dfl_single_opts *o)
+/* body(j) for j = 0..n-1 with the last node first: on the line of the outer integral the paths of the inner integrals grow
+ * with Im t, so that a point whose paths exceed the bounds of the engine meets them at its last node, before the other
+ * nodes are evaluated (tmap_last! of DFExact.jl); the values are those of dfl_parfor */
+static void parfor_last(int n, void (*body)(int j, void *ctx), void *ctx, const dfl_bound_t *fail)
 {
+    if (n <= 0) return;
+    body(n - 1, ctx);
+    if (!fail->bound) dfl_parfor(n - 1, body, ctx);
+}
+/* the value in *out; 0, or the bound of the engine that a path of the inner integrals would exceed (recorded in *bd, *out
+ * NaN) */
+static int outer_gen(int kind, int model, double c, double q, double c0, double g0, breaks_t *R, double tau, bool stat, const dfl_single_opts *o, double *out, dfl_bound_t *bd)
+{
+    dfl_bound_t fail = {0, 0, NULL};
+    *out = NAN; *bd = fail;
     int kern = ((model == 1 || model == 4) && !stat) ? 1 : 2; double hu = o->hu * dfl_hufac(c), cde = tau, Wm = dfl_wmaxc(c); int N = o->N;
     double umax = asinh(Wm / cde); int nu = (int) floor(umax / hu) + 1;
     cdouble *ts = malloc(nu * sizeof(cdouble)), *P = malloc(nu * sizeof(cdouble)), *s1 = malloc(nu * sizeof(cdouble)), *s2 = malloc(nu * sizeof(cdouble)), *M0 = malloc(nu * sizeof(cdouble));
@@ -827,7 +926,7 @@ static double outer_gen(int kind, int model, double c, double q, double c0, doub
     for (int j = 0; j < nu; j++) { double u = j * hu; ts[j] = CPX(tau, cde * sinh(u)); wt[j] = cde * cosh(u); }
     dfl_tparts(model, c, nu, ts, stat, P, s1, s2, M0);
     saddle_phase_gen(kern, q, c0, nu, ts, s1, s2, R, psi);
-    double val;
+    double val = NAN;
     if (max_step(nu, psi) > 0.25) {
         double w0 = fmin(0.5, tau / 2); int ne = (int) ceil(log2(Wm / w0)) + 2;
         double *edges0 = malloc(ne * sizeof(double)); edges0[0] = 0; for (int p = 1; p < ne; p++) edges0[p] = w0 * pow(2, p - 1); edges0[ne - 1] = Wm;
@@ -850,18 +949,19 @@ static double outer_gen(int kind, int model, double c, double q, double c0, doub
         cdouble *Pn = malloc((nn + 1) * sizeof(cdouble)), *s1n = malloc((nn + 1) * sizeof(cdouble)), *s2n = malloc((nn + 1) * sizeof(cdouble)), *M0n = malloc((nn + 1) * sizeof(cdouble));
         dfl_tparts(model, c, nn + 1, tn, stat, Pn, s1n, s2n, M0n);
         double *gn = malloc(nn * sizeof(double));
-        gctx on = {kern, kind, 1, 0, R, tn + 1, s1n + 1, s2n + 1, M0n + 1, Pn + 1, wn, gn, NULL, 0, model, c, g0};
-        dfl_parfor(nn, gsmooth_body, &on);
-        val = 0; for (int j = 0; j < nn; j++) val += gn[j]; val /= M_PI;
-        if (getenv("DFL_DEBUG")) { int j0 = 0; for (int p = 0; p < ne - 1; p++) { double sp = 0, dp = 0; for (int k = 0; k < K; k++) { int i = p * K + k; if (!isnan(psie[i]) && !isnan(psie[i + 1])) dp += fabs(psie[i + 1] - psie[i]); }
+        gctx on = {kern, kind, 1, 0, R, tn + 1, s1n + 1, s2n + 1, M0n + 1, Pn + 1, wn, gn, NULL, 0, model, c, g0, &fail};
+        parfor_last(nn, gsmooth_body, &on, &fail);
+        if (!fail.bound) { val = 0; for (int j = 0; j < nn; j++) val += gn[j]; val /= M_PI; }
+        if (getenv("DFL_DEBUG") && !fail.bound) { int j0 = 0; for (int p = 0; p < ne - 1; p++) { double sp = 0, dp = 0; for (int k = 0; k < K; k++) { int i = p * K + k; if (!isnan(psie[i]) && !isnan(psie[i + 1])) dp += fabs(psie[i + 1] - psie[i]); }
             for (int k = 0; k < mm[p] * nn_[p]; k++) sp += gn[j0++]; printf("    panel %d [%.4g, %.4g] phase %.3g sub %d nodes %d psi0 %.3g sum %.15g\n", p, edges0[p], edges0[p + 1], dp, mm[p], nn_[p], psie[p * K], sp / M_PI); } }
         free(edges0); free(te0); free(P0); free(s1e); free(s2e); free(M0e); free(psie); free(mm); free(nn_); free(tn); free(wn); free(Pn); free(s1n); free(s2n); free(M0n); free(gn);
     } else {
-        gctx oc = {kern, kind, 1, 0, R, ts, s1, s2, M0, P, wt, g, NULL, 0, model, c, g0};
-        dfl_parfor(nu, gsmooth_body, &oc);
-        g[0] *= 0.5; val = 0; for (int j = 0; j < nu; j++) val += g[j]; val *= hu / M_PI;
+        gctx oc = {kern, kind, 1, 0, R, ts, s1, s2, M0, P, wt, g, NULL, 0, model, c, g0, &fail};
+        parfor_last(nu, gsmooth_body, &oc, &fail);
+        if (!fail.bound) { g[0] *= 0.5; val = 0; for (int j = 0; j < nu; j++) val += g[j]; val *= hu / M_PI; }
     }
     free(ts); free(P); free(s1); free(s2); free(M0); free(wt); free(g); free(psi);
+    if (fail.bound) { *bd = fail; return fail.bound; }
     if (getenv("DFL_DEBUG")) printf("  smooth part %.15g (nu %d)\n", val, nu);
     /* one Filon part per breakpoint */
     const double *gw; const double *u = dfl_rule(N, &gw);
@@ -882,8 +982,9 @@ static double outer_gen(int kind, int model, double c, double q, double c0, doub
         cdouble *Pe = malloc((nw + 1) * sizeof(cdouble)), *s1e = malloc((nw + 1) * sizeof(cdouble)), *s2e = malloc((nw + 1) * sizeof(cdouble)), *M0e = malloc((nw + 1) * sizeof(cdouble));
         dfl_tparts(model, c, nw + 1, te, stat, Pe, s1e, s2e, M0e);
         cdouble *G = malloc(nw * sizeof(cdouble));
-        gctx oe = {kern, kind, 2, k, R, te, s1e, s2e, M0e, Pe, NULL, NULL, G, y, model, c, g0};
-        dfl_parfor(nw, gedge_body, &oe);
+        gctx oe = {kern, kind, 2, k, R, te, s1e, s2e, M0e, Pe, NULL, NULL, G, y, model, c, g0, &fail};
+        parfor_last(nw, gedge_body, &oe, &fail);
+        if (fail.bound) { free(edges0); free(orig); free(edges); free(te); free(Pe); free(s1e); free(s2e); free(M0e); free(G); *bd = fail; return fail.bound; }
         cdouble acc = ZERO;
         for (int p = 0; p < np; p++) { cdouble fp = dfl_filon_panel(G + p * N, edges[p], edges[p + 1], y, N); acc = cadd(acc, fp);
             if (getenv("DFL_DEBUG2")) printf("    panel %d [%.6g, %.6g] %.15g%+.15gi  G0 %.15g%+.15gi\n", p, edges[p], edges[p + 1], creal(fp), cimag(fp), creal(G[p * N]), cimag(G[p * N])); }
@@ -891,13 +992,17 @@ static double outer_gen(int kind, int model, double c, double q, double c0, doub
         val += creal(cmul(cexp(CPX(-tau * y, 0)), acc)) / M_PI;
         free(edges0); free(orig); free(edges); free(te); free(Pe); free(s1e); free(s2e); free(M0e); free(G);
     }
-    return val;
+    *out = val;
+    return 0;
 }
 
 /* the value of the density (kind 1) or the distribution function (kind 2) through the general kernel (c0 != 0, a fixed
- * start g0 != 0, or gen); in case DK with c0 > 0 the density is infinite at x = -sqrt(2 c0 (1 + g0^2)) */
-double dfl_single_value_gen(int kind, double x, int model, double c, double c0, double g0, bool stat, const dfl_single_opts *o)
+ * start g0 != 0, or gen); in case DK with c0 > 0 the density is infinite at x = -sqrt(2 c0 (1 + g0^2)).  0 and the value in
+ * *out, or the bound of the engine that a path of the inner integrals would exceed (*bd), with *out NaN */
+int dfl_single_value_gen_b(int kind, double x, int model, double c, double c0, double g0, bool stat, const dfl_single_opts *o, double *out, dfl_bound_t *bd)
 {
+    dfl_bound_t none = {0, 0, NULL}; *bd = none;
+    dfl_bound_clear();
     double q = (x == 0 && c0 == 0) ? 1e-12 : x;   /* with c0 != 0 the parabola has no root at v = 0 and x = 0 is taken exactly; the general kernel forced at c0 = 0 keeps the substitution */
     double tau = o->tau > 0 ? o->tau : dfl_default_tau(model, c, stat);
     /* case DK with a fixed start: the line at most half of t_* also for c <= 0 (e^{g0^2 Q(0,t)} has an essential singularity at t_*,
@@ -914,7 +1019,7 @@ double dfl_single_value_gen(int kind, double x, int model, double c, double c0, 
     if (stat) g0 = 0;
     double x0 = (g0 != 0 && model == 1) ? (1 + g0 * g0) / 2 : 0.5;
     breaks_t R; breakpts(q, c0, tau, x0, &R);
-    if (R.dbl && kern == 1 && kind == 1) return INFINITY;
+    if (R.dbl && kern == 1 && kind == 1) { *out = INFINITY; return 0; }
     R.vsad = saddle_loc(model, c, q, c0, tau, stat, kern, &R);
     if (o->uniform_hw > 0) {
         double hw = o->uniform_hw; int n = (int) floor(WMAX / hw) + 1;
@@ -922,13 +1027,20 @@ double dfl_single_value_gen(int kind, double x, int model, double c, double c0, 
         double *g = malloc(n * sizeof(double));
         for (int j = 0; j < n; j++) t[j] = CPX(tau, j * hw);
         dfl_tparts(model, c, n, t, stat, P, s1, s2, M0);
-        gctx u = {kern, kind, 0, 0, &R, t, s1, s2, M0, P, NULL, g, NULL, 0, model, c, g0};
+        dfl_bound_t fail = {0, 0, NULL};
+        gctx u = {kern, kind, 0, 0, &R, t, s1, s2, M0, P, NULL, g, NULL, 0, model, c, g0, &fail};
         dfl_parfor(n, guni_body, &u);
         g[0] *= 0.5; double v = 0; for (int j = 0; j < n; j++) v += g[j]; v *= hw / M_PI;
         free(t); free(P); free(s1); free(s2); free(M0); free(g);
-        return v;
+        *bd = fail; *out = fail.bound ? NAN : v;
+        return fail.bound;
     }
-    return outer_gen(kind, model, c, q, c0, g0, &R, tau, stat, o);
+    return outer_gen(kind, model, c, q, c0, g0, &R, tau, stat, o, out, bd);
+}
+double dfl_single_value_gen(int kind, double x, int model, double c, double c0, double g0, bool stat, const dfl_single_opts *o)
+{
+    double v; dfl_bound_t bd;
+    return dfl_single_value_gen_b(kind, x, model, c, c0, g0, stat, o, &v, &bd) ? NAN : v;
 }
 
 /* debugging aid: the breakpoints and the transforms at one node */
@@ -942,7 +1054,9 @@ void dfl_debug_inner_gen(int model, double c, double c0, double x, bool stat, in
     cdouble ts[2] = {CPX(tau, 0), CPX(tre, tim)}, P[2], s1[2], s2[2], M0[2];
     dfl_tparts(model, c, 2, ts, stat, P, s1, s2, M0);
     cdouble Is, Ie[2];
+    dfl_bound_clear();
     inner_gen(kern, NULL, ts[1], &R, s1[1], s2[1], M0[1], kind, part, &Is, Ie);
+    if (dfl_bound_hit()) printf("(a path of the inner integrals exceeds the bounds of the engine)\n");
     printf("part %d t %.15g%+.15gi s1 %.15g%+.15gi s2 %.15g%+.15gi M0 %.15g%+.15gi\nIs %.15g%+.15gi Ie1 %.15g%+.15gi Ie2 %.15g%+.15gi\n",
            part, creal(ts[1]), cimag(ts[1]), creal(s1[1]), cimag(s1[1]), creal(s2[1]), cimag(s2[1]), creal(M0[1]), cimag(M0[1]),
            creal(Is), cimag(Is), creal(Ie[0]), cimag(Ie[0]), creal(Ie[1]), cimag(Ie[1]));

@@ -91,13 +91,13 @@ void dfl_gl_rule(int n, double *x, double *w)
         w[n - 1 - i] = 1.0 / ((1 - t * t) * dp * dp);  /* 2/((1-t^2) P'^2) on [-1,1], halved for [0,1] */
     }
 }
-/* cached rules by n (n <= 4096); thread-safe through a lock */
+/* cached rules by n (n <= DFL_RULEMAX); thread-safe through a lock */
 #include "dfl_lock.h"
-static double *RULEX[4097], *RULEW[4097];
+static double *RULEX[DFL_RULEMAX + 1], *RULEW[DFL_RULEMAX + 1];
 static dfl_lock_t rulelock = DFL_LOCK_INIT;
 const double *dfl_rule(int n, const double **w)
 {
-    if (n < 1 || n > 4096) { *w = NULL; return NULL; }
+    if (n < 1 || n > DFL_RULEMAX) { *w = NULL; return NULL; }
     dfl_lock(&rulelock);
     if (RULEX[n] == NULL) {
         double *x = malloc(n * sizeof(double)), *ww = malloc(n * sizeof(double));
@@ -107,6 +107,26 @@ const double *dfl_rule(int n, const double **w)
     dfl_unlock(&rulelock);
     *w = RULEW[n];
     return RULEX[n];
+}
+
+/* the bounds of the line integral's quadrature (dflimit.h): the bound met on this thread, and its record shared by the
+ * workers of a parallel loop */
+static _Thread_local dfl_bound_t BOUND;
+static dfl_lock_t boundlock = DFL_LOCK_INIT;
+void dfl_bound_clear(void) { BOUND.bound = 0; BOUND.need = 0; BOUND.what = NULL; }
+void dfl_bound_set(int bound, double need, const char *what)
+{
+    if (BOUND.bound) return;
+    BOUND.bound = bound; BOUND.need = need; BOUND.what = what;
+}
+bool dfl_bound_hit(void) { return BOUND.bound != 0; }
+int dfl_bound_note(dfl_bound_t *f)
+{
+    if (!BOUND.bound) return 0;
+    dfl_lock(&boundlock);
+    if (!f->bound) { f->need = BOUND.need; f->what = BOUND.what; *(volatile int *) &f->bound = BOUND.bound; }
+    dfl_unlock(&boundlock);
+    return 1;
 }
 
 /* j_n(x), n = 0..N-1, x >= 0: upward recurrence for x > N, otherwise Miller's downward recurrence from n = N + 40 */

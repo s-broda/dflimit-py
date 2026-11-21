@@ -39,6 +39,44 @@ static int tstar_err(int model, double c, bool stat, char *err, size_t errlen)
 }
 /* the value at a non-finite x: 0 at -Inf, 1 (cdf) or 0 (density) at Inf, NaN at NaN */
 static double nonfinite(int kind, double x) { return isnan(x) ? NAN : x > 0 ? (kind == 2 ? 1.0 : 0.0) : 0.0; }
+static const char *case_name(int model, bool stat)
+{
+    return model == 4 ? "DG" : stat ? (model == 1 ? "SK" : model == 2 ? "SU" : "ST") : (model == 1 ? "DK" : model == 2 ? "DU" : "DT");
+}
+/* one value of the line integral (the general kernel for c0 != 0, a fixed start or so->gen): 0, or the bound of the engine
+ * that its paths would exceed (bd) */
+static int single_point(int kind, double x, int model, double c, double c0, double g0, bool stat, const dfl_single_opts *so, double *out, dfl_bound_t *bd)
+{
+    return (c0 != 0 || g0 != 0 || so->gen) ? dfl_single_value_gen_b(kind, x, model, c, c0, g0, stat, so, out, bd) : dfl_single_value_c0_b(kind, x, model, c, stat, so, out, bd);
+}
+
+/* The error message of a point at which the line integral's paths exceed the bounds of the engine, with the arguments
+ * (path_error of DFExact.jl).  Two regions, measured in November 2026 on the Julia engine, whose paths are those of this
+ * one: (a) c0 < 0 near zero with x > 0, where the root b = (x + (x^2 + 2|c0|)^(1/2))/(2|c0|) ~ x/|c0| of
+ * X(v) = 1/2 + x v + c0 v^2 lies far out and the paths of the general kernel's inner integrals follow the phase of e^{-t v^2}
+ * up to it: more than DFL_NODEMAX nodes on one path at c0 = -1e-4 from x = 0.05, at c0 = -1e-3 at x = 1.5 (at x = 0.5 too in
+ * case SK and at c = 2), at c0 = -1e-2 in case SK for -0.4 <= c < 0 and at c = 2 in cases DK, DU, and not at c0 = -0.1
+ * (a scan of c from -60 to 2 and x up to 1.5; far above the unit root c0 = -0.1 is affected too: case DK at c = 5,
+ * x = 14.17); the size is set by c0 and x much more than by c, the case or the start, and c0 > 0 and x <= 0 are not
+ * affected; (b) above
+ * the unit root at large x, where the segment to the saddle of the central kernel's Gaussian factor needs a rule of more
+ * than DFL_RULEMAX nodes: at c = 7 from x ~ 750 (case DK), 780 (DU), 660 (DT), at c = 10 from 815, 715, 650, not up to
+ * x = 5000 for c <= 5. */
+void dfl_bound_msg(char *err, size_t errlen, int kind, int model, double c, double c0, double g0, bool stat, double x, const dfl_bound_t *bd)
+{
+    char args[160], why[200];
+    int k = snprintf(args, sizeof args, "case %s, c = %g", case_name(model, stat), c);
+    if (c0 != 0 && k < (int) sizeof args) k += snprintf(args + k, sizeof args - k, ", c0 = %g", c0);
+    if (g0 != 0 && k < (int) sizeof args) k += snprintf(args + k, sizeof args - k, ", g0 = %g", g0);
+    if (k < (int) sizeof args) snprintf(args + k, sizeof args - k, ", x = %g", x);
+    if (bd->bound == DFL_BOUND_RULE) snprintf(why, sizeof why, "at large x above the unit root");
+    else if (c0 < 0 && x > 0) snprintf(why, sizeof why, "c0 < 0 near zero with x > 0: the root %.3g of X(v) = 1/2 + x v + c0 v^2 lies far out", (x + sqrt(x * x + 2 * fabs(c0))) / (2 * fabs(c0)));
+    else snprintf(why, sizeof why, "a root of X(v) far out");
+    snprintf(err, errlen, "%s: %s: the line integral needs more nodes than the engine allows here (%s; %s needs %.3g nodes, at most %d); %s",
+             kind == 2 ? "ltratio_cdf" : "ltratio_pdf", args, why, bd->what ? bd->what : "a path of the line integral", bd->need,
+             bd->bound == DFL_BOUND_RULE ? DFL_RULEMAX : DFL_NODEMAX,
+             model == 4 ? "case DG has the line integral representation only" : "the automatic method takes the conditional integral at such points");
+}
 
 int dfl_single(int kind, int n, const double *x, int model, double c, double c0, double g0, bool stat, const dfl_single_opts *o, double *out, char *err, size_t errlen)
 {
@@ -47,7 +85,8 @@ int dfl_single(int kind, int n, const double *x, int model, double c, double c0,
     if (tstar_err(model, c, stat, err, errlen)) return 1;
     for (int k = 0; k < n; k++) {
         if (!isfinite(x[k])) { out[k] = nonfinite(kind, x[k]); continue; }
-        out[k] = (c0 != 0 || g0 != 0 || o->gen) ? dfl_single_value_gen(kind, x[k], model, c, c0, g0, stat, o) : dfl_single_value_c0(kind, x[k], model, c, stat, o);
+        dfl_bound_t bd;
+        if (single_point(kind, x[k], model, c, c0, g0, stat, o, &out[k], &bd)) { dfl_bound_msg(err, errlen, kind, model, c, c0, g0, stat, x[k], &bd); return 10 + bd.bound; }
     }
     return 0;
 }
@@ -98,13 +137,68 @@ static int check_method(int model, double g0, bool stat, int method, char *err, 
     if (method == 3 && !((model == 2 || model == 3) && g0 != 0 && !stat)) { snprintf(err, errlen, "%s", DFL_CONTOUR_MSG); return 1; }
     return 0;
 }
-static double single_value(int kind, double x, int model, double c, double c0, double g0, bool stat, const dfl_single_opts *so)
+/* The conditional integral at a point where the line integral's paths exceed the bounds of the engine, with method 0
+ * (route_double of DFExact.jl), by the region of dfl_bound_msg.  (a) A far root (DFL_BOUND_PATH): with its checks (verified,
+ * the agreement of two paths and the refinement of their rules), whatever its status; *flag where the value is flagged.
+ * Against the contour integral of a newer engine (November 2026): case SK, stationary start, c = c0 in {-1e-4, -1e-3, -1e-2,
+ * -0.1}, x in {0.05, 0.5, 1, 1.5}, within 5e-7 with the status flagged at most of the points, where one path is off by up
+ * to 5e-5, but the density at c = c0 = -1e-3, x = 0.05 off by 1.2e-3 (flagged): dfl_warning names the call where a value
+ * returned is flagged; case DK with a zero start (c in {-1, 0, 2}, c0 in {-1e-3, -1e-2, -0.1}) and a fixed start (g0 = 1,
+ * c0 = -1e-2) within 1e-13.  (b) Large x above the unit root (DFL_BOUND_RULE): with its checks where its status is 0,
+ * otherwise one path; against the newer engine at c = 7 (x up to 1000, cases DK, DU, DT) and c = 10 (case DT, x up to 1500)
+ * within 1e-14, where in case DK one path is off by up to 5e-2 (its checked value has the status 0) and in case DT the
+ * checked value by up to 3e-2 (with the status 2; one path is right).  The options of the conditional integral are those
+ * of dopt, with its checks as stated. */
+static int route_double(int kind, double x, int model, double c, double c0, double g0, bool stat, const dfl_double_opts *dopt, const dfl_bound_t *bd,
+                        double *out, int *flag, char *err, size_t errlen)
 {
-    return (c0 != 0 || g0 != 0 || so->gen) ? dfl_single_value_gen(kind, x, model, c, c0, g0, stat, so) : dfl_single_value_c0(kind, x, model, c, stat, so);
+    dfl_double_opts dv = *dopt; dv.verified = 1;
+    dfl_double_info info; double F;
+    *flag = 0;
+    if (dfl_double(kind, 1, &x, model, c, c0, g0, stat, &dv, &F, &info, err, errlen)) return 1;
+    if (bd->bound == DFL_BOUND_PATH) { *out = F; *flag = info.status != 0; return 0; }
+    if (info.status == 0) { *out = F; return 0; }
+    dv.verified = 0;
+    if (dfl_double(kind, 1, &x, model, c, c0, g0, stat, &dv, &F, &info, err, errlen)) return 1;
+    *out = F;
+    return 0;
+}
+/* the line integral at a point chosen for it: where its paths exceed the bounds of the engine (refused before its inner
+ * integrals are evaluated), with method 0 the conditional integral (route_double; *nflag counts its flagged values), with
+ * method 1 and in model 4 (which has the line integral only) an error that names the arguments (dfl_bound_msg) */
+static int single_route(int kind, double x, int model, double c, double c0, double g0, bool stat, int method, const dfl_single_opts *so,
+                        const dfl_double_opts *dopt, double *out, int *nflag, char *err, size_t errlen)
+{
+    dfl_bound_t bd;
+    if (single_point(kind, x, model, c, c0, g0, stat, so, out, &bd) == 0) return 0;
+    if (method != 0 || model == 4) { dfl_bound_msg(err, errlen, kind, model, c, c0, g0, stat, x, &bd); return 10 + bd.bound; }
+    int fl = 0;
+    if (route_double(kind, x, model, c, c0, g0, stat, dopt, &bd, out, &fl, err, errlen)) return 1;
+    *nflag += fl;
+    return 0;
 }
 
-int dfl_dist(int kind, int n, const double *x, int model, double c, double c0, double g0, bool stat, int method,
-             const dfl_single_opts *so, const dfl_double_opts *dopt, double *out, int *nstatus, char *err, size_t errlen)
+/* the warning of the last dfl_dist or dfl_icdf on this thread (route_warn of DFExact.jl, and the flagged values that
+ * verified = 1 keeps where the line integral refuses the point) */
+static _Thread_local char WARN[1024];
+const char *dfl_warning(void) { return WARN[0] ? WARN : NULL; }
+static void set_warning(int model, double c, double c0, double g0, bool stat, int nflag, int nkeep)
+{
+    WARN[0] = 0;
+    if (nflag == 0 && nkeep == 0) return;
+    char head[160]; int k = snprintf(head, sizeof head, "%s, c = %g, c0 = %g", case_name(model, stat), c, c0);
+    if (g0 != 0 && k < (int) sizeof head) snprintf(head + k, sizeof head - k, ", g0 = %g", g0);
+    int w = 0;
+    if (nflag > 0) w = snprintf(WARN, sizeof WARN, "%s: the line integral's paths exceed the bounds of the engine at x > 0 (c0 < 0 near zero), and the "
+                                "conditional integral that takes these points flags some of them; such values may be off by more than 1e-5 (the "
+                                "density of case SK at c = c0 = -1e-3, x = 0.05 by 1.2e-3)", head);
+    if (nkeep > 0 && w >= 0 && w < (int) sizeof WARN)
+        snprintf(WARN + w, sizeof WARN - w, "%s%s: at some points the value of the conditional (or contour) integral is flagged and the line integral's "
+                 "paths exceed the bounds of the engine; the flagged values are returned", w > 0 ? "\n" : "", head);
+}
+
+static int dist_impl(int kind, int n, const double *x, int model, double c, double c0, double g0, bool stat, int method,
+                     const dfl_single_opts *so, const dfl_double_opts *dopt, double *out, int *nstatus, int *nflag, int *nkeep, char *err, size_t errlen)
 {
     if (check_args(kind, model, c, c0, g0, stat, err, errlen)) return 1;
     if (check_method(model, g0, stat, method, err, errlen)) return 1;
@@ -114,18 +208,20 @@ int dfl_dist(int kind, int n, const double *x, int model, double c, double c0, d
     if (nstatus) *nstatus = 0;
     if (!dopt->verified) {
         /* the default: one evaluation by one method at each point (no second evaluation, no refinement driven by an
-         * estimate, no fallback, no recomputation of the tails); no status (ltratio_dist of DFExact.jl) */
+         * estimate, no fallback, no recomputation of the tails); no status (ltratio_dist of DFExact.jl).  A point that the
+         * line integral refuses before evaluating it (its paths would exceed the bounds of the engine) goes to the
+         * conditional integral with method 0 (single_route) */
         int nd1 = 0, nc1 = 0, rc1 = 0;
         double *xd1 = malloc((n + 1) * sizeof(double)), *xc1 = malloc((n + 1) * sizeof(double));
         int *id1 = malloc((n + 1) * sizeof(int)), *ic1 = malloc((n + 1) * sizeof(int));
-        for (int k = 0; k < n; k++) {
+        for (int k = 0; k < n && rc1 == 0; k++) {
             if (!isfinite(x[k])) { out[k] = nonfinite(kind, x[k]); continue; }
             int m = method == 0 ? automethod_one(model, c, c0, g0, stat, x[k]) : method;
             if (m == 2) { xd1[nd1] = x[k]; id1[nd1++] = k; }
             else if (m == 3) { xc1[nc1] = x[k]; ic1[nc1++] = k; }
-            else out[k] = single_value(kind, x[k], model, c, c0, g0, stat, so);
+            else rc1 = single_route(kind, x[k], model, c, c0, g0, stat, method, so, dopt, &out[k], nflag, err, errlen);
         }
-        if (nc1 > 0) {
+        if (rc1 == 0 && nc1 > 0) {
             double *F1 = malloc(nc1 * sizeof(double));
             rc1 = dfl_contour(kind, nc1, xc1, model, c, c0, g0, 0, F1, NULL, NULL, NULL, err, errlen);
             if (rc1 == 0) for (int j = 0; j < nc1; j++) out[ic1[j]] = F1[j];
@@ -155,12 +251,16 @@ int dfl_dist(int kind, int n, const double *x, int model, double c, double c0, d
         meth[k] = m;
         if (m == 2) { xd[nd] = x[k]; id[nd] = k; tosingle[nd] = 1; nd++; }
         else if (m == 3) { xc[nc] = x[k]; ic[nc] = k; nc++; }
-        else out[k] = single_value(kind, x[k], model, c, c0, g0, stat, so);
+        else if (rc == 0) {
+            int nf0 = *nflag;
+            rc = single_route(kind, x[k], model, c, c0, g0, stat, method, so, dopt, &out[k], nflag, err, errlen);
+            if (*nflag > nf0) flag[k] = 1;
+        }
     }
     /* the contour integral; with method 0 a point at which it reports that its error estimate is not met gets the double
      * integral's value (the single integral's where that is flagged too), and its values below 1e-3 are recomputed by
      * the double integral as those of the single integral are below (ltratio_dist in DFExact.jl) */
-    if (nc > 0) {
+    if (rc == 0 && nc > 0) {
         double *Fc = malloc(nc * sizeof(double)); int *sc = malloc(nc * sizeof(int));
         rc = dfl_contour(kind, nc, xc, model, c, c0, g0, 1, Fc, NULL, sc, NULL, err, errlen);
         if (rc == 0) for (int j = 0; j < nc; j++) {
@@ -185,7 +285,14 @@ int dfl_dist(int kind, int n, const double *x, int model, double c, double c0, d
         if (rc == 0) for (int j = 0; j < nd; j++) {
             int k = id[j];
             if (info[j].status == 0 || method == 2) out[k] = Fd[j];
-            else if (tosingle[j]) out[k] = single_value(kind, x[k], model, c, c0, g0, stat, so);   /* a flagged point chosen by the rule or flagged by the contour integral */
+            else if (tosingle[j]) {
+                /* a flagged point chosen by the rule or flagged by the contour integral: the single integral's value, or, where
+                 * its paths exceed the bounds of the engine, the flagged value (the contour integral's in out[k], the double
+                 * integral's otherwise), with a warning */
+                double v; dfl_bound_t bd;
+                if (single_point(kind, x[k], model, c, c0, g0, stat, so, &v, &bd) == 0) out[k] = v;
+                else { if (meth[k] == 2) out[k] = Fd[j]; (*nkeep)++; }
+            }
             /* (a flagged tail point keeps the value of the single or the contour integral) */
             if (info[j].status) flag[k] = 1;
         }
@@ -194,6 +301,15 @@ int dfl_dist(int kind, int n, const double *x, int model, double c, double c0, d
     if (nstatus) for (int k = 0; k < n; k++) *nstatus += flag[k];
     if (kind == 1) for (int k = 0; k < n; k++) if (out[k] < 0) out[k] = 0;   /* a density below the error of the method */
     free(xd); free(xc); free(id); free(ic); free(tosingle); free(meth); free(flag);
+    return rc;
+}
+int dfl_dist(int kind, int n, const double *x, int model, double c, double c0, double g0, bool stat, int method,
+             const dfl_single_opts *so, const dfl_double_opts *dopt, double *out, int *nstatus, char *err, size_t errlen)
+{
+    int nflag = 0, nkeep = 0;
+    WARN[0] = 0;
+    int rc = dist_impl(kind, n, x, model, c, c0, g0, stat, method, so, dopt, out, nstatus, &nflag, &nkeep, err, errlen);
+    if (rc == 0) set_warning(model, c, c0, g0, stat, nflag, nkeep);
     return rc;
 }
 
@@ -249,9 +365,11 @@ static double erfinv(double y)
 int dfl_icdf(int n, const double *p, int model, double c, double c0, double g0, bool stat, int method, double tol,
              const dfl_single_opts *so, const dfl_double_opts *dopt, double *q, double *Fq, int *iter, int *conv, char *err, size_t errlen)
 {
+    WARN[0] = 0;
     if (check_args(2, model, c, c0, g0, stat, err, errlen)) return 1;
     if (check_method(model, g0, stat, method, err, errlen)) return 1;
     for (int k = 0; k < n; k++) if (!(p[k] > 0 && p[k] < 1)) { snprintf(err, errlen, "p must lie in (0, 1)"); return 1; }
+    int nflag = 0, nkeep = 0;   /* (the warning of the points the line integral refused, once for the call: dfl_warning) */
     double m[2], me[2], mu, sd;
     if (model == 4) { mu = -1.9 + 0.1 * fmin(c, 0.0); sd = 0.8; }   /* (no moments for the GLS-detrended case: a rough start, the search is safeguarded) */
     else {
@@ -259,8 +377,8 @@ int dfl_icdf(int n, const double *p, int model, double c, double c0, double g0, 
         mu = m[0]; sd = sqrt(fmax(m[1] - m[0] * m[0], 1e-6));
     }
     if (!(tol > 0)) tol = 1e-10;
-#define CDF(xx, out) do { if (dfl_dist(2, 1, &(xx), model, c, c0, g0, stat, method, so, dopt, &(out), NULL, err, errlen)) return 1; } while (0)
-#define PDF(xx, out) do { if (dfl_dist(1, 1, &(xx), model, c, c0, g0, stat, method, so, dopt, &(out), NULL, err, errlen)) return 1; } while (0)
+#define CDF(xx, out) do { if (dist_impl(2, 1, &(xx), model, c, c0, g0, stat, method, so, dopt, &(out), NULL, &nflag, &nkeep, err, errlen)) return 1; } while (0)
+#define PDF(xx, out) do { if (dist_impl(1, 1, &(xx), model, c, c0, g0, stat, method, so, dopt, &(out), NULL, &nflag, &nkeep, err, errlen)) return 1; } while (0)
     for (int k = 0; k < n; k++) {
         double pk = p[k], x = mu + sd * sqrt(2) * erfinv(2 * pk - 1), lo = x - sd, hi = x + sd, F, f;
         for (int it = 0; it < 100; it++) { CDF(lo, F); if (!(F > pk)) break; lo -= 2 * (x - lo); }
@@ -279,5 +397,6 @@ int dfl_icdf(int n, const double *p, int model, double c, double c0, double g0, 
     }
 #undef CDF
 #undef PDF
+    set_warning(model, c, c0, g0, stat, nflag, nkeep);
     return 0;
 }
