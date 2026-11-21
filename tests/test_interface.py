@@ -176,12 +176,12 @@ class _FakeEngine:
     """The engine's entry points with flags set, for the warnings (which the real engine gives rarely)."""
 
     def dist(self, kind, x, *args):
-        return bytearray(x), len(x) // 8, ""
+        return bytearray(x), len(x) // 8, "", ""
 
     def icdf(self, p, *args):
         n = len(p) // 8
         return (bytearray(p), bytearray(p), bytearray(np.full(n, 60, np.intc).tobytes()), bytearray(np.zeros(n, np.intc).tobytes()),
-                "")
+                "", "")
 
     def adfmax(self, kind, x, *args):
         n = len(x) // 8

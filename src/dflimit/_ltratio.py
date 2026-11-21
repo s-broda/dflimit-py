@@ -49,6 +49,15 @@ except for ``c0 > 0`` at ``x >= 0``), the flagged values given another represent
 
 In case DK with ``c0 > 0`` the density is infinite at ``x = -sqrt(2 c0)``, and ``inf`` is returned there.
 
+In two regions the line integral would need more quadrature nodes than the engine allows: with ``c0 < 0`` near zero and
+``x > 0``, where a root of the parabola X(v) = c0 v^2 + x v + 1/2 lies far out (near ``x/|c0|``), more than two million
+nodes on one path of its inner integrals (from ``c0 = -1e-4`` at ``x = 0.05``, at ``c0 = -1e-3`` near ``x = 1.5``, at
+``c0 = -0.01`` in places, at ``c0 = -0.1`` only far above the unit root, as at ``c = 5``, ``x = 14``), and above the
+unit root at large ``x``, a Gauss-Legendre rule of more than 4096 nodes (at ``c = 7`` from ``x`` of about 660 to 780).
+The line integral refuses such a point before evaluating it: ``"auto"`` takes the conditional integral there, with its
+checks, and gives a ``RuntimeWarning`` where such a value near ``c0 = 0`` is flagged; ``method="single"``, and case DG,
+which has the line integral only, raise a ``ValueError`` that names the arguments.
+
 The computation runs on the engine's worker threads; see `ltratio_threads`."""
 
 PARAMS_DOC = """\
@@ -102,8 +111,9 @@ def ltratio_cdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False):
     Warns
     -----
     RuntimeWarning
-        In a regime in which one evaluation is known to be brittle; with ``verified=True`` and ``method="double"``
-        or ``"contour"``, if the integral reports at some points that its error estimate is not met.
+        In a regime in which one evaluation is known to be brittle; where points that the line integral refuses get
+        flagged values from the conditional integral (see Notes); with ``verified=True`` and ``method="double"`` or
+        ``"contour"``, if the integral reports at some points that its error estimate is not met.
 
     Raises
     ------
@@ -158,8 +168,9 @@ def ltratio_pdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False):
     Warns
     -----
     RuntimeWarning
-        In a regime in which one evaluation is known to be brittle; with ``verified=True`` and ``method="double"``
-        or ``"contour"``, if the integral reports at some points that its error estimate is not met.
+        In a regime in which one evaluation is known to be brittle; where points that the line integral refuses get
+        flagged values from the conditional integral (see Notes); with ``verified=True`` and ``method="double"`` or
+        ``"contour"``, if the integral reports at some points that its error estimate is not met.
 
     Raises
     ------
@@ -193,13 +204,15 @@ def _dist(kind, x, cas, c, c0, g0, method, verified=False):
     me = dfl_method(method)
     ve = dfl_flag(verified, "verified")
     a = dfl_real(x, "x")
-    out, ns, bm = _engine.dist(kind, a.tobytes(), model, dfl_num(c, "c"), dfl_num(c0, "c0"), dfl_num(g0, "g0"), stat,
-                               me, ve)
+    out, ns, bm, wm = _engine.dist(kind, a.tobytes(), model, dfl_num(c, "c"), dfl_num(c0, "c0"), dfl_num(g0, "g0"),
+                                   stat, me, ve)
     if ve and me >= 2 and ns > 0:
         name = "conditional" if me == 2 else "contour"
         warn(f"the {name} integral did not meet its error estimate at {ns} of {a.size} points")
     if bm:
         warn(bm)
+    if wm:
+        warn(wm)
     return dfl_shape(f64(out), a)
 
 
@@ -257,10 +270,12 @@ def ltratio_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-10, info=False, 
     """
     _, model, stat = dfl_case(cas)
     a = dfl_real(p, "p")
-    q, F, it, cv, bm = _engine.icdf(a.tobytes(), model, dfl_num(c, "c"), dfl_num(c0, "c0"), dfl_num(g0, "g0"), stat,
-                                    dfl_method(method), dfl_num(tol, "tol"), dfl_flag(verified, "verified"))
+    q, F, it, cv, bm, wm = _engine.icdf(a.tobytes(), model, dfl_num(c, "c"), dfl_num(c0, "c0"), dfl_num(g0, "g0"), stat,
+                                        dfl_method(method), dfl_num(tol, "tol"), dfl_flag(verified, "verified"))
     if bm:
         warn(bm)
+    if wm:
+        warn(wm)
     conv = cint(cv) != 0
     if not conv.all():
         warn(f"Newton's method did not converge at {int(np.count_nonzero(~conv))} of {conv.size} points")

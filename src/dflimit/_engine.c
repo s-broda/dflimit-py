@@ -84,7 +84,7 @@ static int check(int rc, const char *err)
 }
 
 /* dist(kind, x, model, c, c0, g0, stat, method, verified) -> (bytearray out, int nstatus, str brittle-regime message or
- * ""): dfl_dist, dfl_brittle */
+ * "", str the warning of the points that the line integral refused or ""): dfl_dist, dfl_brittle, dfl_warning */
 static PyObject *py_dist(PyObject *self, PyObject *args)
 {
     int kind, model, stat, method, verified = 0, n = 0, ns = 0, rc = 0;
@@ -97,15 +97,15 @@ static PyObject *py_dist(PyObject *self, PyObject *args)
     dfl_double_opts dv; dfl_double_defaults(&dv); dv.verified = verified != 0;
     ENGINE_CALL(rc = dfl_dist(kind, n, x, model, c, c0, g0, stat != 0, method, NULL, &dv, out, &ns, err, sizeof err));
     if (check(rc, err)) goto done;
-    const char *bm = verified ? NULL : dfl_brittle(kind, model, c, c0, g0, stat != 0, method);
-    res = Py_BuildValue("(Nis)", out_bytes(out, n, sizeof(double)), ns, bm ? bm : "");
+    const char *bm = verified ? NULL : dfl_brittle(kind, model, c, c0, g0, stat != 0, method), *wm = dfl_warning();
+    res = Py_BuildValue("(Niss)", out_bytes(out, n, sizeof(double)), ns, bm ? bm : "", wm ? wm : "");
 done:
     PyMem_Free(out); PyMem_Free(xc);
     return res;
 }
 
-/* icdf(p, model, c, c0, g0, stat, method, tol, verified) -> (q, F, iter, conv) as bytearrays (iter, conv: C int) and the
- * brittle-regime message: dfl_icdf */
+/* icdf(p, model, c, c0, g0, stat, method, tol, verified) -> (q, F, iter, conv) as bytearrays (iter, conv: C int), the
+ * brittle-regime message and the warning of the points that the line integral refused: dfl_icdf, dfl_warning */
 static PyObject *py_icdf(PyObject *self, PyObject *args)
 {
     int model, stat, method, verified = 0, n = 0, rc = 0, *it = NULL, *cv = NULL;
@@ -119,9 +119,9 @@ static PyObject *py_icdf(PyObject *self, PyObject *args)
     dfl_double_opts dv; dfl_double_defaults(&dv); dv.verified = verified != 0;
     ENGINE_CALL(rc = dfl_icdf(n, p, model, c, c0, g0, stat != 0, method, tol, NULL, &dv, q, F, it, cv, err, sizeof err));
     if (check(rc, err)) goto done;
-    const char *bm = verified ? NULL : dfl_brittle(2, model, c, c0, g0, stat != 0, method);
-    res = Py_BuildValue("(NNNNs)", out_bytes(q, n, sizeof(double)), out_bytes(F, n, sizeof(double)),
-                        out_bytes(it, n, sizeof(int)), out_bytes(cv, n, sizeof(int)), bm ? bm : "");
+    const char *bm = verified ? NULL : dfl_brittle(2, model, c, c0, g0, stat != 0, method), *wm = dfl_warning();
+    res = Py_BuildValue("(NNNNss)", out_bytes(q, n, sizeof(double)), out_bytes(F, n, sizeof(double)),
+                        out_bytes(it, n, sizeof(int)), out_bytes(cv, n, sizeof(int)), bm ? bm : "", wm ? wm : "");
 done:
     PyMem_Free(q); PyMem_Free(F); PyMem_Free(it); PyMem_Free(cv); PyMem_Free(pc);
     return res;
@@ -239,8 +239,8 @@ static PyObject *py_threads(PyObject *self, PyObject *args)
 }
 
 static PyMethodDef METHODS[] = {
-    {"dist", py_dist, METH_VARARGS, "dist(kind, x, model, c, c0, g0, stat, method) -> (out, nstatus): dfl_dist"},
-    {"icdf", py_icdf, METH_VARARGS, "icdf(p, model, c, c0, g0, stat, method, tol) -> (q, F, iter, conv): dfl_icdf"},
+    {"dist", py_dist, METH_VARARGS, "dist(kind, x, model, c, c0, g0, stat, method) -> (out, nstatus, brittle, warning): dfl_dist"},
+    {"icdf", py_icdf, METH_VARARGS, "icdf(p, model, c, c0, g0, stat, method, tol) -> (q, F, iter, conv, brittle, warning): dfl_icdf"},
     {"moments", py_moments, METH_VARARGS, "moments(pmax, model, c, c0, g0, stat) -> (m, err): dfl_moments"},
     {"adfmax", py_adfmax, METH_VARARGS, "adfmax(kind, x, model, c, stat) -> (value, err, status): dfl_adfmax"},
     {"region", py_region, METH_VARARGS, "region(type, p1, p2, v0, brks, c) -> (P, err, status): dfl_region"},
