@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.0
+
+Three errors of the engine are repaired (the C engine of dflimit-matlab 0.5.0, the repairs of DFLimit.jl 0.5.0). Values
+outside the regions named below are unchanged.
+
+- Large `x` above the unit root crashed Python. In the bulk of the distribution at `c = 7` and beyond (`x` in the
+  hundreds) the line integral needs a Gauss-Legendre rule of more than 4096 nodes, which the engine does not hold:
+  `ltratio_cdf(751, "DT", 7)` ended the interpreter with a segmentation fault. Such a point is now refused before it
+  is evaluated, and `method="auto"` takes the conditional integral there (0.990824, in 0.2 seconds).
+- A negative local null value near zero took unbounded memory. With `c0 < 0` close to zero and `x > 0`, in every case
+  and with every start, the paths of the line integral grow like `(x/c0)^2` and every node was stored:
+  `ltratio_cdf(0.05, "SK", -1e-3, c0=-1e-3)` took more than 2 GB within two seconds, with no bound. Paths are now
+  summed as they are built and limited to two million nodes; beyond that `method="auto"` takes the conditional
+  integral, with a `RuntimeWarning` where its value is flagged, and `method="single"` (and case DG, which has the line
+  integral only) raises a `ValueError` that names the arguments. Below the limit such a call needs a few megabytes
+  instead of up to 1 GB.
+- Wrong values with a fixed start. With a fixed start (`g0 != 0`), `c0` of -0.01 or -0.001, `x > 0` and `c >= 0`, the
+  line integral returned wrong values, from errors of 1e-7 and 2.4e-3 that look plausible to 1e74 and beyond:
+  `ltratio_cdf(1.5, "DK", 0, c0=-0.01, g0=1)` gave 6.03e74 for 0.960992, `ltratio_cdf(1.5, "DK", 2, c0=-0.01, g0=1)`
+  0.08440 for 0.08676. Case DK was affected by default, cases DU and DT with `method="single"`. A piece of the path
+  that should descend climbed and cancelled against its neighbour; such a piece is now cut back. The same fault gave
+  -3.5e86 for 0.48 in case DU with `c=-20`, `c0=1`, `g0=1`, `method="single"`, and 1.1e13 for 0.68267 for
+  `ltratio_cdf(0, "DK", 0, c0=-1e-4)`.
+
 ## 0.4.1
 
 - Documentation only; the code and the results are those of 0.4.0. The package is on PyPI (`pip install dflimit`); the
