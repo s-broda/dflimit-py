@@ -38,3 +38,28 @@ def test_the_two_representations_agree():
     # the line of the point-optimal test by the conditional integral and by the inversion of U - aV
     expect_equal(ltratio_region({"type": "line", "a": -3.5, "b": -0.2639}, "DK", -5),
                  ltratio_lincdf(-0.2639, -3.5, "DK", -5), 1e-10)
+
+
+def test_the_linear_form_near_a_zero_and_outside_its_support():
+    import math
+    import pytest
+    # a = 0: P(U <= b) = erf(sqrt(kappa (b + 1/2))), kappa = 2c/(e^{2c} - 1) (1 at c = 0), zero below the support
+    for c in (-50.0, -5.0, 0.0, 2.0):
+        kap = 1.0 if c == 0 else 2 * c / math.expm1(2 * c)
+        b = [-0.5 + m / kap for m in (-0.1, 0.0, 1e-6, 1e-3, 0.05, 0.5, 2.0)]
+        expect_equal(ltratio_lincdf(b, 0, "DK", c), [math.erf(math.sqrt(max(kap * (x + 0.5), 0.0))) for x in b], 1e-13)
+    assert ltratio_lincdf(-0.6, 0, "DK", -5) == 0.0
+    # small |a| and c > 0, against the Julia values (the conditional integral given U in case DG)
+    expect_equal(ltratio_lincdf(-0.51, 0.3, "DG", -5), 0.291315235195, 1e-11)
+    expect_equal(ltratio_lincdf(-0.51, 0.3, "DG", 0), 0.287795093100, 1e-11)
+    P = np.asarray(ltratio_lincdf(np.arange(-0.7, 1.05, 0.1), 1e-3, "DG", 2))
+    assert np.all((P >= 0) & (P <= 1)) and np.all(np.diff(P) >= 0)
+    # the power envelope near c = 0: alpha + O(c^2)
+    expect_equal(power_envelope(-0.01), 0.050249919491, 1e-10)
+    e = power_envelope(-1e-3, "DG")
+    assert 0.05 < e < 0.05 + 1e-8
+    # the ends of the range
+    with pytest.raises(ValueError, match="at least -550"):
+        ltratio_lincdf(0, 0, "DK", -600)
+    with pytest.raises(ValueError, match="case DG is available for c up to about 3.5"):
+        ltratio_lincdf(0, 0, "DG", 6)

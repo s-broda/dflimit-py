@@ -278,6 +278,15 @@ void dfl_gp_defaults(dfl_gp_opts *o);
  * P(X < b) = 1/2 - (1/pi) int_0^inf Im[phi(u) e^{-iub}]/u du (tr_gilpelaez and ltratio_lincdf of DFExact.jl).  Non-finite
  * b: 0 at -Inf, 1 at Inf, NaN at NaN.  NULL options take the defaults. */
 int dfl_lincdf(int n, const double *b, double a, int model, double c, double cbar, const dfl_gp_opts *o, double *out, char *err, size_t errlen);
+/* Where that inversion is not trusted (the transform above 5e-9 at the end of its grid, or c > 0: |a| below about 0.3 to
+ * 3, depending on c, which includes a = 0, the law of U alone, and c > 0, where U - aV is wide) the linear form comes from
+ * a conditional integral: in case DK that of the region {U <= aV + b} (dfl_region), in case DG the conditional integral
+ * given U + 1/2, whose law is a gamma(1/2) law under every tilt in V (to about 1e-10, the values in [0, 1]; case DG for
+ * c up to about 3.5 at cbar = -13.5, an error beyond); and P(V <= b) from a longer or finer grid where its transform
+ * has not decayed or c > 2 (dfl_vgrid; c up to about 7).  c must be at least DFL_CMIN.  (gp_trusted, lincond, vgrid of
+ * DFExact.jl.)  dfl_vgrid: the grid of P(V <= b) at c given |phi| at the end of the default grid: 0 (the default
+ * serves), 1 (N, umax set) or -1 (more than its bound: an error with a message) */
+int dfl_vgrid(double c, double tail, int *N, double *umax, char *err, size_t errlen);
 /* the asymptotic power envelope of Elliott, Rothenberg and Stock (1996) at the points c[0..n-1], level alpha (0.05 in the other
  * implementations), zero start, no drift: model 1 (case DK, also the constant case DU) or 4 (case DG, the data GLS-detrended
  * at c): the power at c of the point-optimal test against c, which rejects for small U - aV, a = c/2 in case DK and

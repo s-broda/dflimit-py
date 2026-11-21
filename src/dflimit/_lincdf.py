@@ -58,6 +58,14 @@ def ltratio_lincdf(b, a, cas, c=0, cbar=-13.5):
     (U, V), by the trapezoidal rule in u = sinh(v) with 60000 steps up to u = 4000, as ``ltratio_lincdf`` of the
     MATLAB and Julia programs.
 
+    Where the transform has not fallen below 5e-9 by the end of that grid, or ``c > 0`` (|a| below about 0.3 to 3,
+    depending on ``c``, which includes ``a = 0``, the law of U alone), that inversion is not accurate, and the
+    probability comes from a conditional integral instead: in case DK that of the region U <= aV + b
+    (`ltratio_region`), in case DG the conditional integral given U + 1/2, whose law is a gamma law of shape 1/2
+    under every tilt in V; P(V <= b) takes a longer grid for ``c <= -50`` and a finer one for ``c > 2``. The values
+    are accurate to about 1e-10 and lie in [0, 1]. ``c`` must be at least -550, in case DG at most about 3.5 (at
+    ``cbar = -13.5``; less for ``cbar`` nearer 0), and for ``a = nan`` at most about 7.
+
     References
     ----------
     {references}
@@ -121,7 +129,9 @@ def power_envelope(c, cas="DK", alpha=0.05):
     The test against cbar rejects for small U - aV (`ltratio_lincdf`), a = cbar/2 in case DK and
     a = cbar^2/(2 (cbar - 1)) in case DG (where the limit of the invariant statistic of Elliott, Rothenberg and Stock
     is cbar^2 V + (1 - cbar) J(1)^2, J(1)^2 = 2U + 1): its critical value is the ``alpha``-quantile at ``c = 0``, found by bisection on [-50, 50] to the width 1e-9, and the envelope is its power
-    at cbar = c; ``alpha`` for ``c >= 0``. As ``power_envelope`` of the MATLAB and Julia programs.
+    at cbar = c; ``alpha`` for ``c >= 0``. Near ``c = 0``, where a is small and that inversion is not accurate, the
+    critical value and the power come from the conditional integral of `ltratio_lincdf`, the critical value by
+    bisection in b + 1/2 to 1e-12 of its scale. As ``power_envelope`` of the MATLAB and Julia programs.
 
     References
     ----------

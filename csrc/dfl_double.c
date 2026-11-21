@@ -1114,9 +1114,10 @@ static double bnd_g(double v, const bnd_t *B)
 }
 static double bnd_a(double b, const void *ctx) { return 0.5 + bnd_g(b, ctx); }
 /* P(V < v), case DK, zero start, by Gil-Pelaez (P_V of wap.jl) */
-static double gp_V(double c, double v)
+static double gp_V_grid(double c, double v, int N, double umax, double *tail)
 {
-    int N = 60000; double umax = 4000, vmax = asinh(umax), h = vmax / N, sum = 0, ph = 0, ph0 = 0;
+    double vmax = asinh(umax), h = vmax / N, sum = 0, ph = 0, ph0 = 0;
+    *tail = 0;
     for (int k = 0; k <= N; k++) {
         double u = k == 0 ? 1e-7 : sinh(k * h), wk = cosh(k * h) * h; if (k == 0) wk /= 2;
         cdouble T = CPX(0, u), mu = csqrt(csub(CPX(c * c, 0), cscale(2, T))), E = cexp(cscale(-2, mu));
@@ -1125,8 +1126,19 @@ static double gp_V(double c, double v)
         double a = carg(br); if (k == 0) ph = a; else ph += a - ph0 - 2 * M_PI * round((a - ph0) / (2 * M_PI)); ph0 = a;
         cdouble phi = cexp(csub(CPX(-c / 2, 0), cscale(0.5, cadd(lm, CPX(log(cabs(br)), ph)))));
         sum += cimag(cmul(phi, cexp(CPX(0, -u * v)))) / u * wk;
+        if (k >= N - 100) *tail = fmax(*tail, cabs(phi));
     }
     return 0.5 - sum / M_PI;
+}
+/* P(V < v), on the grid of dfl_vgrid where the default one does not serve (c <= -50, c > 2), clamped to [0, 1]; NaN where
+ * the grid would exceed its bound */
+static double gp_V(double c, double v)
+{
+    double tail, P = gp_V_grid(c, v, 60000, 4000, &tail), umax; int N; char err[256];
+    int r = dfl_vgrid(c, tail, &N, &umax, err, sizeof err);
+    if (r < 0) return NAN;
+    if (r > 0) P = gp_V_grid(c, v, N, umax, &tail);
+    return fmin(1.0, fmax(0.0, P));
 }
 int dfl_region(int type, const double *par, double v0, int nbrk, const double *brks, double c, const dfl_double_opts *o, double *out, dfl_double_info *info, char *err, size_t errlen)
 {

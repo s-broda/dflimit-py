@@ -2,7 +2,7 @@
 
 ## 0.5.0
 
-Three errors of the engine are repaired (the C engine of dflimit-matlab 0.5.0, the repairs of DFLimit.jl 0.5.0). Values
+Four errors of the engine are repaired (the C engine of dflimit-matlab 0.5.0, the repairs of DFLimit.jl 0.5.0). Values
 outside the regions named below are unchanged.
 
 - Large `x` above the unit root crashed Python. In the bulk of the distribution at `c = 7` and beyond (`x` in the
@@ -23,6 +23,21 @@ outside the regions named below are unchanged.
   that should descend climbed and cancelled against its neighbour; such a piece is now cut back. The same fault gave
   -3.5e86 for 0.48 in case DU with `c=-20`, `c0=1`, `g0=1`, `method="single"`, and 1.1e13 for 0.68267 for
   `ltratio_cdf(0, "DK", 0, c0=-1e-4)`.
+- Wrong values of the linear form for small `|a|`. `ltratio_lincdf` inverted the characteristic function of U - aV by
+  the formula of Gil-Pelaez on a grid that ends at u = 4000. At `a = 0` (the law of U, whose density is infinite at
+  the edge b = -1/2 of its support) the transform decays only like u^(-1/2), and the values were off by up to 7e-2
+  within 1e-3 of the edge, 1e-2 within 1e-2 of it and 1e-4 in the bulk, in cases DK and DG alike, as low as -1.5e-2
+  below the support and above 1 by up to 5e-5: `ltratio_lincdf(-0.4, 0, "DK")` gave 0.345291 for 0.345279
+  (`math.erf(math.sqrt(0.1))`), `ltratio_lincdf(-0.5, 0, "DG")` 0.0197 for 0. The error stays at that size for `|a|`
+  up to about 3e-3, falls to 1e-3 in case DK (4e-5 in case DG) at `|a| = 0.3`, and is larger where U and V are
+  concentrated (`c` of -50 and below) and where U - aV is wide (up to 1.2e-2 in case DK at `c = 5`); `P(V <= b)` (`a =
+  NaN`) was off by 4e-2 at `c = -200`. Where the transform has not decayed by the end of the grid, or `c > 0`, the
+  value now comes from a conditional integral (the region {U <= aV + b} in case DK, the conditional integral given U +
+  1/2 in case DG), to about 1e-10, within [0, 1] and 0 below the support; `P(V <= b)` takes a longer or finer grid.
+  `power_envelope` near `c = 0` takes the conditional integral too (in case DG it fell below `alpha` there).
+  `ltratio_lincdf` now requires `c >= -550`, in case DG `c` up to about 3.5 at `cbar = -13.5` and for `a = NaN` `c` up
+  to about 7 (a `ValueError` beyond). Other values are unchanged; `ltratio_region` with `v0 > 0` changes with P(V <
+  v0) at `c <= -50` and `c > 2`.
 
 ## 0.4.1
 
