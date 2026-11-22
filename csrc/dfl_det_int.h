@@ -67,6 +67,8 @@ static inline int det_failed(const det_status *st) { return *(const volatile int
 void det_warn(const char *fmt, ...);
 void det_warn_clear(void);
 void det_warn_hold(int on);       /* on = 1: keep the warnings across the calls that follow, 0: release */
+/* the classical engine's warning (dfl_warning, dfl_api.c) joined with msg, each message once: the router's composite calls */
+void dfl_warning_join(const char *msg);
 
 /* ---- small dense linear algebra (dfl_det_la.c); matrices column-major ---- */
 /* symmetric eigen-decomposition by the cyclic Jacobi method: eigenvalues ascending in w, eigenvectors in the columns of V
@@ -213,6 +215,10 @@ typedef struct det_model_ref { det_prep *P; det_model Mo; int refs; } det_model_
 det_path *det_path_cached(const dfl_design *D, double cbar, int start, double g0, double c, double phi, double hfac, char *err, size_t errlen);
 void det_path_release(det_path *CP);
 det_path *det_path_prep(det_prep *P, int start, double g0, double c, char *err, size_t errlen);
+det_path *det_v_path_prep(det_prep *P, int start, double g0, double c, char *err, size_t errlen);   /* (v_own of such a path) */
+/* the largest c of the LM statistic's functions (LM_CMAX of DFDet_paper2.jl: above it the inversion of its V moves between
+ * contours by more than 1e-8, by 2e-7 at c = 12 and 3e-5 at c = 15) */
+#define DET_LM_CMAX 10.0
 /* a line refined for |x| <= max |xs| and the constants amax of the kernels (line_refined); the path itself (with a new
  * reference) where nothing is refined */
 det_path *det_line_refined(det_path *CP, int nx, const double *xs, int na, const double *amax, char *err, size_t errlen);
@@ -227,6 +233,10 @@ typedef struct {                      /* one term of an event (XSpec) */
     int bnd;
 } det_xspec;
 typedef struct { int n, ntail; double alpha, tol; int warn, filon; } det_eval_opts;
+/* the largest number of nodes of the U-shapes of a node of the outer contour (ushapes stops with an error beyond it: with a
+ * fixed start by the wide heights, with the zero and the stationary start by the segments of the narrow ones;
+ * USHAPE_MAXNODES of DFDet.jl) */
+#define DET_USHAPE_MAXNODES 1000000
 void det_eval_defaults(const det_path *CP, det_eval_opts *o);
 /* contour_eval: F and f of (U - c0 V)/sqrt(V) at xs (vpow 2; 3: the density kernel of the coefficient statistic); eF,
  * ef the rounding estimates (may be NULL) */

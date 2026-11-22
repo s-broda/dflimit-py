@@ -484,7 +484,20 @@ static int ushapes(const det_path *CP, int k, const logmt_t *L, const double *c0
         double hmx = 0;
         for (int i = 0; i < rp + rm; i++) { cdouble z = L->rts[i]; hmx = dmax(hmx, fabs(cimag(z)) + fabs(creal(z) - (creal(z) > 0 ? sp : sm))); }
         double nest = 2 * hmx / dmin(hp, hm) * n;
-        if (nest > 1e6) { det_fail(st, "the U-shapes of the fixed start at t = %g%+gi would need some %.0f nodes (heights to %.3g): the roots run off", creal(t), cimag(t), nest, hmx); return 1; }
+        if (nest > DET_USHAPE_MAXNODES) { det_fail(st, "the U-shapes of the fixed start at t = %g%+gi would need some %.0f nodes (heights to %.3g): the roots run off (more than %.0f nodes)", creal(t), cimag(t), nest, hmx, (double) DET_USHAPE_MAXNODES); return 1; }
+    } else {
+        /* (the zero and the stationary start: the segments of the narrow U-shapes, at most hp or hm per panel with n nodes,
+         * a lower bound of their nodes (within 1% of the count beyond 1e5).  The design (1 + r, 1{r <= 0.4}) on the vertical
+         * line has the positive root 86030 - 764901i at t = 1 + 2749i and U-shapes of 2e7 nodes further out, at every c from
+         * -1 to 2, and at c = 1 took more than 2 GB within seconds; such a node stops with the same error) */
+        double nest = 0, hseg = 0, ylo, yhi;
+        if (rp > 0) { ulevels(gp, rp, sp, 1, 0, &ylo, &yhi); nest += (yhi - ylo) / hp * n; hseg = dmax(hseg, yhi - ylo); }
+        if (rm > 0) { ulevels(gm, rm, sm, -1, 0, &ylo, &yhi); nest += (yhi - ylo) / hm * n; hseg = dmax(hseg, yhi - ylo); }
+        if (nest > DET_USHAPE_MAXNODES) {
+            det_fail(st, "the U-shapes of the %s start at t = %g%+gi would need some %.3g nodes (segments to %.3g long): a root runs off (more than %.0f nodes)",
+                     Mo->start == 2 ? "stationary" : "zero", creal(t), cimag(t), nest, hseg, (double) DET_USHAPE_MAXNODES);
+            return 1;
+        }
     }
     const logmt_t *lmf = fixed ? L : NULL;
     cvec Wp = {0};

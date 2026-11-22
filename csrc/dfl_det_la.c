@@ -410,3 +410,5 @@ void det_warn(const char *fmt, ...)
     snprintf(DETWARN + k, sizeof DETWARN - k, "%s%s", k ? "\n" : "", buf);
 }
 const char *dfl_det_warning(void) { return DETWARN[0] ? DETWARN : NULL; }
+/* (public: also any hold a call left on the thread, so that the next call starts clean) */
+void dfl_det_warning_clear(void) { DETWARN[0] = 0; DETHOLD = 0; }

@@ -92,10 +92,49 @@ static void qg_body(int k, void *v)
     det_logmgf_spart(&W, o->c, s, t, th, NULL, &o->L0[k], &o->LD[k]);
     det_work_free(&W);
 }
+/* the distance of the nearest singularity of phi(u) = E e^{iuQ} from the real line (qedge): Q is a quadratic form, whose
+ * transform M(s, cbar^2 s) is singular on the real line only, at the first zeros s_+ > 0 and s_- < 0 of its determinant
+ * (scanned by factors of 1.1 from 1e-10, then bisected), the smaller of s_+ and |s_-|; -1 if the work space fails */
+static int qedge_bad(det_work *W, double c, double cb2, double s)
+{
+    cdouble th, l0, ld, t = CPX(cb2 * s, 0.0);
+    if (det_logmgf_tpart(W, c, t, &th, NULL)) return 1;
+    det_logmgf_spart(W, c, CPX(s, 0.0), t, th, NULL, &l0, &ld);
+    return !(isfinite(creal(ld)) && fabs(cimag(ld)) < 1.0);
+}
+static double qedge(const det_model *Mo, double cbar, double c)
+{
+    char buf[DET_WORK_STACK]; det_work W;
+    if (det_work_init(&W, Mo, buf, sizeof buf)) return -1;
+    double cb2 = cbar * cbar, e = INFINITY;
+    for (int sgi = 0; sgi < 2; sgi++) {
+        double sg = sgi == 0 ? 1.0 : -1.0, s = 1e-10;
+        while (s < 1e4 && !qedge_bad(&W, c, cb2, sg * 1.1 * s)) s *= 1.1;
+        if (!(s < 1e4)) continue;
+        double lo = s, hi = 1.1 * s;
+        for (int it = 0; it < 40; it++) { double m = sqrt(lo * hi); if (qedge_bad(&W, c, cb2, sg * m)) hi = m; else lo = m; }
+        e = dmin(e, lo);
+    }
+    det_work_free(&W);
+    return e;
+}
+/* the smallest ratio of the distance d of the singularity of phi (qedge) to the step h = asinh(umax)/N of the grid near the
+ * origin (PT_EDGE of DFDet_paper2.jl): the error of the rule of Gil-Pelaez on the grid is about exp(-2 pi d/h); with a linear
+ * trend at cbar = -13.5, d/h = 14 at c = 3 (off by 5e-10), 1.6 at c = 4 (9e-6), 0.2 at c = 5 (F from -0.1 to 3.4).  Below the
+ * unit root d/h is 3.7 to 33 for the critical values of the envelope and above 3000 for its power; below PT_EDGE the
+ * functions refuse (a larger N, which shrinks h, extends them) */
+#define PT_EDGE 3.3
 static int qgrid(const det_prep *P, double cbar, double c, int N, double umax, qgrid_t *G, char *err, size_t errlen)
 {
     det_model Mo;
     if (det_model_make(P, 0, 0.0, &Mo, err, errlen)) return 1;
+    double d = qedge(&Mo, cbar, c), hh = asinh(umax) / N;
+    if (d < 0) { det_model_free(&Mo); snprintf(err, errlen, "out of memory"); return 1; }
+    if (!(d / hh >= PT_EDGE)) {
+        snprintf(err, errlen, "the point-optimal statistic at c = %g, cbar = %g: the transform of Q has a singularity at %.3g from the real line, which the grid of the inversion (step %.3g near the origin) does not resolve (far above the unit root); it needs N >= %.0f",
+                 c, cbar, d, hh, ceil(PT_EDGE * asinh(umax) / d));
+        det_model_free(&Mo); return 1;
+    }
     G->N = N;
     G->u = malloc((N + 1) * sizeof(double)); G->w = malloc((N + 1) * sizeof(double)); G->lM = malloc((N + 1) * sizeof(cdouble));
     double h = asinh(umax) / N;
@@ -109,7 +148,7 @@ static int qgrid(const det_prep *P, double cbar, double c, int N, double umax, q
     else {
         double ph = cimag(LD[0]);
         for (int k = 0; k <= N; k++) {
-            if (k > 0) { double d = cimag(LD[k]) - cimag(LD[k - 1]); ph += atan2(sin(d), cos(d)); }
+            if (k > 0) { double dd = cimag(LD[k]) - cimag(LD[k - 1]); ph += atan2(sin(dd), cos(dd)); }
             G->lM[k] = cadd(csub(L0[k], cscale(0.5, CPX(creal(LD[k]), ph))), CPX(0, G->u[k] / 2));
         }
     }
@@ -117,26 +156,37 @@ static int qgrid(const det_prep *P, double cbar, double c, int N, double umax, q
     return rc;
 }
 static void qgrid_free(qgrid_t *G) { free(G->u); free(G->w); free(G->lM); }
-static void ptF(const qgrid_t *G, double q, double *F, double *f)
+/* P(Q <= q) and the density at q on the grid G; 1 for |q| beyond 0.15/h (h = asinh(umax)/N the step of the grid in v, 1000
+ * with the default grid), where the steps of u near the origin do not resolve e^{-iuq} (with a linear trend at c = 0, F came
+ * out as 3.0 at q = 1e5 and 24 at 1e6), with the message in err */
+static int ptF(const qgrid_t *G, double q, double *F, double *f, char *err, size_t errlen)
 {
+    if (isnan(q)) { *F = *f = NAN; return 0; }
+    if (isinf(q)) { *F = q > 0 ? 1.0 : 0.0; *f = 0; return 0; }
+    if (!(fabs(q) * 2 * G->w[0] <= 0.15)) {
+        snprintf(err, errlen, "the point-optimal statistic: q = %g lies beyond the range of the inversion (|q| at most %.3g = 0.15 N/asinh(umax); a larger N extends it)", q, 0.15 / (2 * G->w[0]));
+        return 1;
+    }
     double a = 0, b = 0;
     for (int k = 0; k <= G->N; k++) {
         cdouble z = cexp(csub(G->lM[k], CPX(0, G->u[k] * q)));
         a += cimag(z) / G->u[k] * G->w[k]; b += creal(z) * G->w[k];
     }
     *F = 0.5 - a / M_PI; *f = b / M_PI;
+    return 0;
 }
-static double ptquantile(const qgrid_t *G, double p, double q0)
+static int ptquantile(const qgrid_t *G, double p, double q0, double *qout, char *err, size_t errlen)
 {
     double lo = 1e-3, hi = 400, q = q0, F, f;
     for (int it = 0; it < 100; it++) {
-        ptF(G, q, &F, &f);
+        if (ptF(G, q, &F, &f, err, errlen)) return 1;
         if (F > p) hi = q; else lo = q;
         if (fabs(F - p) < 1e-12) break;
         double qn = q - (F - p) / f;
         q = (lo < qn && qn < hi) ? qn : (lo + hi) / 2;
     }
-    return q;
+    *qout = q;
+    return 0;
 }
 static void gp_defaults(int *N, double *umax) { if (*N <= 0) *N = 60000; if (!(*umax > 0)) *umax = 4000; }
 int dfl_det_pt(int kind, const dfl_design *D, int n, const double *q, double cbar, double c, int N, double umax, double *out, char *err, size_t errlen)
@@ -145,38 +195,48 @@ int dfl_det_pt(int kind, const dfl_design *D, int n, const double *q, double cba
     if (kind != 1 && kind != 2) { snprintf(err, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
     det_prep *P; if (prep_pt(D, cbar, &P, err, errlen)) return 1;
     qgrid_t G; int rc = qgrid(P, cbar, c, N, umax, &G, err, errlen);
-    if (!rc) { for (int k = 0; k < n; k++) { double F, f; ptF(&G, q[k], &F, &f); out[k] = kind == 2 ? F : f; } qgrid_free(&G); }
+    if (!rc) {
+        /* (non-finite q: 0 at -Inf, 1 (cdf) or 0 (density) at Inf, NaN at NaN; |q| beyond the range of the grid an error) */
+        for (int k = 0; k < n && !rc; k++) { double F, f; rc = ptF(&G, q[k], &F, &f, err, errlen); out[k] = kind == 2 ? F : f; }
+        qgrid_free(&G);
+    }
     det_prep_free(P);
     return rc;
 }
 int dfl_det_pt_quantile(const dfl_design *D, double p, double cbar, int N, double umax, double *q, char *err, size_t errlen)
 {
     det_warn_clear(); gp_defaults(&N, &umax);
+    if (!(p > 0 && p < 1)) { snprintf(err, errlen, "pt_quantile: p must lie in (0, 1)"); return 1; }
     det_prep *P; if (prep_pt(D, cbar, &P, err, errlen)) return 1;
     qgrid_t G; int rc = qgrid(P, cbar, 0.0, N, umax, &G, err, errlen);
-    if (!rc) { *q = ptquantile(&G, p, 6.0); qgrid_free(&G); }
+    if (!rc) { rc = ptquantile(&G, p, 6.0, q, err, errlen); qgrid_free(&G); }
     det_prep_free(P);
     return rc;
 }
 int dfl_det_pt_power(const dfl_design *D, double cbar, double c, double level, int N, double umax, double *b, double *power, char *err, size_t errlen)
 {
     det_warn_clear(); gp_defaults(&N, &umax);
+    if (!(level > 0 && level < 1)) { snprintf(err, errlen, "pt_power: the level must lie in (0, 1)"); return 1; }
     det_prep *P; if (prep_pt(D, cbar, &P, err, errlen)) return 1;
     qgrid_t G; int rc = qgrid(P, cbar, 0.0, N, umax, &G, err, errlen);
     if (!rc) {
-        *b = ptquantile(&G, level, 6.0); qgrid_free(&G);
-        rc = qgrid(P, cbar, c, N, umax, &G, err, errlen);
-        if (!rc) { double f; ptF(&G, *b, power, &f); qgrid_free(&G); }
+        rc = ptquantile(&G, level, 6.0, b, err, errlen); qgrid_free(&G);
+        if (!rc) rc = qgrid(P, cbar, c, N, umax, &G, err, errlen);
+        if (!rc) { double f; rc = ptF(&G, *b, power, &f, err, errlen); qgrid_free(&G); }
     }
     det_prep_free(P);
     return rc;
 }
 int dfl_det_pt_envelope(const dfl_design *D, int n, const double *cs, double level, int N, double umax, double *out, char *err, size_t errlen)
 {
+    det_warn_clear();
+    if (!(level > 0 && level < 1)) { snprintf(err, errlen, "pt_envelope: the level must lie in (0, 1)"); return 1; }
+    det_warn_hold(1);
     for (int k = 0; k < n; k++) {
-        if (!(cs[k] < 0)) { out[k] = level; continue; }
-        double b; if (dfl_det_pt_power(D, cs[k], cs[k], level, N, umax, &b, &out[k], err, errlen)) return 1;
+        if (!(cs[k] < 0)) { out[k] = isnan(cs[k]) ? NAN : level; continue; }   /* (NaN at NaN, as the classical envelope) */
+        double b; if (dfl_det_pt_power(D, cs[k], cs[k], level, N, umax, &b, &out[k], err, errlen)) { det_warn_hold(0); return 1; }
     }
+    det_warn_hold(0);
     return 0;
 }
 
@@ -267,11 +327,20 @@ static int lmprep(const dfl_design *D, det_prep **P, char *err, size_t errlen)
     return 0;
 }
 static double lmV(const det_path *CP, double v) { return 1 - det_vsum(CP, v, 1); }
+/* the outer contour of the LM statistic's V (lmpath): the path of the law of V alone (det_v_path_prep), which above the unit
+ * root replaces the vertical line of the t-ratio's path by a hyperbola (on the line P(V <= y) was off by 6e-3 at c = 5 with a
+ * linear trend, and F exceeded 1); c at most DET_LM_CMAX */
+static det_path *lmpath(det_prep *P, double c, char *err, size_t errlen)
+{
+    if (!isfinite(c)) { snprintf(err, errlen, "the LM statistic: c must be a finite real scalar"); return NULL; }
+    if (c > DET_LM_CMAX) { snprintf(err, errlen, "the LM statistic: c must be at most %g (above, its distribution is not computed accurately: off by 2e-7 at c = 12 and by 3e-5 at c = 15)", DET_LM_CMAX); return NULL; }
+    return det_v_path_prep(P, 0, 0.0, c, err, errlen);
+}
 int dfl_det_lm_cdf(const dfl_design *D, int n, const double *x, double c, double *out, char *err, size_t errlen)
 {
     det_warn_clear();
     det_prep *P; if (lmprep(D, &P, err, errlen)) return 1;
-    det_path *CP = det_path_prep(P, 0, 0.0, c, err, errlen);
+    det_path *CP = lmpath(P, c, err, errlen);
     det_prep_release(P);
     if (!CP) return 1;
     for (int k = 0; k < n; k++) out[k] = isnan(x[k]) ? NAN : x[k] >= 0 ? 1.0 : x[k] == -INFINITY ? 0.0 : lmV(CP, 1 / (4 * x[k] * x[k]));
@@ -290,7 +359,7 @@ int dfl_det_lm_quantile(const dfl_design *D, double p, double c, double *q, char
     det_warn_clear();
     if (!(p > 0 && p < 1)) { snprintf(err, errlen, "lm_quantile: p must lie in (0, 1)"); return 1; }
     det_prep *P; if (lmprep(D, &P, err, errlen)) return 1;
-    det_path *CP = det_path_prep(P, 0, 0.0, c, err, errlen);
+    det_path *CP = lmpath(P, c, err, errlen);
     det_prep_release(P);
     if (!CP) return 1;
     *q = lm_q(CP, p);
@@ -299,11 +368,12 @@ int dfl_det_lm_quantile(const dfl_design *D, double p, double c, double *q, char
 }
 int dfl_det_lm_power(const dfl_design *D, int n, const double *cs, double level, double *q, double *out, char *err, size_t errlen)
 {
+    if (!(level > 0 && level < 1)) { det_warn_clear(); snprintf(err, errlen, "lm_power: the level must lie in (0, 1)"); return 1; }
     if (dfl_det_lm_quantile(D, level, 0.0, q, err, errlen)) return 1;
     det_prep *P; if (lmprep(D, &P, err, errlen)) return 1;
     int rc = 0;
     for (int k = 0; k < n && !rc; k++) {
-        det_path *CP = det_path_prep(P, 0, 0.0, cs[k], err, errlen);
+        det_path *CP = lmpath(P, cs[k], err, errlen);
         if (!CP) { rc = 1; break; }
         out[k] = lmV(CP, 1 / (4 * *q * *q));
         det_path_release(CP);
@@ -331,7 +401,8 @@ int dfl_det_msb_cdf(const dfl_design *D, int n, const double *x, double c, doubl
     double cb = isnan(gls) ? -13.5 : gls;
     det_path *CP = det_v_path(D, cb, 0, 0.0, c, NAN, 1.0, err, errlen);
     if (!CP) return 1;
-    for (int k = 0; k < n; k++) out[k] = x[k] <= 0 ? 0.0 : 1 - det_vsum(CP, x[k] * x[k], 1);
+    /* (NaN at NaN, not passed on to the sum; 0 at x <= 0 and at -Inf, 1 at Inf) */
+    for (int k = 0; k < n; k++) out[k] = isnan(x[k]) ? NAN : x[k] <= 0 ? 0.0 : isinf(x[k]) ? 1.0 : 1 - det_vsum(CP, x[k] * x[k], 1);
     det_path_release(CP);
     return 0;
 }

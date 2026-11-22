@@ -49,7 +49,10 @@ static int verify_eval(det_path *CP, evalf_t ev, void *ctx, int nv, double vtol,
     int rc = C1 ? ev(C1, &o2, ctx, v2, err, errlen) : 1;
     det_path_release(C1);
     if (rc) {
-        /* (the groups not separated on the steeper hyperbola: the variant at the default angle) */
+        /* (any error of the variant, also one of the workers of its node loops, which det_fail keeps: the groups not
+         * separated on the steeper hyperbola, the guard on the nodes of its U-shapes; the variant at the default angle
+         * takes its place.  An exhausted memory reaches the caller, as in the Julia engine) */
+        if (strstr(err, "out of memory")) { free(v2); free(v3); return 1; }
         det_path *C0 = det_variant_path(CP, 0, err, errlen);
         rc = C0 ? ev(C0, &o2, ctx, v2, err, errlen) : 1;
         det_path_release(C0);
@@ -422,11 +425,16 @@ static int spec_eval_one(det_path *CP, const det_eval_opts *o, void *v, double *
     free(F); free(f); det_path_release(CPr);
     return rc;
 }
+/* the law of V at ys: 0 at y <= 0 and at -Inf (V > 0), 1 (cdf) or 0 (density) at Inf, NaN at NaN; the inversion at y > 0
+ * (at y < 0 the factor e^{-t y} grows along the path, and the sum gave NaN) */
 static int vlaw(int kind, const dfl_design *D, int n, const double *ys, double c, const dfl_det_opts *o, double *out, char *err, size_t errlen)
 {
     det_path *CP = det_v_path(D, o->gls, o->start, o->gamma0, c, o->phi, o->hfac, err, errlen);
     if (!CP) return 1;
-    for (int k = 0; k < n; k++) out[k] = kind == 2 ? 1 - det_vsum(CP, ys[k], 1) : det_vsum(CP, ys[k], 0);
+    for (int k = 0; k < n; k++) {
+        double y = ys[k];
+        out[k] = isnan(y) ? NAN : !(y > 0) ? 0.0 : isinf(y) ? (kind == 2 ? 1.0 : 0.0) : kind == 2 ? 1 - det_vsum(CP, y, 1) : det_vsum(CP, y, 0);
+    }
     det_path_release(CP);
     return 0;
 }
@@ -477,6 +485,8 @@ int dfl_det_lin_quantile(const dfl_design *D, double p, double a, double c, doub
     dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
     det_warn_clear();
     if (check_common(D, c, o, err, errlen)) return 1;
+    if (!(p > 0 && p < 1)) { snprintf(err, errlen, "lin_quantile: p must lie in (0, 1)"); return 1; }
+    if (!isfinite(a)) { snprintf(err, errlen, "lin_quantile: a must be a finite real scalar"); return 1; }
     if (isnan(b0)) b0 = 0;
     if (!(tol > 0)) tol = 1e-10;
     det_path *CP = user_path(D, c, o, err, errlen);
@@ -487,6 +497,7 @@ int dfl_det_lin_quantile(const dfl_design *D, double p, double a, double c, doub
     return rc;
 }
 
+/* whether D is trend(p) (p = 0, 1: one piece, the monomial coefficients; the cases of the power envelope) */
 static int is_trend(const dfl_design *D, int p)
 {
     int K = p + 1, deg = p > 0 ? p : 0;
@@ -497,15 +508,16 @@ static int is_trend(const dfl_design *D, int p)
 int dfl_det_power_envelope(const dfl_design *D, int n, const double *cs, double level, double *out, char *err, size_t errlen)
 {
     det_warn_clear();
-    int trendcase = D->K == 2 && D->np == 1 && D->br[0] == 0 && D->br[1] == 1 && D->deg == 1 && D->C[0] == 1 && D->C[1] == 0 && D->C[2] == 0 && D->C[3] == 1;
-    int nodet = D->K == 0 || (D->K == 1 && D->np == 1 && D->br[0] == 0 && D->br[1] == 1 && D->deg == 0 && D->C[0] == 1);
+    if (!D) { snprintf(err, errlen, "no design"); return 1; }
+    if (!(level > 0 && level < 1)) { snprintf(err, errlen, "power_envelope: the level must lie in (0, 1)"); return 1; }
+    int trendcase = is_trend(D, 1), nodet = D->K == 0 || is_trend(D, 0);
     if (!(trendcase || nodet)) { snprintf(err, errlen, "power_envelope: the design must be trend(-1), trend(0) or trend(1) (the limit of the point-optimal statistic of other designs was not derived)"); return 1; }
     dfl_design T; if (dfl_design_trend(-1, &T, err, errlen)) return 1;
     int rc = 0;
     det_warn_hold(1);
     for (int k = 0; k < n && !rc; k++) {
         double c = cs[k];
-        if (!(c < 0)) { out[k] = level; continue; }
+        if (!(c < 0)) { out[k] = isnan(c) ? NAN : level; continue; }   /* (NaN at NaN, as the classical envelope) */
         dfl_det_opts o; dfl_det_defaults(&o);
         double b, a;
         if (nodet) {
@@ -523,13 +535,21 @@ int dfl_det_power_envelope(const dfl_design *D, int n, const double *cs, double 
     return rc;
 }
 
+/* ADFmax: least-squares detrending at the null value phi = 1 (the general engine has no ADFmax of GLS-detrended data and
+ * no local null value; both were dropped without notice before) */
+static int adf_opts_check(const dfl_det_opts *o, char *err, size_t errlen)
+{
+    if (!isnan(o->gls)) { snprintf(err, errlen, "adfmax: ADFmax has least-squares detrending only (gls must be NaN)"); return 1; }
+    if (o->c0 != 0) { snprintf(err, errlen, "adfmax: ADFmax is the statistic of the null value phi = 1 (c0 must be 0)"); return 1; }
+    return 0;
+}
 int dfl_det_adfmax(int kind, const dfl_design *D, int n, const double *x, double c, const dfl_det_opts *o0, double *out, char *err, size_t errlen)
 {
     dfl_det_opts od; const dfl_det_opts *o1 = opts_or_default(o0, &od);
-    dfl_det_opts o = *o1; o.gls = NAN;           /* (ADFmax: least squares detrending) */
+    dfl_det_opts o = *o1;
     det_warn_clear();
     if (kind != 1 && kind != 2) { snprintf(err, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
-    if (check_common(D, c, &o, err, errlen)) return 1;
+    if (adf_opts_check(&o, err, errlen) || check_common(D, c, &o, err, errlen)) return 1;
     double *xf = malloc((n + 1) * sizeof(double)); int *ix = malloc((n + 1) * sizeof(int));
     int m = split_finite(n, x, kind == 2, out, xf, ix), rc = 0;
     if (m > 0) {
@@ -553,9 +573,10 @@ int dfl_det_adfmax(int kind, const dfl_design *D, int n, const double *x, double
 int dfl_det_adfmax_quantile(const dfl_design *D, double p, double c, double x0, double tol, const dfl_det_opts *o0, double *q, char *err, size_t errlen)
 {
     dfl_det_opts od; const dfl_det_opts *o1 = opts_or_default(o0, &od);
-    dfl_det_opts o = *o1; o.gls = NAN;
+    dfl_det_opts o = *o1;
     det_warn_clear();
-    if (check_common(D, c, &o, err, errlen)) return 1;
+    if (adf_opts_check(&o, err, errlen) || check_common(D, c, &o, err, errlen)) return 1;
+    if (!(p > 0 && p < 1)) { snprintf(err, errlen, "adfmax_quantile: p must lie in (0, 1)"); return 1; }
     if (isnan(x0)) x0 = -2.0;
     if (!(tol > 0)) tol = 1e-10;
     det_path *CP = user_path(D, c, &o, err, errlen);

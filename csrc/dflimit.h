@@ -320,11 +320,15 @@ int dfl_automethod(int model, double c, double c0, double g0, bool stat, double 
 const char *dfl_brittle(int kind, int model, double c, double c0, double g0, bool stat, int method);
 int dfl_dist(int kind, int n, const double *x, int model, double c, double c0, double g0, bool stat, int method,
              const dfl_single_opts *so, const dfl_double_opts *dopt, double *out, int *nstatus, char *err, size_t errlen);
-/* the warning of the last call of dfl_dist or dfl_icdf on the calling thread, or NULL: points that the line integral refused
- * and whose values from the conditional integral are flagged (route_warn of DFExact.jl), or, with dopt->verified = 1,
- * flagged values kept because their fallback, the line integral, refused the point.  The user-level wrappers (R, Python,
- * the MEX file) give it as a warning once per call, as the message of dfl_brittle; dfl_dist itself does not warn */
+/* the warning of the last call of dfl_dist, dfl_icdf or a function of the router (dfl_engine_*) on the calling thread, or
+ * NULL: points that the line integral refused and whose values from the conditional integral are flagged (route_warn of
+ * DFExact.jl), or, with dopt->verified = 1, flagged values kept because their fallback, the line integral, refused the
+ * point.  The user-level wrappers (R, Python, the MEX file) give it as a warning once per call, as the message of
+ * dfl_brittle; dfl_dist itself does not warn.  dfl_dist, dfl_icdf, every dfl_engine_* function and
+ * dfl_design_from_matrix clear it at their start; the other functions of the classical engine leave it as it is, and
+ * dfl_warning_clear clears it (a wrapper calls it before a call whose warning it reads) */
 const char *dfl_warning(void);
+void dfl_warning_clear(void);
 /* quantiles q of the probabilities p (in (0, 1)) by safeguarded Newton to the tolerance tol (1e-10), method as in dfl_dist; Fq, iter, conv
  * (may be NULL) receive the distribution function at q, the iteration counts and the convergence flags */
 int dfl_icdf(int n, const double *p, int model, double c, double c0, double g0, bool stat, int method, double tol,
@@ -392,7 +396,11 @@ typedef struct {
     double phi, hfac;    /* the outer contour: its asymptotic angle (NaN: the default rule) and the factor of its step (1) */
 } dfl_det_opts;
 void dfl_det_defaults(dfl_det_opts *o);
-const char *dfl_det_warning(void);   /* the warnings of the last call on this thread, or NULL */
+/* the warnings of the last call on this thread, or NULL: every user-level function of the general engine, every
+ * dfl_engine_* function and dfl_design_from_matrix clear them at their start (a composite call keeps those of its parts);
+ * dfl_det_warning_clear clears them (a wrapper calls it before a call whose warning it reads) */
+const char *dfl_det_warning(void);
+void dfl_det_warning_clear(void);
 void dfl_det_empty_caches(void);      /* drop the cached prepared designs and outer paths (empty_caches!) */
 
 /* the distribution function (kind 2) or density (kind 1) of the limit (U - c0 V)/sqrt(V) of the t-ratio at x[0..n-1]

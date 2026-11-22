@@ -28,6 +28,8 @@ static int resolve(const dfl_spec *S, spec_t *R, char *err, size_t errlen)
     if (S->D == NULL) {
         /* a classical case: the design trend(p) (case DG: trend(1) GLS-detrended at cbar = -13.5) */
         if (S->model < 1 || S->model > 4) { snprintf(err, errlen, "model must be 1, 2, 3 or 4 (no deterministic terms, intercept, intercept and trend, GLS-detrended trend)"); return 1; }
+        /* (gls applies to a design; a classical case has its detrending in its model: never a detrending silently dropped) */
+        if (!isnan(S->gls) && !(S->model == 4 && S->gls == DFL_CBAR_GLS)) { snprintf(err, errlen, "gls applies to a design (spec->D); a classical case has its detrending in its model (model 4: GLS detrending at cbar = -13.5), and gls must be NaN"); return 1; }
         R->model = S->model; R->stat = S->start == 2;
         if (R->model == 4) { R->gls = DFL_CBAR_GLS; if (R->stat) { snprintf(err, errlen, "the GLS-detrended case (model 4) has a zero start only"); return 1; } }
         else R->gls = NAN;
@@ -49,6 +51,19 @@ static int resolve(const dfl_spec *S, spec_t *R, char *err, size_t errlen)
     return 0;
 }
 static void spec_free(spec_t *R) { if (R->owned) dfl_design_free(&R->own); }
+/* the start of a call of the router: both warnings cleared (dfl_warning, dfl_det_warning; the general engine's not under the
+ * hold of a composite call, which collects those of its parts) */
+static void warn_entry(void) { det_warn_clear(); dfl_warning_clear(); }
+/* the classical warning of the parts of a composite call (the router's searches): collected after each part, set at the end */
+typedef struct { char m[1024]; } cwarn_t;
+static void cwarn_take(cwarn_t *w)
+{
+    const char *s = dfl_warning();
+    if (!s || strstr(w->m, s)) return;
+    size_t k = strlen(w->m);
+    if (k + 2 < sizeof w->m) snprintf(w->m + k, sizeof w->m - k, "%s%s", k ? "\n" : "", s);
+}
+static void cwarn_put(const cwarn_t *w) { dfl_warning_clear(); dfl_warning_join(w->m); }
 /* the method checks of the classical engine (check_method of dfl_api.c, ltratio_args) */
 static int method_ok(int model, double g0, int stat, int method, char *err, size_t errlen)
 {
@@ -176,6 +191,7 @@ static int merged_dist(int kind, int n, const double *x, const spec_t *R, double
 }
 int dfl_engine_dist(int kind, int n, const double *x, const dfl_spec *S, double c, double c0, int engine, int method, int verified, double *out, char *err, size_t errlen)
 {
+    warn_entry();
     spec_t R; if (resolve(S, &R, err, errlen)) return 1;
     int rc;
     if (engine == DFL_ENGINE_GENERAL || (engine == DFL_ENGINE_AUTO && S->D && !classical_valid(&R, c, c0, method))) {
@@ -228,44 +244,49 @@ static int gen_icdf(int n, const double *p, const spec_t *R, double c, double c0
     det_warn_hold(0);
     return 0;
 }
-/* the classical search with each evaluation routed (ltratio_icdf_ with engine = auto) */
+/* the classical search with each evaluation routed (ltratio_icdf_ with engine = auto); the warnings of the evaluations
+ * collected (the general engine's under the hold, the classical engine's in cw), the hold released on every return */
 static int routed_icdf(int n, const double *p, const spec_t *R, double c, double c0, int method, double tol, double *q, char *err, size_t errlen)
 {
     double mu, sd, m[2], me[2];
+    for (int k = 0; k < n; k++) if (!(p[k] > 0 && p[k] < 1)) { snprintf(err, errlen, "p must lie in (0, 1)"); return 1; }
     if (R->model == 4) { mu = -1.9 + 0.1 * dmin(c, 0.0); sd = 0.8; }
     else { if (dfl_moments(R->model, c, c0, R->g0, R->stat, 2, m, me, err, errlen)) return 1; mu = m[0]; sd = sqrt(dmax(m[1] - m[0] * m[0], 1e-6)); }
     dfl_spec S = {NULL, R->model, R->start, R->g0, R->gls};
-#define CDF(xx, o) do { double x_ = (xx); if (dfl_engine_dist(2, 1, &x_, &S, c, c0, DFL_ENGINE_AUTO, method, 0, &(o), err, errlen)) { det_warn_hold(0); return 1; } } while (0)
-#define PDF(xx, o) do { double x_ = (xx); if (dfl_engine_dist(1, 1, &x_, &S, c, c0, DFL_ENGINE_AUTO, method, 0, &(o), err, errlen)) { det_warn_hold(0); return 1; } } while (0)
+    cwarn_t cw = {""};
+    int rc = 0;
+#define CDF(xx, o) do { double x_ = (xx); rc = dfl_engine_dist(2, 1, &x_, &S, c, c0, DFL_ENGINE_AUTO, method, 0, &(o), err, errlen); cwarn_take(&cw); if (rc) goto done; } while (0)
+#define PDF(xx, o) do { double x_ = (xx); rc = dfl_engine_dist(1, 1, &x_, &S, c, c0, DFL_ENGINE_AUTO, method, 0, &(o), err, errlen); cwarn_take(&cw); if (rc) goto done; } while (0)
     det_warn_hold(1);
     for (int k = 0; k < n; k++) {
         double pk = p[k];
-        if (!(pk > 0 && pk < 1)) { snprintf(err, errlen, "p must lie in (0, 1)"); return 1; }
         double x = mu + sd * sqrt(2) * erfinv_(2 * pk - 1), lo = x - sd, hi = x + sd, F, f;
         for (;;) { CDF(lo, F); if (!(F > pk)) break; lo -= 2 * (x - lo); }
         for (;;) { CDF(hi, F); if (!(F < pk)) break; hi += 2 * (hi - x); }
-        int done = 0;
+        int conv = 0;
         for (int it = 0; it < 60; it++) {
             CDF(x, F); PDF(x, f);
             if (F > pk) hi = x; else lo = x;
             double xn = x - (F - pk) / f;
             if (!(lo < xn && xn < hi && isfinite(xn))) xn = (lo + hi) / 2;
-            if (fabs(xn - x) < tol) { x = xn; done = 1; break; }
+            if (fabs(xn - x) < tol) { x = xn; conv = 1; break; }
             x = xn;
         }
-        if (!done) det_warn("ltratio_icdf: Newton's method did not converge at p = %g", pk);
+        if (!conv) det_warn("ltratio_icdf: Newton's method did not converge at p = %g", pk);
         q[k] = x;
     }
 #undef CDF
 #undef PDF
+done:
     det_warn_hold(0);
-    return 0;
+    cwarn_put(&cw);
+    return rc;
 }
 int dfl_engine_icdf(int n, const double *p, const dfl_spec *S, double c, double c0, int engine, int method, double tol, double *q, char *err, size_t errlen)
 {
+    warn_entry();
     spec_t R; if (resolve(S, &R, err, errlen)) return 1;
     if (!(tol > 0)) tol = 1e-10;
-    det_warn_clear();
     int rc;
     if (engine == DFL_ENGINE_GENERAL || (engine == DFL_ENGINE_AUTO && S->D && !classical_valid(&R, c, c0, method))) {
         if (method != 0) { snprintf(err, errlen, "method %d names a representation of the classical engine; it does not apply with the general engine", method); spec_free(&R); return 1; }
@@ -284,6 +305,7 @@ int dfl_engine_icdf(int n, const double *p, const dfl_spec *S, double c, double 
 
 int dfl_engine_mom(int pmax, const dfl_spec *S, double c, double c0, int engine, double *m, char *err, size_t errlen)
 {
+    warn_entry();
     spec_t R; if (resolve(S, &R, err, errlen)) return 1;
     dfl_det_opts o; det_opts_of(&R, c0, 0, &o);
     double me[64];
@@ -303,9 +325,11 @@ int dfl_engine_mom(int pmax, const dfl_spec *S, double c, double c0, int engine,
     return rc;
 }
 
-/* the coefficient statistic: the t-ratio at x = 0 with the null value c0 + y, routed as the t-ratio */
+/* the coefficient statistic: the t-ratio at x = 0 with the null value c0 + y, routed as the t-ratio (the warnings of the
+ * points collected) */
 int dfl_engine_coef(int n, const double *y, const dfl_spec *S, double c, double c0, int engine, double *out, char *err, size_t errlen)
 {
+    warn_entry();
     spec_t R; if (resolve(S, &R, err, errlen)) return 1;
     int gen = engine == DFL_ENGINE_GENERAL || (engine == DFL_ENGINE_AUTO && S->D && !classical_valid(&R, c, c0, 0));
     if (!gen && engine == DFL_ENGINE_CLASSICAL && R.model == 0) { snprintf(err, errlen, "engine classical: the classical engine has the cases DK, DU, DT, SK, SU, ST and DG only"); spec_free(&R); return 1; }
@@ -313,11 +337,16 @@ int dfl_engine_coef(int n, const double *y, const dfl_spec *S, double c, double 
     if (gen) { dfl_det_opts o; det_opts_of(&R, c0, 0, &o); rc = dfl_det_coef(2, R.D, n, y, c, &o, out, err, errlen); }
     else {
         dfl_spec S2 = {NULL, R.model, R.start, R.g0, R.gls};
+        cwarn_t cw = {""};
+        det_warn_hold(1);
         for (int k = 0; k < n && !rc; k++) {
             if (!isfinite(y[k])) { out[k] = isnan(y[k]) ? NAN : y[k] > 0 ? 1.0 : 0.0; continue; }
             double x0 = 0;
             rc = dfl_engine_dist(2, 1, &x0, &S2, c, c0 + y[k], engine, 0, 0, &out[k], err, errlen);
+            cwarn_take(&cw);
         }
+        det_warn_hold(0);
+        cwarn_put(&cw);
     }
     spec_free(&R);
     return rc;
@@ -326,16 +355,19 @@ int dfl_engine_coef(int n, const double *y, const dfl_spec *S, double c, double 
  * the routed distribution function (coef_icdf) */
 int dfl_engine_coef_icdf(int n, const double *p, const dfl_spec *S, double c, double c0, int engine, double tol, double *q, char *err, size_t errlen)
 {
+    warn_entry();
     spec_t R; if (resolve(S, &R, err, errlen)) return 1;
     if (!(tol > 0)) tol = 1e-9;
     int gen = engine == DFL_ENGINE_GENERAL || (engine == DFL_ENGINE_AUTO && S->D && !classical_valid(&R, c, c0, 0));
     int rc = 0;
     if (gen) { dfl_det_opts o; det_opts_of(&R, c0, 0, &o); rc = dfl_det_coef_quantile(R.D, n, p, c, NAN, tol, &o, q, err, errlen); spec_free(&R); return rc; }
+    for (int k = 0; k < n; k++) if (!(p[k] > 0 && p[k] < 1)) { snprintf(err, errlen, "coef_icdf: p must lie in (0, 1)"); spec_free(&R); return 1; }
     dfl_spec S2 = {NULL, R.model, R.start, R.g0, R.gls};
-#define FX(xx, o) do { double y_ = (xx); if (dfl_engine_coef(1, &y_, &S2, c, c0, engine, &(o), err, errlen)) { spec_free(&R); return 1; } (o) -= pk; } while (0)
+    cwarn_t cw = {""};
+    det_warn_hold(1);
+#define FX(xx, o) do { double y_ = (xx); rc = dfl_engine_coef(1, &y_, &S2, c, c0, engine, &(o), err, errlen); cwarn_take(&cw); if (rc) goto done; (o) -= pk; } while (0)
     for (int k = 0; k < n; k++) {
         double pk = p[k];
-        if (!(pk > 0 && pk < 1)) { snprintf(err, errlen, "coef_icdf: p must lie in (0, 1)"); spec_free(&R); return 1; }
         double lo = -40, hi = 10, flo, fhi, x, fx; FX(lo, flo); FX(hi, fhi);
         while (flo > 0) { hi = lo; fhi = flo; lo = 2 * lo - 10; FX(lo, flo); }
         while (fhi < 0) { lo = hi; flo = fhi; hi = 2 * hi + 10; FX(hi, fhi); }
@@ -350,13 +382,17 @@ int dfl_engine_coef_icdf(int n, const double *p, const dfl_spec *S, double c, do
         q[k] = x;
     }
 #undef FX
+done:
+    det_warn_hold(0);
+    cwarn_put(&cw);
     spec_free(&R);
-    return 0;
+    return rc;
 }
 
 /* P(U - aV <= b) in case DK (spec of model 1 or 2) or DG (model 4, detrended at cbar); a = NaN: P(V <= b) */
 int dfl_engine_lincdf(int n, const double *b, double a, int model, double c, double cbar, int engine, double *out, char *err, size_t errlen)
 {
+    warn_entry();
     if (model == 2) model = 1;
     if (model != 1 && model != 4) { snprintf(err, errlen, "ltratio_lincdf: the case must be DK or DG"); return 1; }
     if (isnan(cbar)) cbar = DFL_CBAR_GLS;
@@ -372,8 +408,10 @@ int dfl_engine_lincdf(int n, const double *b, double a, int model, double c, dou
 /* the power envelope of case DK (model 1 or 2) or DG (model 4) */
 int dfl_engine_envelope(int n, const double *cs, int model, double alpha, int engine, double *out, char *err, size_t errlen)
 {
+    warn_entry();
     if (model == 2) model = 1;
     if (model != 1 && model != 4) { snprintf(err, errlen, "power_envelope: the case must be DK (or DU) or DG"); return 1; }
+    if (!(alpha > 0 && alpha < 1)) { snprintf(err, errlen, "power_envelope: the level alpha must lie in (0, 1)"); return 1; }
     dfl_design D; if (dfl_design_trend(model == 4 ? 1 : -1, &D, err, errlen)) return 1;
     int rc = 0;
     for (int k = 0; k < n && !rc; k++) {
@@ -384,13 +422,19 @@ int dfl_engine_envelope(int n, const double *cs, int model, double alpha, int en
     dfl_design_free(&D);
     return rc;
 }
-/* ADFmax (kind 2 distribution function, 1 density) for a case DU, DT, SU, ST or a design */
+/* ADFmax (kind 2 distribution function, 1 density) for a case DU, DT, SU, ST or a design.  The classical ADFmax has the
+ * zero and the stationary start of cases DU, DT only: a fixed start (of a case code or of trend(0), trend(1)) takes the
+ * general engine, whose ADFmax is the same functional of the design's (U, V) for every start (it computed a zero start
+ * before); GLS detrending is refused (neither engine has the ADFmax of GLS-detrended data: the general engine detrends by
+ * least squares, and gls was dropped) */
 int dfl_engine_adfmax(int kind, int n, const double *x, const dfl_spec *S, double c, int engine, double *out, char *err, size_t errlen)
 {
+    warn_entry();
     spec_t R; if (resolve(S, &R, err, errlen)) return 1;
-    int cls = R.model == 2 || R.model == 3;
-    if (S->D == NULL && !cls) { snprintf(err, errlen, "adfmax: the case must be one of DU, DT, SU, ST"); spec_free(&R); return 1; }
-    if (engine == DFL_ENGINE_CLASSICAL && !cls) { snprintf(err, errlen, "engine classical: ADFmax of the classical engine has the cases DU, DT, SU, ST only"); spec_free(&R); return 1; }
+    int clsmodel = R.model == 2 || R.model == 3, cls = clsmodel && R.start != 1;
+    if (S->D == NULL && !clsmodel) { snprintf(err, errlen, "adfmax: the case must be one of DU, DT, SU, ST"); spec_free(&R); return 1; }
+    if (!isnan(R.gls)) { snprintf(err, errlen, "adfmax: ADFmax has least-squares detrending only (gls must be NaN)"); spec_free(&R); return 1; }
+    if (engine == DFL_ENGINE_CLASSICAL && !cls) { snprintf(err, errlen, "engine classical: ADFmax of the classical engine has the cases DU, DT, SU, ST only, with a zero or a stationary start"); spec_free(&R); return 1; }
     if (engine != DFL_ENGINE_GENERAL && cls && (!isfinite(c) || c < DFL_CMIN || (R.stat && !(c <= DFL_CSTAT)))) {
         snprintf(err, errlen, "%s", !isfinite(c) ? "adfmax: c must be a finite real scalar" : c < DFL_CMIN ? DFL_CMIN_MSG : DFL_STAT_MSG); spec_free(&R); return 1;
     }
@@ -414,6 +458,7 @@ int dfl_engine_adfmax(int kind, int n, const double *x, const dfl_spec *S, doubl
  * classical engine also type 3 (the weighted-average-power boundary) */
 int dfl_engine_region(int type, const double *par, const dfl_spec *S, double c, int engine, double *out, char *err, size_t errlen)
 {
+    warn_entry();
     spec_t R; if (resolve(S, &R, err, errlen)) return 1;
     int dk = R.model == 1 && !R.stat && R.start == 0;
     int rc;

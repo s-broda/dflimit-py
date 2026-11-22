@@ -224,6 +224,7 @@ static int cmp_int(const void *a, const void *b) { int x = *(const int *) a, y =
 int dfl_design_from_matrix(int n, int K0, const double *X, int nb0, const int *TB0, double tol, int maxdeg, int minlen, dfl_design *D,
                            char *err, size_t errlen)
 {
+    det_warn_clear(); dfl_warning_clear();          /* (its warning, dfl_det_warning, is that of this call only) */
     if (!(tol > 0)) tol = 1e-8;
     if (maxdeg <= 0) maxdeg = 40;
     if (minlen <= 0) minlen = 10;

@@ -562,7 +562,10 @@ int det_tstar(const det_model *Mo, double c, double *tsout, int *mult, char *err
     if (Mo->start == 2 && c >= 0) { snprintf(err, errlen, "the stationary start needs c < 0"); return 1; }
     const det_prep *P = Mo->P;
     double l1, l2;
-    int rc = isnan(P->cbar) ? det_eigtop(P, c, 16, Mo->start == 2, &l1, &l2) : det_eigtop_q(P, c, 48, &l1, &l2);
+    /* (eigtop projects J orthogonally off the span of the design; the V of GLS detrending and of the LM statistic (kind 3)
+     * is no such norm, and eigtop_q takes its quadratic form: with eigtop the LM statistic's t_* came out up to 2.3 times
+     * too large, above the unit root beyond twice the edge, where the path then failed) */
+    int rc = isnan(P->cbar) && P->kind != 3 ? det_eigtop(P, c, 16, Mo->start == 2, &l1, &l2) : det_eigtop_q(P, c, 48, &l1, &l2);
     if (rc) { snprintf(err, errlen, "t_*: the Nystrom estimate failed"); return 1; }
     double te = 1 / (2 * l1), grid[81], vals[81];
     for (int i = 0; i < 81; i++) grid[i] = 0.98 * te + (1.02 * te - 0.98 * te) * i / 80;

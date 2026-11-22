@@ -472,6 +472,26 @@ det_path *det_path_prep(det_prep *P, int start, double g0, double c, char *err, 
     dfl_lock(&CLOCK_); mref_unref_locked(mr); dfl_unlock(&CLOCK_);
     return CP;
 }
+/* the path of the law of V alone (v_own) for a prepared design that is not in the cache (the LM statistic): the path of
+ * det_path_prep, except where that is the vertical line (above the unit root) the hyperbola of V alone, at pi/4 (or the
+ * angle of fixed_phi with a fixed start and below c = -100), not cached.  On the line P(V <= y) of the LM statistic was off
+ * by 6e-3 at c = 5 with a linear trend (lmpath of DFDet_paper2.jl) */
+det_path *det_v_path_prep(det_prep *P, int start, double g0, double c, char *err, size_t errlen)
+{
+    dfl_lock(&CLOCK_); prep_ref(P); dfl_unlock(&CLOCK_);
+    det_model_ref *mr = mref_new(P, start, g0, err, errlen);
+    if (!mr) { det_prep_release(P); return NULL; }
+    det_path *CP = cpath(mr, c, NAN, 1.0, NAN, err, errlen);
+    if (CP && isnan(CP->h)) {
+        const det_model *Mo = &mr->Mo;
+        double ph = M_PI / 4; int rc = 0;
+        if (Mo->start == 1 || c < -100) rc = fixed_phi(Mo, c, CP->tstar, CP->tau, 1.0, det_default_rmax(c), &ph, err, errlen);
+        det_path_release(CP);
+        CP = rc ? NULL : cpath(mr, c, ph, 1.0, NAN, err, errlen);
+    }
+    dfl_lock(&CLOCK_); mref_unref_locked(mr); dfl_unlock(&CLOCK_);
+    return CP;
+}
 det_path *det_path_cached(const dfl_design *D, double cbar, int start, double g0, double c, double phi, double hfac, char *err, size_t errlen)
 {
     if (start == 2 && !(c < 0)) { snprintf(err, errlen, "the stationary start needs c < 0"); return NULL; }

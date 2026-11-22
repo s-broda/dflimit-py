@@ -182,6 +182,15 @@ static int single_route(int kind, double x, int model, double c, double c0, doub
  * verified = 1 keeps where the line integral refuses the point) */
 static _Thread_local char WARN[1024];
 const char *dfl_warning(void) { return WARN[0] ? WARN : NULL; }
+void dfl_warning_clear(void) { WARN[0] = 0; }
+/* (the router's composite calls, dfl_det_route.c: the warnings of their parts joined, each message once) */
+void dfl_warning_join(const char *msg)
+{
+    if (msg == NULL || !msg[0] || strstr(WARN, msg)) return;
+    size_t k = strlen(WARN);
+    if (k + 2 >= sizeof WARN) return;
+    snprintf(WARN + k, sizeof WARN - k, "%s%s", k ? "\n" : "", msg);
+}
 static void set_warning(int model, double c, double c0, double g0, bool stat, int nflag, int nkeep)
 {
     WARN[0] = 0;
