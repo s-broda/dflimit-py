@@ -11,7 +11,8 @@
 #      Python package requires and that should go upstream into c/ of dflimit-matlab; once it is upstream, delete the patch
 #      file; there are none at present),
 #   4. records the upstream commit in src/dflimit/UPSTREAM (installed with the package).
-# Left out: the test programs (dfl_test_*.c), dfl_probe.c, gen_tables.jl, the MEX gateway (c/mex/) and c/test/.
+# Left out: the test programs (dfl_test_*.c), dfl_probe.c, gen_tables.jl, gen_det_tables.jl, the MEX gateway (c/mex/) and
+# c/test/ (tools/det-ref.py copies a subset of c/test/det_ref.txt into tests/ref/).
 # The Python gateway, src/dflimit/_engine.c, is not part of the copy.  Do not edit the files of csrc/ by hand.
 # (The same script as tools/sync-engine.sh of the R package dflimit, with the paths of this package.)
 set -e
@@ -24,11 +25,14 @@ PKG=$(cd "$(dirname "$0")/.." && pwd)
 
 ENGINE="dflimit.h dfl_lock.h dfl_vmath.h dfl_api.c dfl_double.c dfl_gen.c dfl_gilpelaez.c dfl_mgf.c dfl_moments.c
         dfl_single.c dfl_special.c dfl_threads.c tables.c"
+# the general engine (any deterministic terms) and the router over the two engines
+GENERAL="dfl_det_int.h dfl_det_api.c dfl_det_design.c dfl_det_inner.c dfl_det_la.c dfl_det_mgf.c dfl_det_paper2.c
+         dfl_det_path.c dfl_det_route.c dfl_det_tables.c"
 FADDEEVA="Faddeeva.cc Faddeeva.h faddeeva_shim.cpp"
 
 mkdir -p "$PKG/csrc"
 lf() { tr -d '\r' < "$1" > "$2"; }
-for f in $ENGINE; do lf "$UP/c/$f" "$PKG/csrc/$f"; done
+for f in $ENGINE $GENERAL; do lf "$UP/c/$f" "$PKG/csrc/$f"; done
 for f in $FADDEEVA; do lf "$UP/c/faddeeva/$f" "$PKG/csrc/$f"; done
 
 # the patches (unified diffs relative to the package root, paths csrc/...)

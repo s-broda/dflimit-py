@@ -1,0 +1,576 @@
+/* dfl_det_api.c: the user-level functions of the general engine (a port of DFDet.jl): the distribution function, density
+ * and quantiles of the limiting t-ratio (dist_cdf, dist_pdf, dist_quantile) and of the coefficient statistic (coef_cdf,
+ * coef_pdf, coef_quantile, coef_cdf_gp), the checked computation (verify_eval), the moments (dist_moments), local power,
+ * the linear form U - aV and the law of V (lin_cdf, lin_pdf, lin_quantile, v_cdf, v_pdf), the power envelope, ADFmax and
+ * the regions below a line or a parabola (region_prob). */
+#include "dfl_det_int.h"
+
+void dfl_det_defaults(dfl_det_opts *o)
+{
+    o->c0 = 0; o->start = DFL_START_ZERO; o->gamma0 = 0; o->gls = NAN; o->verified = 0; o->vtol = 1e-9; o->phi = NAN; o->hfac = 1;
+}
+static const dfl_det_opts *opts_or_default(const dfl_det_opts *o, dfl_det_opts *d) { if (o) return o; dfl_det_defaults(d); return d; }
+static int check_common(const dfl_design *D, double c, const dfl_det_opts *o, char *err, size_t errlen)
+{
+    if (!D) { snprintf(err, errlen, "no design"); return 1; }
+    if (!isfinite(c)) { snprintf(err, errlen, "c must be a finite real scalar"); return 1; }
+    if (!isfinite(o->c0)) { snprintf(err, errlen, "c0 must be a finite real scalar"); return 1; }
+    if (o->start < 0 || o->start > 2) { snprintf(err, errlen, "start must be zero (0), fixed (1) or stationary (2)"); return 1; }
+    if (!isfinite(o->gamma0)) { snprintf(err, errlen, "gamma0 must be a finite real scalar"); return 1; }
+    if (o->start == 2 && !(c < 0)) { snprintf(err, errlen, "the stationary start needs c < 0"); return 1; }
+    return 0;
+}
+static double nonfinite1(int cdf, double x) { return isnan(x) ? NAN : x > 0 ? (cdf ? 1.0 : 0.0) : 0.0; }
+/* the finite points of x (into xf, their indices into ix): their number; the others set in out */
+static int split_finite(int n, const double *x, int cdf, double *out, double *xf, int *ix)
+{
+    int m = 0;
+    for (int k = 0; k < n; k++) { if (isfinite(x[k])) { xf[m] = x[k]; ix[m++] = k; } else out[k] = nonfinite1(cdf, x[k]); }
+    return m;
+}
+
+/* ---------- the checked computation (verify_eval) ---------- */
+typedef int (*evalf_t)(det_path *CP, const det_eval_opts *o, void *ctx, double *v, char *err, size_t errlen);
+static int one_eval(det_path *CP, evalf_t ev, void *ctx, int nv, double *v, char *err, size_t errlen)
+{
+    det_eval_opts o; det_eval_defaults(CP, &o);
+    (void) nv;
+    return ev(CP, &o, ctx, v, err, errlen);
+}
+static int verify_eval(det_path *CP, evalf_t ev, void *ctx, int nv, double vtol, double *v, char *err, size_t errlen)
+{
+    int fixed = CP->Mo->start == 1, n0 = fixed ? 48 : 24, nt0 = fixed ? 64 : 40;
+    det_eval_opts o; det_eval_defaults(CP, &o);
+    o.alpha = 0.5; o.n = n0; o.ntail = nt0;
+    if (ev(CP, &o, ctx, v, err, errlen)) return 1;
+    double *v2 = malloc(nv * sizeof(double)), *v3 = malloc(nv * sizeof(double));
+    det_eval_opts o2 = o; o2.alpha = 0.3; o2.n = n0 + 16; o2.ntail = nt0 + 24;
+    det_path *C1 = det_variant_path(CP, 1, err, errlen);
+    int rc = C1 ? ev(C1, &o2, ctx, v2, err, errlen) : 1;
+    det_path_release(C1);
+    if (rc) {
+        /* (the groups not separated on the steeper hyperbola: the variant at the default angle) */
+        det_path *C0 = det_variant_path(CP, 0, err, errlen);
+        rc = C0 ? ev(C0, &o2, ctx, v2, err, errlen) : 1;
+        det_path_release(C0);
+        if (rc) { free(v2); free(v3); return 1; }
+    }
+    double d = 0; int fin = 1;
+    for (int i = 0; i < nv; i++) { d = dmax(d, fabs(v[i] - v2[i])); if (!isfinite(v[i])) fin = 0; }
+    if (d <= vtol || !fin) { free(v2); free(v3); return 0; }
+    det_eval_opts o3 = o; o3.alpha = 0.5; o3.n = 2 * n0; o3.ntail = 2 * nt0;
+    det_path *C2 = det_variant_path(CP, 2, err, errlen);
+    rc = C2 ? ev(C2, &o3, ctx, v3, err, errlen) : 1;
+    det_path_release(C2);
+    if (rc) { free(v2); free(v3); return 1; }
+    double d3 = 0; for (int i = 0; i < nv; i++) d3 = dmax(d3, fabs(v3[i] - v2[i]));
+    if (!(d3 <= vtol)) det_warn("verified: two evaluations by different rules differ by %.2g (above %g) (start %d, c = %g)", d3, vtol, CP->Mo->start, CP->c);
+    memcpy(v, v3, nv * sizeof(double));
+    free(v2); free(v3);
+    return 0;
+}
+static int run_eval(det_path *CP, evalf_t ev, void *ctx, int nv, int verified, double vtol, double *v, char *err, size_t errlen)
+{
+    return verified ? verify_eval(CP, ev, ctx, nv, vtol, v, err, errlen) : one_eval(CP, ev, ctx, nv, v, err, errlen);
+}
+
+/* ---------- the t-ratio ---------- */
+typedef struct { int nx; const double *xs; double c0; int which, vpow; } tr_ctx;   /* which 1: F, 2: f */
+static int tr_eval(det_path *CP, const det_eval_opts *o, void *v, double *out, char *err, size_t errlen)
+{
+    tr_ctx *t = v;
+    det_path *CPr = det_line_refined(CP, t->nx, t->xs, 1, &CP->Mo->a, err, errlen);
+    if (!CPr) return 1;
+    double *F = malloc(t->nx * sizeof(double)), *f = malloc(t->nx * sizeof(double));
+    int rc = det_contour_eval(CPr, t->nx, t->xs, t->c0, t->vpow, o, F, f, NULL, NULL, err, errlen);
+    if (!rc) memcpy(out, t->which == 1 ? F : f, t->nx * sizeof(double));
+    free(F); free(f); det_path_release(CPr);
+    return rc;
+}
+static det_path *user_path(const dfl_design *D, double c, const dfl_det_opts *o, char *err, size_t errlen)
+{
+    return det_path_cached(D, o->gls, o->start, o->gamma0, c, o->phi, o->hfac, err, errlen);
+}
+int dfl_det_dist(int kind, const dfl_design *D, int n, const double *x, double c, const dfl_det_opts *o0, double *out, char *err, size_t errlen)
+{
+    dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
+    det_warn_clear();
+    if (kind != 1 && kind != 2) { snprintf(err, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
+    if (check_common(D, c, o, err, errlen)) return 1;
+    det_path *CP = user_path(D, c, o, err, errlen);
+    if (!CP) return 1;
+    double *xf = malloc((n + 1) * sizeof(double)); int *ix = malloc((n + 1) * sizeof(int));
+    int m = split_finite(n, x, kind == 2, out, xf, ix), rc = 0;
+    if (m > 0) {
+        double *v = malloc(m * sizeof(double));
+        tr_ctx t = {m, xf, o->c0, kind == 2 ? 1 : 2, 2};
+        rc = run_eval(CP, tr_eval, &t, m, o->verified, o->vtol, v, err, errlen);
+        if (!rc) {
+            /* the infinite density at the tangency of a rank-one design with c0 > 0 (tangency!) */
+            if (kind == 1 && o->c0 > 0 && CP->Mo->r == 1 && CP->Mo->rm == 0) {
+                double xs_ = -sqrt(4 * o->c0 * CP->Mo->a);
+                for (int j = 0; j < m; j++) if (fabs(xf[j] - xs_) <= 1e-12 * dmax(1.0, fabs(xf[j]))) v[j] = INFINITY;
+            }
+            for (int j = 0; j < m; j++) out[ix[j]] = v[j];
+        }
+        free(v);
+    }
+    free(xf); free(ix); det_path_release(CP);
+    return rc;
+}
+
+/* newton_safe: F(x) = p for an increasing F, ff(x) -> (F, f) */
+typedef int (*ff_t)(double x, void *ctx, double *F, double *f, char *err, size_t errlen);
+static int newton_safe(ff_t ff, void *ctx, double p, double x0, double step, double tol, double *xout, char *err, size_t errlen)
+{
+    double x = x0, lo = x - step, hi = x + step, w = step, F, f;
+    for (int i = 0; i < 60; i++) { if (ff(lo, ctx, &F, &f, err, errlen)) return 1; if (!(F > p)) break; lo -= w; w *= 2; }
+    w = step;
+    for (int i = 0; i < 60; i++) { if (ff(hi, ctx, &F, &f, err, errlen)) return 1; if (!(F < p)) break; hi += w; w *= 2; }
+    for (int it = 0; it < 100; it++) {
+        if (ff(x, ctx, &F, &f, err, errlen)) return 1;
+        if (F > p) hi = x; else lo = x;
+        double xn = x - (F - p) / f;
+        if (!(lo < xn && xn < hi && isfinite(xn))) xn = (lo + hi) / 2;
+        if (fabs(xn - x) < tol) { *xout = xn; return 0; }
+        x = xn;
+    }
+    det_warn("newton_safe: no convergence (p = %g, x = %g)", p, x);
+    *xout = x;
+    return 0;
+}
+typedef struct { det_path *CP; double c0; int vpow; int refine; } q_ctx;
+static int q_ff(double x, void *v, double *F, double *f, char *err, size_t errlen)
+{
+    q_ctx *q = v;
+    double xx = q->vpow == 3 ? 0.0 : x, c0 = q->vpow == 3 ? q->c0 + x : q->c0;
+    det_path *CPr = q->refine ? det_line_refined(q->CP, 1, &xx, 1, &q->CP->Mo->a, err, errlen) : q->CP;
+    if (!CPr) return 1;
+    int rc = det_contour_eval(CPr, 1, &xx, c0, q->vpow, NULL, F, f, NULL, NULL, err, errlen);
+    if (q->refine) det_path_release(CPr);
+    return rc;
+}
+/* Newton's method from x0 with the step limited to lim (maxit steps), the safeguarded search where it does not converge */
+static int quantile_search(q_ctx *q, double p, double x0, double tol, int maxit, double lim, double *out, char *err, size_t errlen)
+{
+    double x = x0, F, f;
+    for (int it = 0; it < maxit; it++) {
+        if (q_ff(x, q, &F, &f, err, errlen)) return 1;
+        double dx = dclamp((F - p) / f, -lim, lim);
+        if ((F - p) / f != (F - p) / f) dx = NAN;
+        if (!isfinite(dx)) break;
+        x -= dx;
+        if (fabs(dx) < tol) { *out = x; return 0; }
+    }
+    return newton_safe(q_ff, q, p, x0, lim, tol, out, err, errlen);
+}
+int dfl_det_quantile(const dfl_design *D, int n, const double *p, double c, double x0, double tol, const dfl_det_opts *o0, double *q, char *err, size_t errlen)
+{
+    dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
+    det_warn_clear();
+    if (check_common(D, c, o, err, errlen)) return 1;
+    for (int k = 0; k < n; k++) if (!(p[k] > 0 && p[k] < 1)) { snprintf(err, errlen, "dist_quantile: p must lie in (0, 1)"); return 1; }
+    if (isnan(x0)) x0 = -2.0;
+    if (!(tol > 0)) tol = 1e-9;
+    det_path *CP = user_path(D, c, o, err, errlen);
+    if (!CP) return 1;
+    q_ctx qc = {CP, o->c0, 2, 1};
+    int rc = 0;
+    for (int k = 0; k < n && !rc; k++) rc = quantile_search(&qc, p[k], x0, tol, 30, 1.0, &q[k], err, errlen);
+    det_path_release(CP);
+    return rc;
+}
+
+/* ---------- the coefficient statistic ---------- */
+typedef struct { int ny; const double *ys; double c0; int which, vpow; } coef_ctx;
+static int coef_eval(det_path *CP, const det_eval_opts *o, void *v, double *out, char *err, size_t errlen)
+{
+    coef_ctx *t = v; double x0 = 0, F, f;
+    for (int j = 0; j < t->ny; j++) {
+        if (det_contour_eval(CP, 1, &x0, t->c0 + t->ys[j], t->vpow, o, &F, &f, NULL, NULL, err, errlen)) return 1;
+        out[j] = t->which == 1 ? F : f;
+    }
+    return 0;
+}
+int dfl_det_coef(int kind, const dfl_design *D, int n, const double *y, double c, const dfl_det_opts *o0, double *out, char *err, size_t errlen)
+{
+    dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
+    det_warn_clear();
+    if (kind != 1 && kind != 2) { snprintf(err, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
+    if (check_common(D, c, o, err, errlen)) return 1;
+    det_path *CP = user_path(D, c, o, err, errlen);
+    if (!CP) return 1;
+    double *yf = malloc((n + 1) * sizeof(double)); int *ix = malloc((n + 1) * sizeof(int));
+    int m = split_finite(n, y, kind == 2, out, yf, ix), rc = 0;
+    if (m > 0) {
+        double *v = malloc(m * sizeof(double));
+        coef_ctx t = {m, yf, o->c0, kind == 2 ? 1 : 2, kind == 2 ? 2 : 3};
+        rc = run_eval(CP, coef_eval, &t, m, o->verified, o->vtol, v, err, errlen);
+        if (!rc) for (int j = 0; j < m; j++) out[ix[j]] = v[j];
+        free(v);
+    }
+    free(yf); free(ix); det_path_release(CP);
+    return rc;
+}
+int dfl_det_coef_quantile(const dfl_design *D, int n, const double *p, double c, double y0, double tol, const dfl_det_opts *o0, double *q, char *err, size_t errlen)
+{
+    dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
+    det_warn_clear();
+    if (check_common(D, c, o, err, errlen)) return 1;
+    for (int k = 0; k < n; k++) if (!(p[k] > 0 && p[k] < 1)) { snprintf(err, errlen, "coef_quantile: p must lie in (0, 1)"); return 1; }
+    if (isnan(y0)) y0 = -10.0;
+    if (!(tol > 0)) tol = 1e-9;
+    det_path *CP = user_path(D, c, o, err, errlen);
+    if (!CP) return 1;
+    q_ctx qc = {CP, o->c0, 3, 0};
+    int rc = 0;
+    for (int k = 0; k < n && !rc; k++) rc = quantile_search(&qc, p[k], y0, tol, 40, 5.0, &q[k], err, errlen);
+    det_path_release(CP);
+    return rc;
+}
+
+/* the inversion formula of Gil-Pelaez for the coefficient statistic (coef_cdf_gp) */
+typedef struct { const det_model *Mo; double c, a; const double *u; cdouble *L0, *LD; det_status st; } gp_ctx;
+static void gp_body(int k, void *v)
+{
+    gp_ctx *o = v;
+    if (det_failed(&o->st)) return;
+    char buf[DET_WORK_STACK]; det_work W;
+    if (det_work_init(&W, o->Mo, buf, sizeof buf)) { det_fail(&o->st, "out of memory"); return; }
+    det_fixt *fx = o->Mo->start == 1 ? det_fixt_alloc(o->Mo->r) : NULL;
+    cdouble s = CPX(0, o->u[k]), t = CPX(0, -o->a * o->u[k]), th;
+    if (det_logmgf_tpart(&W, o->c, t, &th, fx)) det_fail(&o->st, "the eigenvalues of the reciprocal roots did not converge");
+    det_logmgf_spart(&W, o->c, s, t, th, fx, &o->L0[k], &o->LD[k]);
+    free(fx); det_work_free(&W);
+}
+static void gpgrid(int N, double umax, double *u, double *w)
+{
+    double h = asinh(umax) / N;
+    for (int k = 0; k <= N; k++) { double v = k * h; u[k] = sinh(v); w[k] = cosh(v) * h; }
+    u[0] = 1e-7; w[0] /= 2;
+}
+int dfl_det_coef_cdf_gp(const dfl_design *D, int n, const double *y, double c, const dfl_det_opts *o0, int N, double umax, double *out, char *err, size_t errlen)
+{
+    dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
+    det_warn_clear();
+    if (check_common(D, c, o, err, errlen)) return 1;
+    if (N <= 0) N = 60000;
+    if (!(umax > 0)) umax = 4000;
+    det_prep *P = det_prep_cached(D, o->gls, err, errlen);
+    if (!P) return 1;
+    det_model Mo;
+    if (det_model_make(P, o->start, o->gamma0, &Mo, err, errlen)) { det_prep_release(P); return 1; }
+    double *u = malloc((N + 1) * sizeof(double)), *w = malloc((N + 1) * sizeof(double));
+    cdouble *L0 = malloc((N + 1) * sizeof(cdouble)), *LD = malloc((N + 1) * sizeof(cdouble));
+    gpgrid(N, umax, u, w);
+    int rc = 0;
+    for (int j = 0; j < n && !rc; j++) {
+        gp_ctx g = {&Mo, c, o->c0 + y[j], u, L0, LD, {0, ""}};
+        dfl_parfor(N + 1, gp_body, &g);
+        if (det_failed(&g.st)) { snprintf(err, errlen, "%s", g.st.msg); rc = 1; break; }
+        double ph = cimag(LD[0]), acc = 0;
+        for (int k = 0; k <= N; k++) {
+            if (k > 0) { double d = cimag(LD[k]) - cimag(LD[k - 1]); ph += atan2(sin(d), cos(d)); }
+            cdouble lM = csub(L0[k], cscale(0.5, CPX(creal(LD[k]), ph)));
+            acc += cimag(cexp(lM)) / u[k] * w[k];
+        }
+        out[j] = 0.5 - acc / M_PI;
+    }
+    free(u); free(w); free(L0); free(LD); det_model_free(&Mo); det_prep_release(P);
+    return rc;
+}
+
+/* ---------- the moments ---------- */
+/* the logarithm along a closed circle, continued from its first point (circlog) */
+static int circlog(int n, const cdouble *Z, cdouble *out)
+{
+    double ph0 = cimag(clog(Z[0])), ph = ph0, prev = ph0; int ok = fabs(ph0) < 1e-8;
+    out[0] = clog(Z[0]);
+    for (int k = 1; k < n; k++) {
+        cdouble lz = clog(Z[k]);
+        double dd = cimag(lz) - prev, d = atan2(sin(dd), cos(dd));
+        if (!(fabs(d) < M_PI / 3)) ok = 0;
+        ph += d; prev = cimag(lz);
+        out[k] = CPX(creal(lz), ph);
+    }
+    if (!(fabs(ph + carg(cdiv(Z[0], Z[n - 1])) - ph0) < 1e-6)) ok = 0;
+    return ok;
+}
+typedef struct { const det_model *Mo; double c, c0, smax; int p, Nu; const double *sv; double *acc; det_status st; } mom_ctx;
+static void mom_body(int i, void *v)
+{
+    mom_ctx *o = v;
+    if (det_failed(&o->st)) return;
+    const det_model *Mo = o->Mo;
+    char buf[DET_WORK_STACK]; det_work W;
+    if (det_work_init(&W, Mo, buf, sizeof buf)) { det_fail(&o->st, "out of memory"); return; }
+    int Nu = o->Nu, r = Mo->r;
+    double s = o->sv[i], c = o->c, c0 = o->c0;
+    cdouble th, ld, mu[64], *muv = r <= 64 ? mu : malloc(r * sizeof(cdouble));
+    det_fixt *fx = Mo->start == 1 ? det_fixt_alloc(r) : NULL;
+    if (det_mgfparts(&W, c, CPX(-s, 0), &th, &ld, muv, NULL)) { det_fail(&o->st, "the eigenvalues of the reciprocal roots did not converge"); goto out; }
+    double mx = 0; for (int k = 0; k < r; k++) mx = dmax(mx, cabs(muv[k]));
+    double rad = 0.4 / mx;
+    if (c0 != 0) rad = dmin(rad, 0.4 * (s + o->smax) / fabs(c0));
+    if (Mo->start != 0) rad = dmin(rad, 0.25);
+    if (c < -20) rad = dmin(rad, 2.0);
+    if (!isnan(Mo->P->cbar)) rad = dmin(rad, 2.0);
+    cdouble *L0 = malloc(Nu * sizeof(cdouble)), *LD = malloc(Nu * sizeof(cdouble)), *Z = malloc(Nu * sizeof(cdouble)), *lz = malloc(Nu * sizeof(cdouble)), *Lv = malloc(Nu * sizeof(cdouble));
+    int ok = 0;
+    for (int att = 0; att < 8; att++) {
+        cdouble thk; cdouble U0 = CPX(rad, 0);
+        if (det_logmgf_tpart(&W, c, csub(CPX(-s, 0), cscale(c0, U0)), &thk, fx)) { det_fail(&o->st, "the eigenvalues of the reciprocal roots did not converge"); break; }
+        for (int k = 0; k < Nu; k++) {
+            cdouble Uk = cscale(rad, cis_(2 * M_PI * k / Nu)), tk = csub(CPX(-s, 0), cscale(c0, Uk));
+            if (c0 != 0 && k > 0) det_logmgf_tpart(&W, c, tk, &thk, fx);
+            det_logmgf_spart(&W, c, Uk, tk, thk, fx, &L0[k], &LD[k]);
+        }
+        double r0 = creal(LD[0]);
+        for (int k = 0; k < Nu; k++) Z[k] = cexp(caddr(LD[k], -r0));
+        ok = circlog(Nu, Z, lz);
+        for (int k = 0; k < Nu; k++) Lv[k] = csub(L0[k], cscale(0.5, caddr(lz[k], r0)));
+        if (ok) break;
+        rad /= 2;
+    }
+    if (!det_failed(&o->st)) {
+        if (!ok) det_fail(&o->st, "dist_moments: no circle in u free of zeros of the determinant at s = %g", s);
+        else for (int j = 1; j <= o->p; j++) {
+            cdouble acc = DZERO;
+            for (int k = 0; k < Nu; k++) {
+                cdouble wi = cinv(cis_(2 * M_PI * k / Nu)), wp = DONE;
+                for (int l = 0; l < j; l++) wp = cmul(wp, wi);
+                acc = cadd(acc, cmul(cexp(Lv[k]), wp));
+            }
+            double fac = 1; for (int l = 2; l <= j; l++) fac *= l;
+            double Mj = fac / (Nu * pow(rad, j)) * creal(acc);
+            o->acc[(size_t) (j - 1) * 0 + (size_t) i * o->p + (j - 1)] = pow(s, j / 2.0) * Mj;
+        }
+    }
+    free(L0); free(LD); free(Z); free(lz); free(Lv);
+out:
+    if (muv != mu) free(muv);
+    free(fx); det_work_free(&W);
+}
+int dfl_det_moments(const dfl_design *D, double c, int pmax, const dfl_det_opts *o0, double *m, double *errest, char *err, size_t errlen)
+{
+    dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
+    det_warn_clear();
+    if (check_common(D, c, o, err, errlen)) return 1;
+    if (D->first) { snprintf(err, errlen, "the moments of the statistic that detrends first (detrend_first) are not implemented (not validated)"); return 1; }
+    if (pmax < 1) { snprintf(err, errlen, "pmax >= 1"); return 1; }
+    det_prep *P = det_prep_cached(D, o->gls, err, errlen);
+    if (!P) return 1;
+    det_model Mo;
+    if (det_model_make(P, o->start, o->gamma0, &Mo, err, errlen)) { det_prep_release(P); return 1; }
+    const double h = 0.05;
+    double tlo = dmin(-60.0, -2 * c - 40), thi = c < -20 ? dmax(8.0, log(80 * fabs(c))) : 8.0;
+    int ns = (int) floor((thi - tlo) / h + 1e-10) + 1;
+    double *sv = malloc(ns * sizeof(double)), *acc = calloc((size_t) ns * pmax, sizeof(double));
+    for (int i = 0; i < ns; i++) sv[i] = exp(tlo + i * h);
+    double smax;
+    int rc = det_tstar(&Mo, c, &smax, NULL, err, errlen);
+    if (!rc) {
+        mom_ctx g = {&Mo, c, o->c0, smax, pmax, 64, sv, acc, {0, ""}};
+        dfl_parfor(ns, mom_body, &g);
+        if (det_failed(&g.st)) { snprintf(err, errlen, "%s", g.st.msg); rc = 1; }
+    }
+    if (!rc) for (int j = 1; j <= pmax; j++) {
+        double s1 = 0, s2 = 0;
+        for (int i = 0; i < ns; i++) s1 += acc[(size_t) i * pmax + (j - 1)];
+        for (int i = 0; i < ns; i += 2) s2 += acc[(size_t) i * pmax + (j - 1)];
+        double g = tgamma(j / 2.0);
+        m[j - 1] = h * s1 / g;
+        if (errest) errest[j - 1] = fabs(h * s1 - 2 * h * s2) / g;
+    }
+    free(sv); free(acc); det_model_free(&Mo); det_prep_release(P);
+    return rc;
+}
+
+/* ---------- local power ---------- */
+int dfl_det_local_power(const dfl_design *D, int n, const double *cs, double level, int statistic, const dfl_det_opts *o0, double *out, char *err, size_t errlen)
+{
+    dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
+    if (statistic != 0 && statistic != 1) { snprintf(err, errlen, "statistic must be 0 (the t-ratio) or 1 (the coefficient statistic)"); return 1; }
+    double q; int rc = 0;
+    det_warn_clear(); det_warn_hold(1);
+    if (statistic == 0) {
+        rc = dfl_det_quantile(D, 1, &level, o->c0, isnan(o->gls) ? -3.5 : -2.5, 1e-11, o, &q, err, errlen);
+        for (int k = 0; k < n && !rc; k++) rc = dfl_det_dist(2, D, 1, &q, cs[k], o, &out[k], err, errlen);
+    } else {
+        rc = dfl_det_coef_quantile(D, 1, &level, o->c0, -15.0, 1e-11, o, &q, err, errlen);
+        for (int k = 0; k < n && !rc; k++) rc = dfl_det_coef(2, D, 1, &q, cs[k], o, &out[k], err, errlen);
+    }
+    det_warn_hold(0);
+    return rc;
+}
+
+/* ---------- events bounded by parabolas: the line U - aV <= b, the law of V, ADFmax ---------- */
+typedef struct { int ne; const int *nt; const det_xspec *sp; int which; } spec_ctx;
+static int spec_eval_one(det_path *CP, const det_eval_opts *o, void *v, double *out, char *err, size_t errlen)
+{
+    spec_ctx *s = v;
+    int ntot = 0; for (int i = 0; i < s->ne; i++) ntot += s->nt[i];
+    double *qm = malloc((s->ne + 1) * sizeof(double)), *am = malloc((ntot + 1) * sizeof(double));
+    int it = 0;
+    for (int i = 0; i < s->ne; i++) { double q = 0; for (int l = 0; l < s->nt[i]; l++, it++) { q = dmax(q, fabs(s->sp[it].q)); am[it] = fabs(s->sp[it].A); } qm[i] = q; }
+    det_path *CPr = det_line_refined(CP, s->ne, qm, ntot, am, err, errlen);
+    free(qm); free(am);
+    if (!CPr) return 1;
+    double *F = malloc(s->ne * sizeof(double)), *f = malloc(s->ne * sizeof(double));
+    int rc = det_contour_eval_specs(CPr, s->ne, s->nt, s->sp, o, F, f, NULL, NULL, err, errlen);
+    if (!rc) memcpy(out, s->which == 1 ? F : f, s->ne * sizeof(double));
+    free(F); free(f); det_path_release(CPr);
+    return rc;
+}
+static int vlaw(int kind, const dfl_design *D, int n, const double *ys, double c, const dfl_det_opts *o, double *out, char *err, size_t errlen)
+{
+    det_path *CP = det_v_path(D, o->gls, o->start, o->gamma0, c, o->phi, o->hfac, err, errlen);
+    if (!CP) return 1;
+    for (int k = 0; k < n; k++) out[k] = kind == 2 ? 1 - det_vsum(CP, ys[k], 1) : det_vsum(CP, ys[k], 0);
+    det_path_release(CP);
+    return 0;
+}
+int dfl_det_lin(int kind, const dfl_design *D, int n, const double *b, double a, double c, const dfl_det_opts *o0, double *out, char *err, size_t errlen)
+{
+    dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
+    det_warn_clear();
+    if (kind != 1 && kind != 2) { snprintf(err, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
+    if (check_common(D, c, o, err, errlen)) return 1;
+    if (isnan(a)) return vlaw(kind, D, n, b, c, o, out, err, errlen);
+    det_path *CP = user_path(D, c, o, err, errlen);
+    if (!CP) return 1;
+    double *bf = malloc((n + 1) * sizeof(double)); int *ix = malloc((n + 1) * sizeof(int));
+    int m = split_finite(n, b, kind == 2, out, bf, ix), rc = 0;
+    if (m > 0) {
+        det_xspec *sp = malloc(m * sizeof(det_xspec)); int *nt = malloc(m * sizeof(int)); double *v = malloc(m * sizeof(double));
+        for (int j = 0; j < m; j++) { det_xspec s = {a, 0, CP->Mo->a + bf[j], INFINITY, 1, 0, 0, 1, 1}; sp[j] = s; nt[j] = 1; }
+        spec_ctx sc = {m, nt, sp, kind == 2 ? 1 : 2};
+        rc = run_eval(CP, spec_eval_one, &sc, m, o->verified, o->vtol, v, err, errlen);
+        if (!rc) for (int j = 0; j < m; j++) out[ix[j]] = v[j];
+        free(sp); free(nt); free(v);
+    }
+    free(bf); free(ix); det_path_release(CP);
+    return rc;
+}
+typedef struct { det_path *CP; double a; int adf; } lq_ctx;
+static int lq_ff(double b, void *v, double *F, double *f, char *err, size_t errlen)
+{
+    lq_ctx *q = v; det_path *CP = q->CP; double A = CP->Mo->a;
+    det_xspec sp[2]; int nt; det_path *CPr;
+    if (q->adf) {
+        double vm = b < 0 ? -0.5 / b : INFINITY;
+        det_xspec s1 = {0, b, A, vm, 1, 0, 1, 0, 0}, s2 = {0, -b, A - 1, vm, -1, 0, -1, 0, 0};
+        sp[0] = s1; sp[1] = s2; nt = 2;
+        CPr = det_line_refined(CP, 1, &b, 1, &A, err, errlen);
+    } else {
+        det_xspec s = {q->a, 0, A + b, INFINITY, 1, 0, 0, 1, 1}; sp[0] = s; nt = 1;
+        double am = fabs(A + b);
+        CPr = det_line_refined(CP, 0, NULL, 1, &am, err, errlen);
+    }
+    if (!CPr) return 1;
+    int rc = det_contour_eval_specs(CPr, 1, &nt, sp, NULL, F, f, NULL, NULL, err, errlen);
+    det_path_release(CPr);
+    return rc;
+}
+int dfl_det_lin_quantile(const dfl_design *D, double p, double a, double c, double b0, double tol, const dfl_det_opts *o0, double *q, char *err, size_t errlen)
+{
+    dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
+    det_warn_clear();
+    if (check_common(D, c, o, err, errlen)) return 1;
+    if (isnan(b0)) b0 = 0;
+    if (!(tol > 0)) tol = 1e-10;
+    det_path *CP = user_path(D, c, o, err, errlen);
+    if (!CP) return 1;
+    lq_ctx lc = {CP, a, 0};
+    int rc = newton_safe(lq_ff, &lc, p, b0, 1.0, tol, q, err, errlen);
+    det_path_release(CP);
+    return rc;
+}
+
+static int is_trend(const dfl_design *D, int p)
+{
+    int K = p + 1, deg = p > 0 ? p : 0;
+    if (D->K != K || D->np != 1 || D->br[0] != 0 || D->br[1] != 1 || D->deg != deg) return 0;
+    for (int i = 0; i < K; i++) for (int k = 0; k <= deg; k++) if (D->C[i * (deg + 1) + k] != (k == i ? 1.0 : 0.0)) return 0;
+    return 1;
+}
+int dfl_det_power_envelope(const dfl_design *D, int n, const double *cs, double level, double *out, char *err, size_t errlen)
+{
+    det_warn_clear();
+    int trendcase = D->K == 2 && D->np == 1 && D->br[0] == 0 && D->br[1] == 1 && D->deg == 1 && D->C[0] == 1 && D->C[1] == 0 && D->C[2] == 0 && D->C[3] == 1;
+    int nodet = D->K == 0 || (D->K == 1 && D->np == 1 && D->br[0] == 0 && D->br[1] == 1 && D->deg == 0 && D->C[0] == 1);
+    if (!(trendcase || nodet)) { snprintf(err, errlen, "power_envelope: the design must be trend(-1), trend(0) or trend(1) (the limit of the point-optimal statistic of other designs was not derived)"); return 1; }
+    dfl_design T; if (dfl_design_trend(-1, &T, err, errlen)) return 1;
+    int rc = 0;
+    det_warn_hold(1);
+    for (int k = 0; k < n && !rc; k++) {
+        double c = cs[k];
+        if (!(c < 0)) { out[k] = level; continue; }
+        dfl_det_opts o; dfl_det_defaults(&o);
+        double b, a;
+        if (nodet) {
+            a = c / 2;
+            rc = dfl_det_lin_quantile(&T, level, a, 0.0, 0.0, 1e-10, &o, &b, err, errlen);
+            if (!rc) rc = dfl_det_lin(2, &T, 1, &b, a, c, &o, &out[k], err, errlen);
+        } else {
+            a = c * c / (2 * (c - 1)); o.gls = c;
+            rc = dfl_det_lin_quantile(D, level, a, 0.0, 0.0, 1e-10, &o, &b, err, errlen);
+            if (!rc) rc = dfl_det_lin(2, D, 1, &b, a, c, &o, &out[k], err, errlen);
+        }
+    }
+    det_warn_hold(0);
+    dfl_design_free(&T);
+    return rc;
+}
+
+int dfl_det_adfmax(int kind, const dfl_design *D, int n, const double *x, double c, const dfl_det_opts *o0, double *out, char *err, size_t errlen)
+{
+    dfl_det_opts od; const dfl_det_opts *o1 = opts_or_default(o0, &od);
+    dfl_det_opts o = *o1; o.gls = NAN;           /* (ADFmax: least squares detrending) */
+    det_warn_clear();
+    if (kind != 1 && kind != 2) { snprintf(err, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
+    if (check_common(D, c, &o, err, errlen)) return 1;
+    double *xf = malloc((n + 1) * sizeof(double)); int *ix = malloc((n + 1) * sizeof(int));
+    int m = split_finite(n, x, kind == 2, out, xf, ix), rc = 0;
+    if (m > 0) {
+        det_path *CP = user_path(D, c, &o, err, errlen);
+        if (!CP) { free(xf); free(ix); return 1; }
+        double A = CP->Mo->a;
+        det_xspec *sp = malloc(2 * m * sizeof(det_xspec)); int *nt = malloc(m * sizeof(int)); double *v = malloc(m * sizeof(double));
+        for (int j = 0; j < m; j++) {
+            double xx = xf[j], vm = xx < 0 ? -0.5 / xx : INFINITY;
+            det_xspec s1 = {0, xx, A, vm, 1, 0, 1, 0, 0}, s2 = {0, -xx, A - 1, vm, -1, 0, -1, 0, 0};
+            sp[2 * j] = s1; sp[2 * j + 1] = s2; nt[j] = 2;
+        }
+        spec_ctx sc = {m, nt, sp, kind == 2 ? 1 : 2};
+        rc = run_eval(CP, spec_eval_one, &sc, m, o.verified, o.vtol, v, err, errlen);
+        if (!rc) for (int j = 0; j < m; j++) out[ix[j]] = v[j];
+        free(sp); free(nt); free(v); det_path_release(CP);
+    }
+    free(xf); free(ix);
+    return rc;
+}
+int dfl_det_adfmax_quantile(const dfl_design *D, double p, double c, double x0, double tol, const dfl_det_opts *o0, double *q, char *err, size_t errlen)
+{
+    dfl_det_opts od; const dfl_det_opts *o1 = opts_or_default(o0, &od);
+    dfl_det_opts o = *o1; o.gls = NAN;
+    det_warn_clear();
+    if (check_common(D, c, &o, err, errlen)) return 1;
+    if (isnan(x0)) x0 = -2.0;
+    if (!(tol > 0)) tol = 1e-10;
+    det_path *CP = user_path(D, c, &o, err, errlen);
+    if (!CP) return 1;
+    lq_ctx lc = {CP, 0, 1};
+    int rc = newton_safe(lq_ff, &lc, p, x0, 1.0, tol, q, err, errlen);
+    det_path_release(CP);
+    return rc;
+}
+int dfl_det_region(const dfl_design *D, int type, const double *par, double c, const dfl_det_opts *o0, double *out, char *err, size_t errlen)
+{
+    dfl_det_opts od; const dfl_det_opts *o1 = opts_or_default(o0, &od);
+    if (type == 1) return dfl_det_lin(2, D, 1, &par[1], par[0], c, o1, out, err, errlen);
+    if (type == 2) { dfl_det_opts o = *o1; o.c0 = par[1]; return dfl_det_dist(2, D, 1, &par[0], c, &o, out, err, errlen); }
+    if (type == 3 || type == 4) { snprintf(err, errlen, "region_prob: the boundary type %s is not available by the contour integral (its kernels are in closed form for boundaries quadratic in sqrt(V) only)", type == 3 ? "wap" : "fun"); return 1; }
+    snprintf(err, errlen, "region_prob: unknown boundary type %d", type);
+    return 1;
+}
