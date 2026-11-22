@@ -20,6 +20,14 @@ static int check_common(const dfl_design *D, double c, const dfl_det_opts *o, ch
     if (o->start == 2 && !(c < 0)) { snprintf(err, errlen, "the stationary start needs c < 0"); return 1; }
     return 0;
 }
+/* the start value of a search (NaN: the default, set before) must be finite, the tolerance (NaN or <= 0: the default) not
+ * +Inf (Newton's method from +-Inf did not return, and a tolerance +Inf stopped it after one step) */
+static int start_tol_check(const char *fn, const char *name, double x0, double tol, char *err, size_t errlen)
+{
+    if (!isfinite(x0)) { snprintf(err, errlen, "%s: %s must be a finite real scalar (NaN: the default)", fn, name); return 1; }
+    if (tol == INFINITY) { snprintf(err, errlen, "%s: tol must be a positive finite number (NaN: the default)", fn); return 1; }
+    return 0;
+}
 static double nonfinite1(int cdf, double x) { return isnan(x) ? NAN : x > 0 ? (cdf ? 1.0 : 0.0) : 0.0; }
 /* the finite points of x (into xf, their indices into ix): their number; the others set in out */
 static int split_finite(int n, const double *x, int cdf, double *out, double *xf, int *ix)
@@ -174,6 +182,7 @@ int dfl_det_quantile(const dfl_design *D, int n, const double *p, double c, doub
     if (check_common(D, c, o, err, errlen)) return 1;
     for (int k = 0; k < n; k++) if (!(p[k] > 0 && p[k] < 1)) { snprintf(err, errlen, "dist_quantile: p must lie in (0, 1)"); return 1; }
     if (isnan(x0)) x0 = -2.0;
+    if (start_tol_check("dist_quantile", "x0", x0, tol, err, errlen)) return 1;
     if (!(tol > 0)) tol = 1e-9;
     det_path *CP = user_path(D, c, o, err, errlen);
     if (!CP) return 1;
@@ -222,6 +231,7 @@ int dfl_det_coef_quantile(const dfl_design *D, int n, const double *p, double c,
     if (check_common(D, c, o, err, errlen)) return 1;
     for (int k = 0; k < n; k++) if (!(p[k] > 0 && p[k] < 1)) { snprintf(err, errlen, "coef_quantile: p must lie in (0, 1)"); return 1; }
     if (isnan(y0)) y0 = -10.0;
+    if (start_tol_check("coef_quantile", "y0", y0, tol, err, errlen)) return 1;
     if (!(tol > 0)) tol = 1e-9;
     det_path *CP = user_path(D, c, o, err, errlen);
     if (!CP) return 1;
@@ -259,6 +269,7 @@ int dfl_det_coef_cdf_gp(const dfl_design *D, int n, const double *y, double c, c
     if (check_common(D, c, o, err, errlen)) return 1;
     if (N <= 0) N = 60000;
     if (!(umax > 0)) umax = 4000;
+    if (umax == INFINITY) { snprintf(err, errlen, "coef_cdf_gp: umax must be a positive finite number (NaN or <= 0: the default 4000)"); return 1; }
     det_prep *P = det_prep_cached(D, o->gls, err, errlen);
     if (!P) return 1;
     det_model Mo;
@@ -268,6 +279,8 @@ int dfl_det_coef_cdf_gp(const dfl_design *D, int n, const double *y, double c, c
     gpgrid(N, umax, u, w);
     int rc = 0;
     for (int j = 0; j < n && !rc; j++) {
+        /* (1, 0, NaN at Inf, -Inf, NaN, without the sum: at Inf the transform at t = -i Inf u did not return) */
+        if (!isfinite(y[j])) { out[j] = nonfinite1(1, y[j]); continue; }
         gp_ctx g = {&Mo, c, o->c0 + y[j], u, L0, LD, {0, ""}};
         dfl_parfor(N + 1, gp_body, &g);
         if (det_failed(&g.st)) { snprintf(err, errlen, "%s", g.st.msg); rc = 1; break; }
@@ -367,6 +380,8 @@ int dfl_det_moments(const dfl_design *D, double c, int pmax, const dfl_det_opts 
     if (det_model_make(P, o->start, o->gamma0, &Mo, err, errlen)) { det_prep_release(P); return 1; }
     const double h = 0.05;
     double tlo = dmin(-60.0, -2 * c - 40), thi = c < -20 ? dmax(8.0, log(80 * fabs(c))) : 8.0;
+    /* (the grid grows with c above the unit root: 2c/h points, 4e5 at c = 1e4; beyond 1e6 an error) */
+    if (!((thi - tlo) / h <= 1e6)) { snprintf(err, errlen, "dist_moments: the grid of the integral in s would have %.3g points at c = %g (more than 1e6): c is beyond the range of the moments", (thi - tlo) / h, c); det_model_free(&Mo); det_prep_release(P); return 1; }
     int ns = (int) floor((thi - tlo) / h + 1e-10) + 1;
     double *sv = malloc(ns * sizeof(double)), *acc = calloc((size_t) ns * pmax, sizeof(double));
     for (int i = 0; i < ns; i++) sv[i] = exp(tlo + i * h);
@@ -394,6 +409,8 @@ int dfl_det_local_power(const dfl_design *D, int n, const double *cs, double lev
 {
     dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
     if (statistic != 0 && statistic != 1) { snprintf(err, errlen, "statistic must be 0 (the t-ratio) or 1 (the coefficient statistic)"); return 1; }
+    if (!(level > 0 && level < 1)) { det_warn_clear(); snprintf(err, errlen, "local_power: the level must lie in (0, 1)"); return 1; }
+    if (!isfinite(o->c0)) { det_warn_clear(); snprintf(err, errlen, "c0 must be a finite real scalar"); return 1; }
     double q; int rc = 0;
     det_warn_clear(); det_warn_hold(1);
     if (statistic == 0) {
@@ -445,6 +462,7 @@ int dfl_det_lin(int kind, const dfl_design *D, int n, const double *b, double a,
     if (kind != 1 && kind != 2) { snprintf(err, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
     if (check_common(D, c, o, err, errlen)) return 1;
     if (isnan(a)) return vlaw(kind, D, n, b, c, o, out, err, errlen);
+    if (!isfinite(a)) { snprintf(err, errlen, "%s: a must be a finite real scalar (NaN: the law of V)", kind == 2 ? "lin_cdf" : "lin_pdf"); return 1; }
     det_path *CP = user_path(D, c, o, err, errlen);
     if (!CP) return 1;
     double *bf = malloc((n + 1) * sizeof(double)); int *ix = malloc((n + 1) * sizeof(int));
@@ -488,6 +506,7 @@ int dfl_det_lin_quantile(const dfl_design *D, double p, double a, double c, doub
     if (!(p > 0 && p < 1)) { snprintf(err, errlen, "lin_quantile: p must lie in (0, 1)"); return 1; }
     if (!isfinite(a)) { snprintf(err, errlen, "lin_quantile: a must be a finite real scalar"); return 1; }
     if (isnan(b0)) b0 = 0;
+    if (start_tol_check("lin_quantile", "b0", b0, tol, err, errlen)) return 1;
     if (!(tol > 0)) tol = 1e-10;
     det_path *CP = user_path(D, c, o, err, errlen);
     if (!CP) return 1;
@@ -518,6 +537,7 @@ int dfl_det_power_envelope(const dfl_design *D, int n, const double *cs, double 
     for (int k = 0; k < n && !rc; k++) {
         double c = cs[k];
         if (!(c < 0)) { out[k] = isnan(c) ? NAN : level; continue; }   /* (NaN at NaN, as the classical envelope) */
+        if (c == -INFINITY) { out[k] = 1.0; continue; }                /* (the limit) */
         dfl_det_opts o; dfl_det_defaults(&o);
         double b, a;
         if (nodet) {
@@ -578,6 +598,7 @@ int dfl_det_adfmax_quantile(const dfl_design *D, double p, double c, double x0, 
     if (adf_opts_check(&o, err, errlen) || check_common(D, c, &o, err, errlen)) return 1;
     if (!(p > 0 && p < 1)) { snprintf(err, errlen, "adfmax_quantile: p must lie in (0, 1)"); return 1; }
     if (isnan(x0)) x0 = -2.0;
+    if (start_tol_check("adfmax_quantile", "x0", x0, tol, err, errlen)) return 1;
     if (!(tol > 0)) tol = 1e-10;
     det_path *CP = user_path(D, c, &o, err, errlen);
     if (!CP) return 1;
@@ -589,7 +610,10 @@ int dfl_det_adfmax_quantile(const dfl_design *D, double p, double c, double x0, 
 int dfl_det_region(const dfl_design *D, int type, const double *par, double c, const dfl_det_opts *o0, double *out, char *err, size_t errlen)
 {
     dfl_det_opts od; const dfl_det_opts *o1 = opts_or_default(o0, &od);
-    if (type == 1) return dfl_det_lin(2, D, 1, &par[1], par[0], c, o1, out, err, errlen);
+    if (type == 1) {
+        if (!isfinite(par[0])) { det_warn_clear(); snprintf(err, errlen, "region_prob: the slope a of the line must be a finite real scalar"); return 1; }
+        return dfl_det_lin(2, D, 1, &par[1], par[0], c, o1, out, err, errlen);
+    }
     if (type == 2) { dfl_det_opts o = *o1; o.c0 = par[1]; return dfl_det_dist(2, D, 1, &par[0], c, &o, out, err, errlen); }
     if (type == 3 || type == 4) { snprintf(err, errlen, "region_prob: the boundary type %s is not available by the contour integral (its kernels are in closed form for boundaries quadratic in sqrt(V) only)", type == 3 ? "wap" : "fun"); return 1; }
     snprintf(err, errlen, "region_prob: unknown boundary type %d", type);

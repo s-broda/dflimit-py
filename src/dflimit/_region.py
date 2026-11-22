@@ -15,7 +15,7 @@ _TYPE_MSG = ('the boundary type must be "line", "parabola" or "wap" (the type "f
 
 
 @fill_doc(engine=ENGINE_DOC)
-def ltratio_region(bnd, cas="DK", c=0, info=False, *, engine=None, start=None, g0=0, gls=None):
+def ltratio_region(bnd, cas="DK", c=0, info=False, *, engine="auto", start=None, g0=0, gls=None):
     """Limiting probability of a region of the plane.
 
     The limit of the probability P{U <= g(V)} under phi = 1 + c/n, no drift, zero start, case DK (no deterministic
@@ -108,7 +108,7 @@ def ltratio_region(bnd, cas="DK", c=0, info=False, *, engine=None, start=None, g
             raise ValueError("the case must be DK (zero start)")
         g0 = dfl_num(g0, "g0")
         if g0 != 0:
-            if e is None or e == CLASSICAL:
+            if e == CLASSICAL:
                 raise ValueError("the regions of the classical engine have case DK only with a zero start (a fixed start g0: "
                                  "engine='auto' or 'general', or a design)")
             return _general_region(bnd, spec_of("DK", g0), c, info)
@@ -135,6 +135,16 @@ def ltratio_region(bnd, cas="DK", c=0, info=False, *, engine=None, start=None, g
         par = (el("x"), el("c0", 0))
     else:
         par = (el("k"), el("omega"))
+    if t in ("line", "parabola") and bnd.get("v0") is None and bnd.get("brks") is None:
+        # (the line and the parabola at a non-finite b or x: 1, 0, nan, as the router gives them; the classical code gave
+        # 0 at b = inf and at a = +-inf; the slope a and c0 must be finite)
+        if not math.isfinite(par[0 if t == "line" else 1]):
+            raise ValueError("the slope a of the line must be a finite real scalar" if t == "line" else
+                             "c0 of the parabola must be a finite real scalar")
+        b = par[1 if t == "line" else 0]
+        if not math.isfinite(b):
+            P = math.nan if math.isnan(b) else (1.0 if b > 0 else 0.0)
+            return Result(P=P, err=0.0, status=0) if info else P
     v0 = 0.0 if bnd.get("v0") is None else el("v0")
     brks = np.empty(0) if bnd.get("brks") is None else dfl_real(bnd["brks"], "bnd['brks']").ravel()
     if not np.all(np.isfinite(brks) & (brks > 0)):

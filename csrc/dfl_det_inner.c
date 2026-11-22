@@ -438,6 +438,126 @@ static double place(const logmt_t *L, const cdouble *grp, int ng, const cdouble 
     return dmin(f1, f2) < place_obj(&P, sig0) - 2 ? sb : sig0;
 }
 
+/* the gap (lo, hi) between the root groups of a node and the default abscissas sp, sm of its U-shapes (uabscissas) */
+static void uabscissas(const cdouble *gp, int rp, const cdouble *gm, int rm, double alpha, double *hi_, double *lo_, double *sp, double *sm)
+{
+    double hi = INFINITY, lo = -INFINITY;
+    for (int i = 0; i < rp; i++) hi = dmin(hi, creal(gp[i]));
+    if (rm > 0) for (int i = 0; i < rm; i++) lo = dmax(lo, creal(gm[i]));
+    if (hi > 0 && lo < 0) { *sp = alpha * hi; *sm = alpha * lo; }
+    else { double lo2 = dmax(lo, hi - 2 * dmax(fabs(hi), 1.0)); *sp = hi - alpha * (hi - lo2); *sm = lo2 + alpha * (dmin(0.0, hi) - lo2); }
+    *hi_ = hi; *lo_ = lo;
+}
+/* sigma+ moved right of the branch point -Re(t)/c0 of every c0 > 0 (ubranch; NaN where a branch point is not left of hi) */
+static double ubranch(double sp, double hi, double tr, const double *c0s, int nc0, double alpha)
+{
+    for (int i = 0; i < nc0; i++) {
+        if (!(c0s[i] > 0)) continue;
+        double lb = -tr / c0s[i];
+        if (!(lb < hi)) return NAN;
+        if (sp <= lb) sp = lb + alpha * (hi - lb);
+    }
+    return sp;
+}
+/* the caps of the panels of the segments of G+ and G- (ucaps): 20/A, below c = DET_FAR_CMIN = -60 20/min(A, 40/|sigma|) */
+static void ucaps(double c, double sp, double sm, double A, double *hp, double *hm)
+{
+    double hseg = 20 / A;
+    *hp = c < DET_FAR_CMIN && sp > 0 ? 20 / dmin(A, 40 / sp) : hseg; *hm = c < DET_FAR_CMIN && sm < 0 ? 20 / dmin(A, 40 / fabs(sm)) : hseg;
+}
+/* the nodes of the segments of the narrow U-shapes of the zero and the stationary start, a lower bound of their count
+ * (within 1% of it beyond 1e5), and the longest segment (unarrow) */
+static double unarrow(const cdouble *gp, int rp, const cdouble *gm, int rm, double sp, double sm, double hp, double hm, int n, double *hseg)
+{
+    double nest = 0, ylo, yhi; *hseg = 0;
+    if (rp > 0) { ulevels(gp, rp, sp, 1, 0, &ylo, &yhi); nest += (yhi - ylo) / hp * n; *hseg = dmax(*hseg, yhi - ylo); }
+    if (rm > 0) { ulevels(gm, rm, sm, -1, 0, &ylo, &yhi); nest += (yhi - ylo) / hm * n; *hseg = dmax(*hseg, yhi - ylo); }
+    return nest;
+}
+/* the count of the wide U-shapes of the fixed start at the abscissas sp, sm (the heights to hmx) */
+static double ufixed_count(const cdouble *rts, int r, double sp, double sm, double hp, double hm, int n, double *hmx)
+{
+    *hmx = 0;
+    for (int i = 0; i < r; i++) { cdouble z = rts[i]; *hmx = dmax(*hmx, fabs(cimag(z)) + fabs(creal(z) - (creal(z) > 0 ? sp : sm))); }
+    return 2 * *hmx / dmin(hp, hm) * n;
+}
+/* the abscissas of the U-shapes of the fixed start (ufixed_place): the defaults replaced by those of place */
+static void ufixed_place(const det_path *CP, const logmt_t *L, const double *c0s, int nc0, const cdouble *gp, int rp, const cdouble *gm, int rm,
+                         double hi, double lo, double tr, double alpha, double A, double xq, double *sp, double *sm)
+{
+    double xg = CP->c > 0 ? xq : 0.0, lbp = -INFINITY, c0p = 0;
+    if (CP->c > 0) for (int i = 0; i < nc0; i++) if (c0s[i] > 0) { lbp = dmax(lbp, -tr / c0s[i]); c0p = dmax(c0p, c0s[i]); }
+    double sp0 = isfinite(lbp) ? dmax(*sp, lbp + alpha * (hi - lbp)) : *sp;
+    if (rm > 0) {
+        *sp = place(L, gp, rp, gm, rm, 1, dmax(lo, lbp), hi, A, sp0, xg, tr, c0p);
+        *sm = place(L, gm, rm, gp, rp, -1, lo, dmin(hi, 0.0), A, *sm, 0.0, 1.0, 0.0);
+    } else *sp = place(L, gp, rp, gm, rm, 1, dmax(hi - 2 * dmax(fabs(hi), 1.0), lbp), hi, A, sp0, xg, tr, c0p);
+}
+#define USHAPE_MSG "the U-shapes of the %s start at t = %g%+gi would need some %.3g nodes (segments to %.3g long): a root runs off (more than %.0f nodes)"
+#define USHAPE_MSG_FIXED "the U-shapes of the fixed start at t = %g%+gi would need some %.0f nodes (heights to %.3g): the roots run off (more than %.0f nodes)"
+static void logmt_of(const det_path *CP, int k, logmt_t *L, cdouble *Bf);
+/* ushape_guard: the guard on the nodes of the U-shapes before any U-shape is built or any inner integral evaluated (the
+ * outer path carries the roots at its nodes): at every node t_k the count that the guard of ushapes compares with
+ * DET_USHAPE_MAXNODES, the segments of the narrow U-shapes with the zero and the stationary start, the wide heights at
+ * the abscissas of place with a fixed start (placed only where an upper bound of the count exceeds the cap: every abscissa
+ * lies in the interval of place, every cap of the segments is at least 20/A); the first node beyond the cap at which the
+ * transform has not fallen below the tolerance tol of the outer sum, |M_V(t_k) t'_k| max(1, 1/|t_k|) >= tol, refuses the
+ * call with the error of ushapes (1 and the message in err).  The nodes where the transform is below tol are left to the
+ * guard of ushapes, as the outer sum stops before them unless its terms are not small there (d(r) = 1 + r on the
+ * vertical line at c = 0 is beyond the cap from |t| = 3e4 on, where |M_V| is 1e-36, and its sum stops at |t| = 1.6e4).
+ * The design (1 + r, 1{r <= 0.4}) on the vertical line is beyond the cap from |t| = 6300 on, where |M_V| is 1e-15: it
+ * took seconds and some 0.8 GB before ushapes refused, and is refused here before any inner integral (ushape_guard of
+ * DFDet.jl) */
+static int ushape_guard(const det_path *CP, const double *c0s, int nc0, double A, int n, double alpha, double tol, double xq, char *err, size_t errlen)
+{
+    const det_model *Mo = CP->Mo;
+    int r = CP->r, rp = Mo->rp, rm = Mo->rm, fixed = Mo->start == 1;
+    double lt = log(tol);
+    cdouble *Bf = NULL;
+    for (int k = 0; k < CP->K; k++) {
+        const cdouble *rts = CP->R + (size_t) k * r, *gp = rts, *gm = rts + rp;
+        double hi, lo, sp, sm, hp, hm, nest = 0, hseg = 0, tr = creal(CP->t[k]);
+        uabscissas(gp, rp, gm, rm, alpha, &hi, &lo, &sp, &sm);
+        if (!(lo < dmin(hi, 0.0))) continue;                 /* (ushapes refuses such a node with its own error) */
+        if (fixed) {
+            /* (an upper bound of the count: sigma+ >= L, the lower end of the interval of place, sigma- <= min(hi, 0)) */
+            double L = rm > 0 ? lo : hi - 2 * dmax(fabs(hi), 1.0), hmx = 0;
+            for (int i = 0; i < rp; i++) hmx = dmax(hmx, fabs(cimag(gp[i])) + creal(gp[i]) - L);
+            for (int i = 0; i < rm; i++) hmx = dmax(hmx, fabs(cimag(gm[i])) + dmin(hi, 0.0) - creal(gm[i]));
+            if (2 * hmx * A / 20 * n <= DET_USHAPE_MAXNODES) continue;
+        } else {
+            sp = ubranch(sp, hi, tr, c0s, nc0, alpha);
+            if (isnan(sp)) continue;
+            ucaps(CP->c, sp, sm, A, &hp, &hm);
+            nest = unarrow(gp, rp, gm, rm, sp, sm, hp, hm, n, &hseg);
+            if (!(nest > DET_USHAPE_MAXNODES)) continue;
+        }
+        /* log |M_V(t_k)| = Re log Mt(0) (with a fixed start and g0^2 Re cf(t_k): E1(0) = 0) */
+        const det_fixt *fx = CP->fx ? CP->fx[k] : NULL;
+        double lmv = creal(det_logMtilde(rts, r, rp, CP->lP[k], DZERO));
+        if (fx) lmv += Mo->g0 * Mo->g0 * creal(fx->cf);
+        if (!(lmv + log(cabs(CP->dt[k]) * dmax(1.0, 1 / cabs(CP->t[k]))) >= lt)) continue;
+        if (fixed) {
+            if (!fx) continue;
+            /* (the count of ushapes, with its placed abscissas) */
+            if (!Bf) Bf = malloc((size_t) imax(r, 1) * (r + 2) * sizeof(cdouble));
+            logmt_t Lm; logmt_of(CP, k, &Lm, Bf);
+            ufixed_place(CP, &Lm, c0s, nc0, gp, rp, gm, rm, hi, lo, tr, alpha, A, xq, &sp, &sm);
+            sp = ubranch(sp, hi, tr, c0s, nc0, alpha);
+            if (isnan(sp)) continue;
+            ucaps(CP->c, sp, sm, A, &hp, &hm);
+            double hmx; nest = ufixed_count(rts, r, sp, sm, hp, hm, n, &hmx);
+            if (!(nest > DET_USHAPE_MAXNODES)) continue;
+            snprintf(err, errlen, USHAPE_MSG_FIXED, creal(CP->t[k]), cimag(CP->t[k]), nest, hmx, (double) DET_USHAPE_MAXNODES);
+            free(Bf); return 1;
+        }
+        snprintf(err, errlen, USHAPE_MSG, Mo->start == 2 ? "stationary" : "zero", creal(CP->t[k]), cimag(CP->t[k]), nest, hseg, (double) DET_USHAPE_MAXNODES);
+        free(Bf); return 1;
+    }
+    free(Bf);
+    return 0;
+}
+
 /* the U-shapes of node k: nodes Sp, Sm, Mt times the weights (Mp, Mm), the factors 1 + |log Mt| (Ep, Em) (ushapes) */
 typedef struct { cvec Sp, Mp, Sm, Mm; dvec Ep, Em; } ushapes_t;
 static void ushapes_free(ushapes_t *U) { cvec_free(&U->Sp); cvec_free(&U->Mp); cvec_free(&U->Sm); cvec_free(&U->Mm); dvec_free(&U->Ep); dvec_free(&U->Em); }
@@ -449,55 +569,32 @@ static int ushapes(const det_path *CP, int k, const logmt_t *L, const double *c0
     cdouble t = CP->t[k]; double tr = creal(t);
     int rp = Mo->rp, rm = Mo->rm;
     const cdouble *gp = L->rts, *gm = L->rts + rp;
-    double hi = INFINITY, lo = -INFINITY;
-    for (int i = 0; i < rp; i++) hi = dmin(hi, creal(gp[i]));
-    if (rm > 0) for (int i = 0; i < rm; i++) lo = dmax(lo, creal(gm[i]));
+    double hi, lo, sp, sm;
+    uabscissas(gp, rp, gm, rm, alpha, &hi, &lo, &sp, &sm);
     if (!(lo < dmin(hi, 0.0))) { det_fail(st, "the root groups are not separated by a line Re s = sigma < 0 at t = %g%+gi (lo = %g, hi = %g)", creal(t), cimag(t), lo, hi); return 1; }
-    double sp, sm;
-    if (hi > 0 && lo < 0) { sp = alpha * hi; sm = alpha * lo; }
-    else { double lo2 = dmax(lo, hi - 2 * dmax(fabs(hi), 1.0)); sp = hi - alpha * (hi - lo2); sm = lo2 + alpha * (dmin(0.0, hi) - lo2); }
     cdouble exp_p[8], exp_m[8]; int nep = 0, nem = 0;
     int fixed = L->fx != NULL;
-    if (fixed) {
-        double xg = CP->c > 0 ? xq : 0.0, lbp = -INFINITY, c0p = 0;
-        if (CP->c > 0) for (int i = 0; i < nc0; i++) if (c0s[i] > 0) { lbp = dmax(lbp, -tr / c0s[i]); c0p = dmax(c0p, c0s[i]); }
-        double sp0 = isfinite(lbp) ? dmax(sp, lbp + alpha * (hi - lbp)) : sp;
-        if (rm > 0) {
-            sp = place(L, gp, rp, gm, rm, 1, dmax(lo, lbp), hi, A, sp0, xg, tr, c0p);
-            sm = place(L, gm, rm, gp, rp, -1, lo, dmin(hi, 0.0), A, sm, 0.0, 1.0, 0.0);
-        } else sp = place(L, gp, rp, gm, rm, 1, dmax(hi - 2 * dmax(fabs(hi), 1.0), lbp), hi, A, sp0, xg, tr, c0p);
-    }
+    if (fixed) ufixed_place(CP, L, c0s, nc0, gp, rp, gm, rm, hi, lo, tr, alpha, A, xq, &sp, &sm);
     for (int i = 0; i < nc0; i++) {
         double c0 = c0s[i];
         if (c0 == 0) continue;
         cdouble sb = cdivr(cneg(t), c0);
         if (c0 > 0) {
-            double lb = -tr / c0;
-            if (!(lb < hi)) { det_fail(st, "no abscissa for G+ right of the branch point -t/c0 at t = %g%+gi", creal(t), cimag(t)); return 1; }
-            if (sp <= lb) sp = lb + alpha * (hi - lb);
+            if (!(-tr / c0 < hi)) { det_fail(st, "no abscissa for G+ right of the branch point -t/c0 at t = %g%+gi", creal(t), cimag(t)); return 1; }
             exp_p[nep++] = sb;
         } else exp_m[nem++] = sb;
     }
-    double hseg = 20 / A;
-    double hp = CP->c < -100 && sp > 0 ? 20 / dmin(A, 40 / sp) : hseg, hm = CP->c < -100 && sm < 0 ? 20 / dmin(A, 40 / fabs(sm)) : hseg;
+    sp = ubranch(sp, hi, tr, c0s, nc0, alpha);
+    double hp, hm;
+    ucaps(CP->c, sp, sm, A, &hp, &hm);
+    /* (the guard on the size of the U-shapes, which ushape_guard checks before the outer sum at the nodes where the
+     * transform is not negligible; here at the other nodes, which the sum reaches where its terms are not small) */
     if (fixed) {
-        double hmx = 0;
-        for (int i = 0; i < rp + rm; i++) { cdouble z = L->rts[i]; hmx = dmax(hmx, fabs(cimag(z)) + fabs(creal(z) - (creal(z) > 0 ? sp : sm))); }
-        double nest = 2 * hmx / dmin(hp, hm) * n;
-        if (nest > DET_USHAPE_MAXNODES) { det_fail(st, "the U-shapes of the fixed start at t = %g%+gi would need some %.0f nodes (heights to %.3g): the roots run off (more than %.0f nodes)", creal(t), cimag(t), nest, hmx, (double) DET_USHAPE_MAXNODES); return 1; }
+        double hmx, nest = ufixed_count(L->rts, rp + rm, sp, sm, hp, hm, n, &hmx);
+        if (nest > DET_USHAPE_MAXNODES) { det_fail(st, USHAPE_MSG_FIXED, creal(t), cimag(t), nest, hmx, (double) DET_USHAPE_MAXNODES); return 1; }
     } else {
-        /* (the zero and the stationary start: the segments of the narrow U-shapes, at most hp or hm per panel with n nodes,
-         * a lower bound of their nodes (within 1% of the count beyond 1e5).  The design (1 + r, 1{r <= 0.4}) on the vertical
-         * line has the positive root 86030 - 764901i at t = 1 + 2749i and U-shapes of 2e7 nodes further out, at every c from
-         * -1 to 2, and at c = 1 took more than 2 GB within seconds; such a node stops with the same error) */
-        double nest = 0, hseg = 0, ylo, yhi;
-        if (rp > 0) { ulevels(gp, rp, sp, 1, 0, &ylo, &yhi); nest += (yhi - ylo) / hp * n; hseg = dmax(hseg, yhi - ylo); }
-        if (rm > 0) { ulevels(gm, rm, sm, -1, 0, &ylo, &yhi); nest += (yhi - ylo) / hm * n; hseg = dmax(hseg, yhi - ylo); }
-        if (nest > DET_USHAPE_MAXNODES) {
-            det_fail(st, "the U-shapes of the %s start at t = %g%+gi would need some %.3g nodes (segments to %.3g long): a root runs off (more than %.0f nodes)",
-                     Mo->start == 2 ? "stationary" : "zero", creal(t), cimag(t), nest, hseg, (double) DET_USHAPE_MAXNODES);
-            return 1;
-        }
+        double hseg, nest = unarrow(gp, rp, gm, rm, sp, sm, hp, hm, n, &hseg);
+        if (nest > DET_USHAPE_MAXNODES) { det_fail(st, USHAPE_MSG, Mo->start == 2 ? "stationary" : "zero", creal(t), cimag(t), nest, hseg, (double) DET_USHAPE_MAXNODES); return 1; }
     }
     const logmt_t *lmf = fixed ? L : NULL;
     cvec Wp = {0};
@@ -834,6 +931,10 @@ int det_contour_eval(const det_path *CP, int nx, const double *xs, double c0, in
 {
     det_eval_opts o; if (o0) o = *o0; else det_eval_defaults(CP, &o);
     if (nx == 0) return 0;
+    {   /* the guard on the nodes of the U-shapes, before the outer sum */
+        double xq = 0; for (int ix = 0; ix < nx; ix++) xq = dmax(xq, xs[ix]);
+        if (ushape_guard(CP, &c0, 1, CP->Mo->a, o.n, o.alpha, o.tol, dmax(0.0, xq), err, errlen)) return 1;
+    }
     double *vr = NULL;
     /* Filon's rule on the line for the t-ratio with one root of the parabola per x (filon_roots_x) */
     if (o.filon && isnan(CP->h) && c0 != 0 && CP->line && filon_table(CP->nq)) {
@@ -876,6 +977,17 @@ int det_contour_eval_specs(const det_path *CP, int ne, const int *nt, const det_
     det_eval_opts o; if (o0) o = *o0; else det_eval_defaults(CP, &o);
     if (ne == 0) return 0;
     int *off = malloc((ne + 1) * sizeof(int)); off[0] = 0; for (int i = 0; i < ne; i++) off[i + 1] = off[i] + nt[i];
+    {   /* the guard on the nodes of the U-shapes, with the c0 and the constant of the kernels of tnode_specs */
+        double c0s[64], ak = CP->Mo->a, xq = 0; int nc0 = 0;
+        for (int i = 0; i < off[ne]; i++) {
+            const det_xspec *sp = &specs[i];
+            ak = dmax(ak, fabs(sp->A)); xq = dmax(xq, sp->q);
+            if (sp->c0 == 0) continue;
+            int in = 0; for (int l = 0; l < nc0; l++) if (c0s[l] == sp->c0) in = 1;
+            if (!in && nc0 < 64) c0s[nc0++] = sp->c0;
+        }
+        if (ushape_guard(CP, c0s, nc0, ak, o.n, o.alpha, o.tol, dmax(0.0, xq), err, errlen)) { free(off); return 1; }
+    }
     double *vr = NULL;
     if (o.filon && isnan(CP->h) && CP->line && filon_table(CP->nq)) {
         /* filon_roots: one term with q = 0, c0 != 0, no derivative in c0, vmax = Inf, one root */

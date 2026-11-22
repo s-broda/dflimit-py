@@ -396,6 +396,10 @@ int dfl_engine_lincdf(int n, const double *b, double a, int model, double c, dou
     if (model == 2) model = 1;
     if (model != 1 && model != 4) { snprintf(err, errlen, "ltratio_lincdf: the case must be DK or DG"); return 1; }
     if (isnan(cbar)) cbar = DFL_CBAR_GLS;
+    /* (a = +-Inf and an infinite cbar gave 0 in the classical code: refused, as by the general engine; a = NaN is the law
+     * of V) */
+    if (isinf(a)) { snprintf(err, errlen, "ltratio_lincdf: a must be a finite real scalar (NaN: the law of V)"); return 1; }
+    if (model == 4 && !isfinite(cbar)) { snprintf(err, errlen, "ltratio_lincdf: cbar must be a finite real scalar < 0 (NaN: the default -13.5)"); return 1; }
     if (engine == DFL_ENGINE_AUTO && (!isfinite(c) || c < DFL_CMIN)) { snprintf(err, errlen, "ltratio_lincdf: %s", isfinite(c) ? DFL_CMIN_MSG : "c must be a finite real scalar"); return 1; }
     int gen = engine == DFL_ENGINE_GENERAL || (engine == DFL_ENGINE_AUTO && dfl_autoengine(DFL_F_LINCDF, model, 0, 0.0, cbar, c, 0.0, a) == DFL_ENGINE_GENERAL);
     if (!gen) return dfl_lincdf(n, b, a, model, c, cbar, NULL, out, err, errlen);
@@ -411,12 +415,13 @@ int dfl_engine_envelope(int n, const double *cs, int model, double alpha, int en
     warn_entry();
     if (model == 2) model = 1;
     if (model != 1 && model != 4) { snprintf(err, errlen, "power_envelope: the case must be DK (or DU) or DG"); return 1; }
-    if (!(alpha > 0 && alpha < 1)) { snprintf(err, errlen, "power_envelope: the level alpha must lie in (0, 1)"); return 1; }
+    if (!(alpha > 0 && alpha < 1)) { snprintf(err, errlen, "power_envelope: the level must lie in (0, 1)"); return 1; }
     dfl_design D; if (dfl_design_trend(model == 4 ? 1 : -1, &D, err, errlen)) return 1;
     int rc = 0;
     for (int k = 0; k < n && !rc; k++) {
         int gen = engine == DFL_ENGINE_GENERAL || (engine == DFL_ENGINE_AUTO && dfl_autoengine(DFL_F_ENVELOPE, model, 0, 0.0, NAN, cs[k], 0.0, 0.0) == DFL_ENGINE_GENERAL);
         if (!(cs[k] < 0)) { out[k] = isnan(cs[k]) ? NAN : alpha; continue; }
+        if (cs[k] == -INFINITY) { out[k] = 1.0; continue; }         /* (the limit; the classical bisection found no bracket) */
         rc = gen ? dfl_det_power_envelope(&D, 1, &cs[k], alpha, &out[k], err, errlen) : dfl_power_envelope(1, &cs[k], model, alpha, NULL, &out[k], err, errlen);
     }
     dfl_design_free(&D);
@@ -462,6 +467,14 @@ int dfl_engine_region(int type, const double *par, const dfl_spec *S, double c, 
     spec_t R; if (resolve(S, &R, err, errlen)) return 1;
     int dk = R.model == 1 && !R.stat && R.start == 0;
     int rc;
+    /* (the line g(v) = b + a v and the parabola x sqrt(v) + c0 v: a non-finite b or x gives 1, 0, NaN, as the distribution
+     * functions do, and the slope a and c0 must be finite; the classical regions gave 0 at b = Inf and at a = +-Inf, and
+     * the general engine NaN at a = +-Inf and the law of V at a = NaN) */
+    if (type == 1 || type == 2) {
+        if (!isfinite(par[type == 1 ? 0 : 1])) { snprintf(err, errlen, "region_prob: %s must be a finite real scalar", type == 1 ? "the slope a of the line" : "c0 of the parabola"); spec_free(&R); return 1; }
+        double v = par[type == 1 ? 1 : 0];
+        if (!isfinite(v)) { out[0] = isnan(v) ? NAN : v > 0 ? 1.0 : 0.0; spec_free(&R); return 0; }
+    }
     if (engine == DFL_ENGINE_CLASSICAL && !dk) { snprintf(err, errlen, "engine classical: the regions of the classical engine have case DK only"); spec_free(&R); return 1; }
     if (engine != DFL_ENGINE_GENERAL && dk) {
         dfl_double_info info;

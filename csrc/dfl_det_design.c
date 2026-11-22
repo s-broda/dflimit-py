@@ -556,7 +556,7 @@ void det_evblk(const dfl_design *D, int k, const double *Cs, int j, double r, do
 /* prep_gls: the design GLS-detrended at cbar < 0 */
 static int prep_gls(const dfl_design *D, double cbar, det_prep **out, char *err, size_t errlen)
 {
-    if (!(cbar < 0)) { snprintf(err, errlen, "GLS detrending needs cbar < 0"); return 1; }
+    if (!(cbar < 0 && isfinite(cbar))) { snprintf(err, errlen, "GLS detrending needs cbar < 0 (a finite number)"); return 1; }
     if (D->first) { snprintf(err, errlen, "%s", FIRST_GLS_MSG); return 1; }
     int np = D->np, d1 = D->deg + 1;
     det_prep *P = det_prep_new(D); P->cbar = cbar; P->kind = 1;

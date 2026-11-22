@@ -10,7 +10,7 @@
 /* prep_pt: Q = cbar^2 V_g + ell' A ell with A = C - cbar^2 B_g */
 static int prep_pt(const dfl_design *D, double cbar, det_prep **out, char *err, size_t errlen)
 {
-    if (!(cbar < 0)) { snprintf(err, errlen, "the point-optimal statistic needs cbar < 0"); return 1; }
+    if (!(cbar < 0 && isfinite(cbar))) { snprintf(err, errlen, "the point-optimal statistic needs cbar < 0 (a finite number)"); return 1; }
     int np = D->np, d1 = D->deg + 1;
     det_prep *P = det_prep_new(D); P->cbar = cbar; P->kind = 2;
     double *Z; int k = det_gls_directions(D, &Z);
@@ -126,6 +126,9 @@ static double qedge(const det_model *Mo, double cbar, double c)
 #define PT_EDGE 3.3
 static int qgrid(const det_prep *P, double cbar, double c, int N, double umax, qgrid_t *G, char *err, size_t errlen)
 {
+    /* (c = +Inf did not return, and umax = +Inf gives an infinite step) */
+    if (!isfinite(c)) { snprintf(err, errlen, "the point-optimal statistic: c must be a finite real scalar"); return 1; }
+    if (!isfinite(umax)) { snprintf(err, errlen, "the point-optimal statistic: umax must be a positive finite number (NaN or <= 0: the default 4000)"); return 1; }
     det_model Mo;
     if (det_model_make(P, 0, 0.0, &Mo, err, errlen)) return 1;
     double d = qedge(&Mo, cbar, c), hh = asinh(umax) / N;
@@ -234,6 +237,7 @@ int dfl_det_pt_envelope(const dfl_design *D, int n, const double *cs, double lev
     det_warn_hold(1);
     for (int k = 0; k < n; k++) {
         if (!(cs[k] < 0)) { out[k] = isnan(cs[k]) ? NAN : level; continue; }   /* (NaN at NaN, as the classical envelope) */
+        if (cs[k] == -INFINITY) { out[k] = 1.0; continue; }                     /* (the limit) */
         double b; if (dfl_det_pt_power(D, cs[k], cs[k], level, N, umax, &b, &out[k], err, errlen)) { det_warn_hold(0); return 1; }
     }
     det_warn_hold(0);
@@ -398,6 +402,7 @@ int dfl_det_mza_quantile(const dfl_design *D, double p, double c, double gls, do
 int dfl_det_msb_cdf(const dfl_design *D, int n, const double *x, double c, double gls, double *out, char *err, size_t errlen)
 {
     det_warn_clear();
+    if (!isfinite(c)) { snprintf(err, errlen, "c must be a finite real scalar"); return 1; }
     double cb = isnan(gls) ? -13.5 : gls;
     det_path *CP = det_v_path(D, cb, 0, 0.0, c, NAN, 1.0, err, errlen);
     if (!CP) return 1;
@@ -410,6 +415,7 @@ int dfl_det_msb_quantile(const dfl_design *D, double p, double c, double gls, do
 {
     det_warn_clear();
     if (!(p > 0 && p < 1)) { snprintf(err, errlen, "msb_quantile: p must lie in (0, 1)"); return 1; }
+    if (!isfinite(c)) { snprintf(err, errlen, "c must be a finite real scalar"); return 1; }
     double cb = isnan(gls) ? -13.5 : gls;
     det_path *CP = det_v_path(D, cb, 0, 0.0, c, NAN, 1.0, err, errlen);
     if (!CP) return 1;

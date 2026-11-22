@@ -225,6 +225,11 @@ det_path *det_line_refined(det_path *CP, int nx, const double *xs, int na, const
 det_path *det_variant_path(det_path *CP, int level, char *err, size_t errlen);
 det_path *det_v_path(const dfl_design *D, double cbar, int start, double g0, double c, double phi, double hfac, char *err, size_t errlen);
 double det_default_rmax(double c);
+/* the c below which the engine takes its rules far from the unit root (FAR_CMIN of DFDet.jl; until November 2026 c = -100):
+ * the outer hyperbola the angle of fixed_phi with every start, and the U-shapes the caps 20/min(A, 40/|sigma|) of their
+ * segments.  On the 45-degree hyperbola the terms grow far from the unit root, and from c = -70 to -100 the distribution
+ * function was off by 1e-11 to 1.4e-9; with both rules from c = -60 on within 5e-13 (case DK 3e-11, as below c = -100) */
+#define DET_FAR_CMIN (-60.0)
 cdouble det_logMtilde(const cdouble *rts, int r, int rp, cdouble lP, cdouble s);
 
 /* ---- the inner integrals and the outer sums (dfl_det_inner.c) ---- */
