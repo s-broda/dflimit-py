@@ -2,6 +2,28 @@
 
 ## 0.5.0
 
+The general engine of the C engine (dflimit-matlab, its branch `general-engine`; the port of the general engine of
+DFLimit.jl): the limits for any piecewise smooth deterministic terms, by the inversion formula on paths around the roots
+of the determinant of the joint moment generating function. With a case string and no `engine` keyword the values are
+those of before.
+
+- Designs: the immutable class `Design` and its constructors `trend`, `perron`, `fdesign`, `ltrend`,
+  `design_from_matrix` and `detrend_first` (the names of the Julia package), with `Design.value` and `Design.regmat`.
+- The general engine's functions of a design: `dist_cdf`, `dist_pdf`, `dist_quantile`, `dist_moments`, `coef_pdf`,
+  `coef_quantile`, `coef_cdf_gp`, `local_power`, `lin_cdf`, `lin_pdf`, `lin_quantile`, `v_cdf`, `v_pdf`,
+  `adfmax_quantile`, `region_prob`, and the companions `pt_cdf`, `pt_pdf`, `pt_quantile`, `pt_power`, `pt_envelope`
+  (the point-optimal statistic and the power envelope of any design), `lm_cdf`, `lm_quantile`, `lm_power` (the LM
+  statistic), `mza_cdf`, `mza_quantile` (MZ_alpha), `msb_cdf`, `msb_quantile` (MSB); `empty_caches`. The options are
+  keywords: `c0`, `start` (`"zero"`, `"fixed"`, `"stationary"`), `gamma0`, `gls` and `verified`.
+- The router: `ltratio_cdf`, `ltratio_pdf`, `ltratio_icdf`, `ltratio_mom`, `coef_cdf`, `coef_icdf`, `adfmax_cdf`,
+  `adfmax_pdf`, `adfmax_icdf`, `ltratio_lincdf`, `power_envelope` and `ltratio_region` take a design in place of the
+  case (with the keywords `start` and `gls`) and the keyword `engine`: `None` (the default) keeps the classical
+  engine for a case string and takes the rule for a design, `"auto"` the rule of the router (the faster engine where
+  the two agree, the more accurate where they do not, the general engine where the classical one does not apply),
+  `"classical"` and `"general"` force one engine. The general engine's warnings are `RuntimeWarning`s.
+- The tests compare 280 values of the general engine and 104 of the router with the stored values of the Julia
+  engine (a subset of `c/test/det_ref.txt` of dflimit-matlab, copied by `tools/det-ref.py`).
+
 Four errors of the engine are repaired (the C engine of dflimit-matlab 0.5.0, the repairs of DFLimit.jl 0.5.0). Values
 outside the regions named below are unchanged.
 

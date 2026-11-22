@@ -15,7 +15,9 @@ a fixed or a stationary initial observation; for the t-ratio centred at the unit
 and for the GLS-detrended trend case of Elliott, Rothenberg and Stock (1996). It also has the ADFmax test of
 Leybourne (1995), the probabilities of regions {U <= g(V)} of the limit experiment (point-optimal and
 weighted-average-power tests), the distribution of the linear form U - aV and the asymptotic power envelope of
-Elliott, Rothenberg and Stock. The numbers come from the multithreaded C engine of the paper (a port of its Julia
+Elliott, Rothenberg and Stock, and, by the general engine, the same for any piecewise smooth deterministic terms
+(polynomial trends, breaks in level and slope) with their companions (see "The general engine" below). The numbers
+come from the multithreaded C engine of the paper (a port of its Julia
 reference implementation, checked against it to 1e-10 or better); the same functions, with the same names and
 arguments, exist in R, MATLAB and Julia.
 
@@ -31,6 +33,7 @@ arguments, exist in R, MATLAB and Julia.
 | `ltratio_lincdf(b, a, cas, c=0, cbar=-13.5)` | P(U - aV <= b), cases DK and DG (a = nan: P(V <= b)) |
 | `power_envelope(c, cas="DK", alpha=0.05)` | the asymptotic power envelope of Elliott, Rothenberg and Stock (cases DK, DU, DG) |
 | `ltratio_threads(n)` | the number of worker threads of the engine |
+| `trend`, `perron`, `fdesign`, `ltrend`, `design_from_matrix`, `detrend_first`; `dist_cdf`, ..., `pt_*`, `lm_*`, `mza_*`, `msb_*` | the general engine: any deterministic terms, a design in place of `cas`, the keyword `engine` (see "The general engine") |
 
 The case `cas` is a two-letter code: `D` (fixed start, `g0`, default 0) or `S` (stationary start, c <= -1e-4),
 followed by `K` (no deterministic terms, tau), `U` (intercept, tau_mu) or `T` (intercept and trend, tau_tau);
@@ -54,6 +57,71 @@ there: as in the MATLAB programs and the R package, they are short Python-level 
 of the t-ratio at 0 with a shifted local null value, and root searches on the engine's distribution functions). Not
 in the package, because the C engine does not have it: the boundary type `"fun"` (any function g) of
 `ltratio_region`.
+
+## The general engine
+
+Since 0.5.0 the package also has the general engine of the C engine: the same limits for any piecewise smooth
+deterministic terms of the regression of y_t on d(t/n) and y_{t-1} (polynomial trends of any order, breaks in level and
+slope at several dates, a design given by a function or by the regressor matrix of a sample), with a zero, fixed or
+stationary start, a local null value c0, GLS detrending and the statistic that detrends first, by the inversion
+formula on paths around the roots of the determinant of the joint moment generating function of numerator and
+denominator. A design is an immutable `Design`, made by
+
+| constructor | design |
+|---|---|
+| `trend(p)` | (1, r, ..., r^p); p = -1, 0, 1 are the cases DK, DU, DT |
+| `perron(model, lam)` | Perron's models `"A"` (breaks in level), `"B"` (in slope), `"C"` (both) at the fractions `lam` |
+| `fdesign(f, breaks)` | the regressors `f(r)`, smooth between the breaks (Chebyshev interpolants) |
+| `ltrend(p)` | the polynomial trend in the orthonormal Legendre basis (high orders) |
+| `design_from_matrix(X, breaks=None)` | the limit of the n x K regressor matrix of a sample (the breaks detected if not given) |
+| `detrend_first(D)` | the statistic that detrends first (Perron and Vogelsang), for D |
+| `Design(br, coef)` | the break points and the coefficients of the polynomials on the pieces |
+
+The user-level functions above take a design in place of the case string (`ltratio_cdf(x, perron("C", 0.3), c)`),
+with the keywords `start` (`"zero"`, `"fixed"` with `g0`, `"stationary"`) and `gls` (GLS detrending at cbar), and all
+of them take the keyword `engine`:
+
+- with a case string and no `engine` the classical engine computes, and the values are those of before;
+- `engine="auto"` (the default with a design) is the router's rule: where the classical engine accepts the arguments
+  it takes, at each point, the faster engine where the two agree to 1e-10 and the more accurate one where they do not
+  (for example the general engine for the t-ratio with a stationary start and c0 != 0, with a zero start and c0 > 0
+  for -100 < c <= 1, and at c0 = 0 below c = -20; the classical engine for the regions and for the ADFmax test with a
+  zero start), and the general engine for every other design; a `method` other than `"auto"`, or `verified=True`,
+  keeps the classical engine;
+- `engine="classical"` and `engine="general"` force one engine (`"classical"` for the cases DK, DU, DT, SK, SU, ST,
+  DG only; `"general"` with `method="auto"` only).
+
+The general engine's own functions of a design have the names of the Julia package: `dist_cdf`, `dist_pdf`,
+`dist_quantile`, `dist_moments` (the t-ratio), `coef_pdf`, `coef_quantile`, `coef_cdf_gp` (the coefficient statistic;
+its distribution function is `coef_cdf` with the design), `local_power`, `lin_cdf`, `lin_pdf`, `lin_quantile`,
+`v_cdf`, `v_pdf` (the linear form U - aV and the law of V), `adfmax_quantile`, `region_prob` (lines and parabolas),
+and the companions `pt_cdf`, `pt_pdf`, `pt_quantile`, `pt_power`, `pt_envelope` (the point-optimal statistic of
+Elliott, Rothenberg and Stock and the power envelope of any design), `lm_cdf`, `lm_quantile`, `lm_power` (the LM
+statistic of Schmidt and Phillips), `mza_cdf`, `mza_quantile` (MZ_alpha) and `msb_cdf`, `msb_quantile` (MSB), with
+the options `c0`, `start`, `gamma0` (the fixed start), `gls` and, for the distribution functions and densities,
+`verified` (the checked computation: two evaluations on different paths, a third where they differ by more than
+1e-9). Every value is one evaluation by default. The engine's warnings (where one evaluation may be inaccurate) are
+`RuntimeWarning`s.
+
+```python
+>>> from dflimit import *
+>>> D = perron("C", [0.3, 0.7])                 # breaks in level and slope at 0.3 and 0.7
+>>> ltratio_icdf([0.01, 0.05, 0.10], D)         # its asymptotic critical values
+array([-5.28735943, -4.75056961, -4.46887591])
+>>> ltratio_cdf(-4.75057, D, -10)               # the power of the 5% test at c = -10
+0.09235786644709006
+>>> ltratio_cdf(-2.86157, "DU", -5, engine="auto")    # a case string by the router's rule
+0.11651356209305042
+>>> pt_quantile(trend(1), 0.05, -13.5)          # the 5% critical value of the point-optimal test with a trend
+5.704481449371843
+>>> mza_quantile(trend(1), 0.05)                # MZ_alpha with a trend
+-16.591095285246954
+
+```
+
+Points of one call share the paths of the inversion, so pass a whole vector in one call. The engine caches up to 64
+prepared designs, paths and refined lines; `empty_caches()` frees them. Designs whose roots run far out on the
+vertical line (c > 0, exotic designs) can need several GB.
 
 ## Example
 
