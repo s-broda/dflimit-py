@@ -3,6 +3,7 @@ c/test/det_ref.txt of dflimit-matlab, the reference of the C engine's own test d
 designs, the keyword engine, the warnings and the errors."""
 import math
 import pickle
+import re
 import threading
 import warnings
 
@@ -10,15 +11,17 @@ import numpy as np
 import pytest
 
 import dflimit
-from dflimit import (Design, adfmax_cdf, coef_cdf, coef_icdf, design_from_matrix, detrend_first, dist_cdf, dist_moments,
-                     dist_pdf, dist_quantile, fdesign, lin_cdf, lm_cdf, ltratio_cdf, ltratio_icdf, ltratio_lincdf,
-                     ltratio_mom, ltratio_pdf, ltratio_region, ltrend, msb_cdf, perron, power_envelope, pt_cdf, trend,
-                     v_cdf)
+from dflimit import (Design, adfmax_cdf, adfmax_icdf, adfmax_pdf, adfmax_quantile, coef_cdf, coef_icdf, design_from_matrix, detrend_first, dist_cdf, dist_moments,
+                     dist_pdf, dist_quantile, fdesign, lin_cdf, lin_pdf, lm_cdf, lm_quantile, ltratio_cdf, ltratio_icdf, ltratio_lincdf,
+                     ltratio_mom, ltratio_pdf, ltratio_region, ltrend, msb_cdf, perron, power_envelope, pt_cdf,
+                     pt_envelope, pt_quantile, trend, v_cdf, v_pdf)
 from helpers import det_check, det_designs, det_label, det_lines, det_route, det_value
 
 DESIGNS = det_designs()
 VAL = det_lines("val")
 ROUTE = det_lines("route")
+ERR = det_lines("err")
+RERR = det_lines("rerr")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -50,6 +53,23 @@ def test_router(r):
     _run(det_route, r)
 
 
+@pytest.mark.parametrize("r", ERR, ids=det_label)
+def test_general_engine_refuses(r):
+    """the general engine refuses what it does not compute (p and levels outside (0, 1), the LM statistic above c = 10,
+    the point-optimal statistic where its grid does not resolve the transform and beyond the range of q, the design
+    whose roots run off), with an error that says so"""
+    with pytest.raises(ValueError, match=re.escape(r["text"])):
+        det_value(r, DESIGNS)
+
+
+@pytest.mark.parametrize("r", RERR, ids=det_label)
+def test_router_refuses(r):
+    """the router refuses a fixed start with the classical engine's ADFmax and regions, gls with a case code, p and
+    levels outside (0, 1)"""
+    with pytest.raises(ValueError, match=re.escape(r["text"])):
+        det_route(r, DESIGNS)
+
+
 def test_reference_coverage():
     """the stored values cover every constructor, the three starts, GLS detrending, a local null value, every function
     and companion, and the three settings of the router"""
@@ -67,6 +87,9 @@ def test_reference_coverage():
     assert {r["st"] for r in VAL} == {0, 1, 2}
     assert any(not math.isnan(r["cb"]) for r in VAL) and any(r["c0"] != 0 for r in VAL) and any(r["ver"] for r in VAL)
     assert {r["e"] for r in ROUTE} == {0, 1, 2} and {r["spec"] for r in ROUTE} == {"case", "design"}
+    assert {r["fn"] for r in ERR} >= {"lmcdf", "lmq", "lmpow", "cdf", "ptcdf", "linq", "adfq", "ptq", "quant", "coefq", "msbq",
+                                      "mzaq", "ptpow", "env"}
+    assert any(r["fn"] == "adf" and r["st"] == 1 for r in ROUTE) and any(r["fn"] == "lmcdf" and r["c"] == 5 for r in VAL)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -245,8 +268,8 @@ def test_router_errors():
         (lambda: ltratio_cdf(0, D, engine="classical"), ValueError, "the classical engine has the cases"),
         (lambda: ltratio_cdf(0, D, method="double"), ValueError, "names a representation"),
         (lambda: ltratio_cdf(0, "DU", method="double", engine="general"), ValueError, "names a representation"),
-        (lambda: ltratio_cdf(0, "DU", start="stationary"), ValueError, "apply to a design"),
-        (lambda: ltratio_cdf(0, "DU", gls=-7), ValueError, "apply to a design"),
+        (lambda: ltratio_cdf(0, "DU", start="stationary"), ValueError, "start applies to a design"),
+        (lambda: ltratio_cdf(0, "DU", gls=-7), ValueError, "gls applies to a design"),
         (lambda: ltratio_cdf(0, D, g0=1, start="zero"), ValueError, "excludes a fixed start"),
         (lambda: ltratio_cdf(0, D, g0=1, start="stationary"), ValueError, "exclude each other"),
         (lambda: ltratio_cdf(0, "DU", -600, engine="auto"), ValueError, "at least -550"),
@@ -256,9 +279,15 @@ def test_router_errors():
         (lambda: ltratio_mom(2, "DG", engine="classical"), ValueError, "not available"),
         (lambda: coef_icdf(0.05, D, method="single"), ValueError, "names a representation"),
         (lambda: adfmax_cdf(-2, "DK", engine="auto"), ValueError, "the case must be one of DU, DT, SU, ST"),
-        (lambda: adfmax_cdf(-2, trend(-1), engine="classical"), ValueError, "ADFmax of the classical engine"),
+        (lambda: adfmax_cdf(-2, trend(-1), engine="classical"), ValueError, "the classical engine's ADFmax"),
+        (lambda: adfmax_cdf(-2, "DU", g0=1.0), ValueError, "with a zero or a stationary start only"),
+        (lambda: adfmax_icdf(0.05, "DU", g0=1.0, engine="classical"), ValueError, "with a zero or a stationary start"),
         (lambda: ltratio_lincdf(0, -2, D, engine="classical"), ValueError, "the linear form of the classical engine"),
-        (lambda: ltratio_lincdf(0, -2, "DK", g0=1), ValueError, "apply to a design"),
+        (lambda: ltratio_lincdf(0, -2, "DK", g0=1), ValueError, "zero start only"),
+        (lambda: ltratio_lincdf(0, -2, "DG", g0=1, engine="auto"), ValueError, "case DG has a zero start"),
+        (lambda: ltratio_lincdf(0, -2, "DK", start="fixed"), ValueError, "apply to a design"),
+        (lambda: ltratio_region({"type": "line", "a": -3.5, "b": 0}, "DK", g0=1.0), ValueError, "case DK only"),
+        (lambda: power_envelope(-5, "DK", alpha=1.5, engine="auto"), ValueError, r"must lie in \(0, 1\)"),
         (lambda: power_envelope(-5, D, engine="classical"), ValueError, "the envelope of the classical engine"),
         (lambda: ltratio_region({"type": "wap", "k": 3.6658, "omega": 10}, D), ValueError, "not available by the general"),
         (lambda: ltratio_region({"type": "line", "a": -3.5, "b": 0, "v0": 0.1}, "DK", engine="general"), ValueError,
@@ -351,3 +380,75 @@ def test_threads_and_concurrent_calls():
         np.testing.assert_allclose(o, ref, rtol=1e-13)
     dflimit.empty_caches()
     np.testing.assert_allclose(dist_cdf(D, x, -5), ref, rtol=1e-12)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# the repairs of the C engine of November 2026
+# ---------------------------------------------------------------------------------------------------------------------
+def test_adfmax_with_a_fixed_start():
+    """ADFmax with a fixed start goes to the general engine through the router (a case code, a design), and agrees with
+    the general engine forced; the classical engine refuses it"""
+    x = [-3.0, -2.4, -1.5]
+    G = adfmax_cdf(x, trend(0), -5, g0=1.5, engine="general")
+    same(adfmax_cdf(x, "DU", -5, g0=1.5, engine="auto"), G)
+    same(adfmax_cdf(x, trend(0), -5, g0=1.5), G)
+    same(adfmax_cdf(x, trend(0), -5, g0=1.5, start="fixed"), G)
+    zero = adfmax_cdf(x, "DU", -5)
+    assert np.max(np.abs(G - zero)) > 1e-3                  # (not the zero start, which the router had computed)
+    np.testing.assert_allclose(adfmax_pdf(x, "DT", -5, g0=1.0, engine="auto"),
+                               adfmax_pdf(x, trend(1), -5, g0=1.0, engine="general"), rtol=1e-14)
+    q = adfmax_icdf(0.05, "DU", -5, g0=1.5, engine="auto")
+    assert q == pytest.approx(adfmax_quantile(trend(0), 0.05, -5, start="fixed", gamma0=1.5), abs=1e-12)
+    assert adfmax_cdf(q, trend(0), -5, g0=1.5) == pytest.approx(0.05, abs=1e-9)
+
+
+def test_a_fixed_start_of_case_dk():
+    """the regions and the linear form of case DK with a fixed start take the general engine (the classical engine has
+    the zero start only)"""
+    bnd = {"type": "line", "a": -3.5, "b": -0.2639}
+    P = ltratio_region(bnd, "DK", -5, g0=1.5, engine="auto")
+    assert P == pytest.approx(ltratio_region(bnd, trend(-1), -5, g0=1.5), abs=1e-14)
+    assert P == pytest.approx(lin_cdf(trend(-1), -0.2639, -3.5, -5, gamma0=1.5), abs=1e-14)
+    assert abs(P - ltratio_region(bnd, "DK", -5)) > 0.1
+    assert ltratio_lincdf(-0.2639, -3.5, "DK", -5, g0=1.5, engine="general") == pytest.approx(P, abs=1e-14)
+
+
+def test_the_law_of_v_off_its_support():
+    """P(V <= b) and its density are 0 at b <= 0"""
+    for D in (trend(-1), trend(1), perron("A", 0.5)):
+        np.testing.assert_array_equal(v_cdf(D, [-1.0, -1e-3, 0.0]), 0)
+        np.testing.assert_array_equal(v_pdf(D, [-1.0, 0.0]), 0)
+        np.testing.assert_array_equal(lin_cdf(D, [-0.5, 0.0], math.nan, -5), 0)
+        np.testing.assert_array_equal(lin_pdf(D, [-0.5, 0.0], math.nan, -5), 0)
+    np.testing.assert_array_equal(ltratio_lincdf([-0.5, 0.0], math.nan, perron("A", 0.5), -5), 0)
+
+
+def test_refusals():
+    """the refusals of the general engine are ValueErrors with messages that say what to change"""
+    # (the design (1 + r, 1{r <= 0.4}), refused at every c: the err line of the reference file)
+    with pytest.raises(ValueError, match="at most 10"):
+        lm_cdf(trend(1), -0.5, 11)
+    with pytest.raises(ValueError, match="at most 10"):
+        lm_quantile(trend(1), 0.05, c=10.5)
+    with pytest.raises(ValueError, match=r"does not resolve.*needs N >= (\d+)") as e:
+        pt_cdf(trend(1), [4.0, 10.0], -13.5, 3.8)
+    N = int(re.search(r"needs N >= (\d+)", str(e.value)).group(1))
+    F = pt_cdf(trend(1), [4.0, 10.0, 30.0], -13.5, 3.8, N=N)       # (the grid it names serves)
+    assert np.all((F >= 0) & (F <= 1)) and np.all(np.diff(F) > 0)
+    with pytest.raises(ValueError, match="beyond the range"):
+        pt_cdf(trend(1), 2000.0, -13.5)
+    assert pt_cdf(trend(1), 999.0, -13.5) == pytest.approx(1, abs=1e-9)
+    for f in (lambda: pt_quantile(trend(1), 1.0, -13.5), lambda: dist_quantile(trend(1), math.nan),
+              lambda: pt_envelope(trend(1), [-5.0], level=0.0), lambda: adfmax_quantile(trend(0), -0.1)):
+        with pytest.raises(ValueError, match=r"must lie in \(0, 1\)"):
+            f()
+
+
+def test_the_lm_statistic_above_the_unit_root():
+    """the LM statistic above the unit root is a distribution function (on the path of V alone; it exceeded 1 on the
+    vertical line)"""
+    x = np.linspace(-1.5, -0.02, 12)
+    for c in (2.5, 5.0, 10.0):
+        F = lm_cdf(trend(1), x, c)
+        assert np.all((F >= 0) & (F <= 1 + 1e-12)) and np.all(np.diff(F) >= -1e-12)
+

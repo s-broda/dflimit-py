@@ -5,9 +5,11 @@
 
 The script only reads the dflimit-matlab checkout.  Its file c/test/det_ref.txt (the values of the Julia general engine
 of DFLimit.jl, written by c/test/det_ref.jl, and the test of the C engine, c/dfl_test_det.c) is copied line by line,
-unchanged, into tests/ref/det_ref.txt: every design line, the user-level values ('val') chosen by the rules below and
-every line of the router ('route').  The lines of the engine's layers (prep, model, dval, roots, tstar, path) and of its
-rule (auto) are left out: the package does not reach those layers, and the C engine's own test checks them.
+unchanged, into tests/ref/det_ref.txt: every design line, the user-level values ('val') chosen by the rules below,
+every line of the router ('route'), and the calls that must fail ('err' of the general engine's functions, 'rerr' of
+the router) except those of ADFmax with GLS detrending or a local null value c0 != 0, which the package's ADFmax
+functions have no arguments for.  The lines of the engine's layers (prep, model, dval, roots, tstar, path, lmtstar) and
+of its rule (auto) are left out: the package does not reach those layers, and the C engine's own test checks them.
 
 The rules keep the suite short (about 30 seconds on two threads) and cover every constructor, the three starts, GLS
 detrending, a local null value, each function of the general engine and each companion: the distribution function and
@@ -29,6 +31,13 @@ KEEP = {
     "mzacdf": {3},
     "msbcdf": {3, 5},
 }
+
+
+def keep_err(tag, v):
+    """Whether an err or rerr line (split, without the text) is kept: not ADFmax with gls or c0 != 0."""
+    if tag == "err":
+        return not (v[1].startswith("adf") and (v[3] != "NaN" or float(v[7]) != 0))
+    return not (v[1].startswith("adf") and v[7] != "NaN")
 
 
 def keep_val(v):
@@ -61,31 +70,35 @@ def main():
                                 text=True, check=True).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         commit = "unknown"
-    out, counts = [], {"design": 0, "val": 0, "route": 0}
-    total = {"val": 0, "route": 0}
+    out, counts = [], {"design": 0, "val": 0, "route": 0, "err": 0, "rerr": 0}
+    total = {"val": 0, "route": 0, "err": 0, "rerr": 0}
     with open(src) as fh:
         for line in fh:
-            v = line.split()
+            v = line.split(" | ")[0].split()
             if not v:
                 continue
             tag = v[0]
             if tag in total:
                 total[tag] += 1
-            if tag == "design" or tag == "route" or (tag == "val" and keep_val(v)):
+            if (tag == "design" or tag == "route" or (tag == "val" and keep_val(v))
+                    or (tag in ("err", "rerr") and keep_err(tag, v))):
                 out.append(line if line.endswith("\n") else line + "\n")
                 counts[tag] += 1
     head = [
         f"# a subset of c/test/det_ref.txt of dflimit-matlab (commit {commit}): the values of the Julia general engine of\n",
         f"# DFLimit.jl, copied unchanged by tools/det-ref.py: {counts['design']} designs, {counts['val']} of {total['val']} "
-        f"val lines, {counts['route']} of {total['route']} route lines.\n",
+        f"val lines, {counts['route']} of {total['route']} route lines, {counts['err']} of {total['err']} err lines and "
+        f"{counts['rerr']} of {total['rerr']} rerr lines.\n",
         "# design id spec: trend p | perron M q lam... | ltrend p | fdesign name | matrix base n | first base | raw np deg K loc br... C...\n",
         "# val func id cbar start g0 c c0 verified par n x... nv values... tol [brittle]   (start 0 zero, 1 fixed, 2 stationary)\n",
         "# route func engine case|design a b g0 gls c c0 par n x... nv values... tol   (engine 0 auto, 1 classical, 2 general;\n",
         "#   a, b: the model and the start of a case, or the design id and its start)\n",
+        "# err and rerr: the arguments of val and route without the values, then ' | ' and a text of the error's message\n",
     ]
     with open(dst, "w", newline="\n") as fh:
         fh.writelines(head + out)
-    print(f"wrote {dst}: {counts['design']} designs, {counts['val']} val lines, {counts['route']} route lines")
+    print(f"wrote {dst}: {counts['design']} designs, {counts['val']} val lines, {counts['route']} route lines, "
+          f"{counts['err']} err lines, {counts['rerr']} rerr lines")
 
 
 if __name__ == "__main__":

@@ -103,17 +103,22 @@ def det_designs(path=None):
 
 
 def det_lines(tag, path=None):
-    """The lines of ref/det_ref.txt (or of the file path) with the tag 'val' or 'route', parsed."""
+    """The lines of ref/det_ref.txt (or of the file path) with the tag 'val', 'route' (values), 'err' or 'rerr' (calls
+    that must fail with an error whose message contains the text after ' | '), parsed."""
     out = []
     with open(path or os.path.join(REF, "det_ref.txt")) as fh:
         for line in fh:
+            text = None
+            if " | " in line:
+                line, text = line.split(" | ", 1)
+                text = text.strip()
             v = line.split()
             if not v or v[0] != tag:
                 continue
-            r = {"fn": v[1], "brittle": v[-1] == "brittle"}
+            r = {"fn": v[1], "brittle": v[-1] == "brittle", "text": text}
             if r["brittle"]:
                 v = v[:-1]
-            if tag == "val":
+            if tag in ("val", "err"):
                 r.update(id=int(v[2]), cb=_f(v[3]), st=int(v[4]), g0=_f(v[5]), c=_f(v[6]), c0=_f(v[7]), ver=bool(int(v[8])),
                          par=_f(v[9]))
                 k = 10
@@ -124,14 +129,17 @@ def det_lines(tag, path=None):
             n = int(v[k])
             r["x"] = np.array([_f(t) for t in v[k + 1:k + 1 + n]])
             k += 1 + n
-            nw = int(v[k])
-            r["want"] = np.array([_f(t) for t in v[k + 1:k + 1 + nw]])
-            r["tol"] = _f(v[k + 1 + nw])
+            if text is None:
+                nw = int(v[k])
+                r["want"] = np.array([_f(t) for t in v[k + 1:k + 1 + nw]])
+                r["tol"] = _f(v[k + 1 + nw])
             out.append(r)
     return out
 
 
 def det_label(r):
+    if r.get("text"):
+        return det_label({**r, "text": None}) + f" (error: {r['text']})"
     if "id" in r:
         s = f"{r['fn']} design {r['id']} c={r['c']:g}"
         if not math.isnan(r["cb"]):
@@ -185,10 +193,13 @@ def det_value(r, D):
         return f(x, G, c, start=kw["start"], engine="general")
     if fn == "adfq":
         return d.adfmax_quantile(G, x[0], c, x0=par, tol=1e-10, start=kw["start"])
-    if fn == "env":
-        return d.power_envelope(x, G, alpha=par, engine="general")
+    if fn == "env":                                  # (the general engine's envelope, as the C test calls it)
+        from dflimit import _general
+        return _general._values(_general.DET_ENV, G, x, 0.0, _general._NOOPTS, par, name="cs")
     if fn == "ptcdf":
         return d.pt_cdf(G, x, par, c)
+    if fn == "ptcdfN":                               # (the field c0 carries the grid size N)
+        return d.pt_cdf(G, x, par, c, N=int(c0))
     if fn == "ptpdf":
         return d.pt_pdf(G, x, par, c)
     if fn == "ptq":
@@ -222,7 +233,7 @@ def det_route(r, D):
     fn, x, c, c0, par, eng = r["fn"], r["x"], r["c"], r["c0"], r["par"], ENGINES[r["e"]]
     if r["spec"] == "case":
         cas = "DG" if r["a"] == 4 else ("S" if r["st"] == 2 else "D") + "KUT"[r["a"] - 1]
-        kw = dict(g0=r["g0"])
+        kw = dict(g0=r["g0"]) if math.isnan(r["gl"]) or fn == "lin" else dict(g0=r["g0"], gls=r["gl"])
     else:
         cas = D[r["a"]]
         kw = dict(g0=r["g0"], start=STARTS[r["st"]], gls=None if math.isnan(r["gl"]) else r["gl"])
@@ -243,11 +254,11 @@ def det_route(r, D):
         return d.power_envelope(x, cas, alpha=par, engine=eng)
     if fn in ("adf", "adfpdf"):
         f = d.adfmax_cdf if fn == "adf" else d.adfmax_pdf
-        return f(x, cas, c, engine=eng)
+        return f(x, cas, c, engine=eng, g0=r["g0"], **({} if r["spec"] == "case" else {"start": kw["start"]}))
     if fn == "region1":
-        return d.ltratio_region({"type": "line", "a": par, "b": x[0]}, cas, c, engine=eng)
+        return d.ltratio_region({"type": "line", "a": par, "b": x[0]}, cas, c, engine=eng, **kw)
     if fn == "region2":
-        return d.ltratio_region({"type": "parabola", "x": x[0]}, cas, c, engine=eng)
+        return d.ltratio_region({"type": "parabola", "x": x[0]}, cas, c, engine=eng, **kw)
     raise ValueError(f"unknown function {fn}")
 
 
