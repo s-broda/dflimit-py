@@ -9,7 +9,7 @@ from . import _engine, _general
 from ._ltratio import CASES_DOC, ERRORS_DOC, R_COEF, R_COEF_ICDF, ROUTE_DOC, _classical, ltratio_cdf
 from ._route import (AUTO, DESIGN_DOC, ENGINE_DOC, F_DIST, GENERAL, NO_METHOD, classical_ok, det_opts, engine_of,
                      route_tuple, spec_of, warn_brittle, warn_lines)
-from ._utils import dfl_case, dfl_flag, dfl_method, dfl_num, dfl_real, dfl_shape, f64, fill_doc, warn
+from ._utils import dfl_flag, dfl_method, dfl_num, dfl_real, dfl_shape, f64, fill_doc, warn
 
 COEF_PARAMS_DOC = """\
 cas : str or Design

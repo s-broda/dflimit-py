@@ -14,7 +14,7 @@ import numpy as np
 
 from . import _engine
 from ._design import Design, classical_case, trend
-from ._utils import CASES, dfl_case, dfl_flag, dfl_num, warn
+from ._utils import CASES, dfl_case, dfl_num, warn
 
 AUTO, CLASSICAL, GENERAL = 0, 1, 2
 _ENGINES = {"auto": AUTO, "classical": CLASSICAL, "general": GENERAL}
