@@ -21,8 +21,8 @@
  * The general engine (dfl_det_*: any deterministic design) and the router over the two engines (dfl_engine_*) are
  * reached through the second half of this file.  A design crosses the gateway as the tuple (br, C, K, deg, loc, first)
  * of the Python class Design (br and C as bytes in the engine's layout of dfl_design); it is only read by the engine.
- * Their warnings (dfl_det_warning and, for the router, dfl_warning; thread-local, on the calling thread) are returned as
- * strings with the results and become RuntimeWarnings in the Python layer.  The design given by a Python function
+ * Their warnings (dfl_det_warning and, for the router, dfl_warning; thread-local, on the calling thread; cleared before
+ * each call) are returned as strings with the results and become RuntimeWarnings in the Python layer.  The design given by a Python function
  * (fdesign) is built with the GIL held and outside the engine lock: its callback runs on the calling thread only, and
  * the construction of a design uses neither the worker threads nor the caches. */
 #include <Python.h>
@@ -319,19 +319,15 @@ static int spec_in(PyObject *t, spec_arg *s)
     return 0;
 }
 
-/* the warnings of a call of the general engine or the router: dfl_det_warning and dfl_warning, copied on the calling
- * thread before the engine lock is released.  Neither is reset by every function (the router's classical paths leave
- * the general engine's warning, and its general paths the classical one; dfl_design_from_matrix does not reset it), so
- * both are reset before each call by calls that only reset them and return at their first check (a design NULL, a model
- * 0). */
+/* the warnings of a call of the general engine or the router: dfl_det_warning and dfl_warning, cleared before the call
+ * (dfl_det_warning_clear, dfl_warning_clear) and copied on the calling thread before the engine lock is released */
 #define DETWARNLEN 2048
 #define CLSWARNLEN 1024
 typedef struct { char det[DETWARNLEN], cls[CLSWARNLEN]; } warn_t;
 static void warn_reset(void)
 {
-    char e[128];
-    (void) dfl_det_dist(2, NULL, 0, NULL, 0.0, NULL, NULL, e, sizeof e);
-    (void) dfl_icdf(0, NULL, 0, 0.0, 0.0, 0.0, false, 0, 1e-10, NULL, NULL, NULL, NULL, NULL, NULL, e, sizeof e);
+    dfl_det_warning_clear();
+    dfl_warning_clear();
 }
 /* appends the messages of s (lines) that buf does not hold yet */
 static void warn_add(char *buf, size_t len, const char *s)
@@ -709,6 +705,22 @@ done:
     PyMem_Free(out); PyMem_Free(xc);
     return res;
 }
+/* automethod(model, c, c0, g0, stat, x) -> bytearray of C ints: the classical engine's automatic method at the points x
+ * (1 the line, 2 the conditional, 3 the contour integral): dfl_automethod */
+static PyObject *py_automethod(PyObject *self, PyObject *args)
+{
+    PyObject *xb, *res = NULL;
+    int model, stat, n = 0, *out = NULL;
+    double c, c0, g0, *xc = NULL;
+    if (!PyArg_ParseTuple(args, "idddiO:automethod", &model, &c, &c0, &g0, &stat, &xb)) return NULL;
+    const double *x = in_doubles(xb, "x", &n, &xc);
+    if (x == NULL || (out = scratch(n, sizeof(int))) == NULL) goto done;
+    for (int k = 0; k < n; k++) out[k] = dfl_automethod(model, c, c0, g0, stat != 0, x[k]);
+    res = out_bytes(out, n, sizeof(int));
+done:
+    PyMem_Free(out); PyMem_Free(xc);
+    return res;
+}
 /* check_args(model, c, c0, g0, stat) -> "" or the message of the classical engine's checks: dfl_check_args */
 static PyObject *py_check_args(PyObject *self, PyObject *args)
 {
@@ -753,6 +765,7 @@ static PyMethodDef METHODS[] = {
     {"route_lin", py_route_lin, METH_VARARGS, "route_lin(b, a, model, c, cbar, engine) -> (out, warning, warning): dfl_engine_lincdf"},
     {"route_env", py_route_env, METH_VARARGS, "route_env(c, model, alpha, engine) -> (out, warning, warning): dfl_engine_envelope"},
     {"autoengine", py_autoengine, METH_VARARGS, "autoengine(f, model, stat, g0, gls, c, c0, x) -> engines (1 general): dfl_autoengine"},
+    {"automethod", py_automethod, METH_VARARGS, "automethod(model, c, c0, g0, stat, x) -> methods: dfl_automethod"},
     {"check_args", py_check_args, METH_VARARGS, "check_args(model, c, c0, g0, stat) -> message or '': dfl_check_args"},
     {"brittle", py_brittle, METH_VARARGS, "brittle(kind, model, c, c0, g0, stat, method) -> message or '': dfl_brittle"},
     {NULL, NULL, 0, NULL}
