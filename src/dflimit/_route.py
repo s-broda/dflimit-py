@@ -2,10 +2,10 @@
 design (its start, fixed start and GLS detrending), the options of the general engine, the checks of the classical
 engine, and the warnings of the engine (the router: dfl_engine_* in csrc/dfl_det_route.c).
 
-A computation names a case string of the classical engine ("DK", ..., "DG") or a Design.  engine=None (the default)
-keeps the classical engine for a case string, so that its values are those of before, and takes the router's rule for a
-design; "auto" is the rule (dfl_autoengine: the classical engine where it accepts the arguments and is the faster or the
-more accurate, the general engine elsewhere), "classical" and "general" force one engine.
+A computation names a case string of the classical engine ("DK", ..., "DG") or a Design.  engine="auto" (the default,
+also given as None) is the router's rule for both (dfl_autoengine: the classical engine where it accepts the arguments and
+is the faster or the more accurate, the general engine elsewhere); "classical" and "general" force one engine, and
+engine="classical" gives for a case string the values of the classical engine, those of the earlier versions.
 """
 import math
 from collections import namedtuple
@@ -30,11 +30,12 @@ NO_METHOD = ("method names a representation of the classical engine; it does not
 F_DIST, F_ICDF, F_MOM, F_LINCDF, F_ADFMAX, F_ENVELOPE, F_REGION = 1, 2, 3, 4, 5, 6, 7
 
 ENGINE_DOC = """\
-engine : {None, "auto", "classical", "general"}, default None
-    The engine: ``None`` takes the classical engine for a case string (the values of before) and ``"auto"`` for a
-    design; ``"auto"`` takes the router's rule, the faster or the more accurate engine where the classical engine
-    accepts the arguments and the general engine elsewhere; ``"classical"`` and ``"general"`` force one (see the
-    README, "The general engine")."""
+engine : {"auto", "classical", "general"}, default "auto"
+    The engine: ``"auto"`` (also ``None``) takes the router's rule, for a case string as for a design: the faster or
+    the more accurate engine where the classical engine accepts the arguments (where it takes the general engine for
+    a case string the two engines agree to about 1e-9) and the general engine elsewhere; ``"classical"`` and
+    ``"general"`` force one, and ``"classical"`` gives the values of the classical engine, those of the earlier
+    versions (see the README, "The general engine")."""
 
 DESIGN_DOC = """\
 start : {None, "zero", "fixed", "stationary"}, optional
@@ -46,9 +47,9 @@ gls : float, optional
 
 
 def dfl_engine(engine):
-    """The engine code, or None."""
+    """The engine code (None: "auto")."""
     if engine is None:
-        return None
+        return AUTO
     if not isinstance(engine, str):
         raise TypeError(_ENGINE_MSG)
     try:
@@ -151,10 +152,8 @@ def classical_ok(S, c, c0, me=0):
 
 
 def engine_of(S, engine):
-    """The engine code of a call: engine=None is the classical engine for a case string, the rule for a design."""
+    """The engine code of a call (engine="auto": "auto", for a case string as for a design)."""
     e = dfl_engine(engine)
-    if e is None:
-        e = CLASSICAL if S.named else AUTO
     if e == CLASSICAL and S.case is None:
         raise ValueError(NOT_CLASSICAL)
     return e

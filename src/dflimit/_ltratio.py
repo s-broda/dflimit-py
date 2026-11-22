@@ -108,7 +108,7 @@ REFERENCES_DOC = """\
 
 @fill_doc(params=PARAMS_DOC, errors=ERRORS_DOC, cases=CASES_DOC, methods=METHODS_DOC, references=REFERENCES_DOC,
           engine=ENGINE_DOC, design=DESIGN_DOC, route=ROUTE_DOC)
-def ltratio_cdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engine=None, start=None, gls=None):
+def ltratio_cdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engine="auto", start=None, gls=None):
     """Distribution function of the limit of the Dickey-Fuller t-ratio.
 
     The limit, as the sample size grows, of the distribution function of the least squares t-ratio of the
@@ -182,7 +182,7 @@ def ltratio_cdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engin
 
 @fill_doc(params=PARAMS_DOC, errors=ERRORS_DOC, cases=CASES_DOC, methods=METHODS_DOC, references=REFERENCES_DOC,
           engine=ENGINE_DOC, design=DESIGN_DOC, route=ROUTE_DOC)
-def ltratio_pdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engine=None, start=None, gls=None):
+def ltratio_pdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engine="auto", start=None, gls=None):
     """Density of the limit of the Dickey-Fuller t-ratio.
 
     The density of the limit tau = (U - c0 V)/sqrt(V) of `ltratio_cdf`, under phi = 1 + c/n, phi0 = 1 + c0/n.
@@ -245,7 +245,7 @@ def _classical(S, e, c, c0, me, ve):
     return e == CLASSICAL or (e == AUTO and (me != 0 or ve) and (S.named or classical_ok(S, c, c0, me)))
 
 
-def _dist(kind, x, cas, c, c0, g0, method, verified=False, engine=None, start=None, gls=None):
+def _dist(kind, x, cas, c, c0, g0, method, verified=False, engine="auto", start=None, gls=None):
     S = spec_of(cas, g0, start, gls)
     e = engine_of(S, engine)
     me = dfl_method(method)
@@ -278,7 +278,7 @@ def _dist_classical(kind, x, cas, c, c0, g0, me, ve):
 
 @fill_doc(params=PARAMS_DOC, errors=ERRORS_DOC, cases=CASES_DOC, references=REFERENCES_DOC, engine=ENGINE_DOC,
           design=DESIGN_DOC, route=ROUTE_DOC)
-def ltratio_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-10, info=False, verified=False, *, engine=None, start=None,
+def ltratio_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-10, info=False, verified=False, *, engine="auto", start=None,
                  gls=None):
     """Quantiles of the limit of the Dickey-Fuller t-ratio.
 
@@ -381,7 +381,7 @@ def _icdf_classical(p, cas, c, c0, g0, me, tol, info, ve):
 
 @fill_doc(errors=ERRORS_DOC, cases=CASES_DOC, references=REFERENCES_DOC, engine=ENGINE_DOC, design=DESIGN_DOC,
           route=ROUTE_DOC)
-def ltratio_mom(p, cas, c=0, c0=0, g0=0, info=False, *, engine=None, start=None, gls=None):
+def ltratio_mom(p, cas, c=0, c0=0, g0=0, info=False, *, engine="auto", start=None, gls=None):
     """Moments of the limit of the Dickey-Fuller t-ratio.
 
     The moments E[tau^j], j = 1, ..., p, of the limit tau = (U - c0 V)/sqrt(V) of `ltratio_cdf`, as one-dimensional

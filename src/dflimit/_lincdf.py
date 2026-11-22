@@ -6,7 +6,7 @@ import numpy as np
 
 from . import _engine, _general
 from ._design import Design, is_trend
-from ._route import AUTO, CLASSICAL, ENGINE_DOC, GENERAL, dfl_engine, spec_of, warn_lines
+from ._route import CLASSICAL, ENGINE_DOC, GENERAL, dfl_engine, spec_of, warn_lines
 from ._ltratio import ERRORS_DOC
 from ._utils import dfl_case, dfl_num, dfl_real, dfl_shape, f64, fill_doc
 
@@ -21,7 +21,7 @@ ERS_REFERENCE_DOC = """\
 
 
 @fill_doc(errors=ERRORS_DOC, references=ERS_REFERENCE_DOC, engine=ENGINE_DOC, route=LIN_ROUTE_DOC)
-def ltratio_lincdf(b, a, cas, c=0, cbar=-13.5, *, engine=None, start=None, g0=0, gls=None):
+def ltratio_lincdf(b, a, cas, c=0, cbar=-13.5, *, engine="auto", start=None, g0=0, gls=None):
     """Limiting distribution of the linear form U - aV.
 
     The limit of P(U - aV <= b) under phi = 1 + c/n, zero start, no drift, with U and V as in `ltratio_cdf`: case
@@ -109,7 +109,6 @@ def ltratio_lincdf(b, a, cas, c=0, cbar=-13.5, *, engine=None, start=None, g0=0,
     if isinstance(cas, Design):
         S = spec_of(cas, g0, start, gls)
         case = S.case if S.case in ("DK", "DG") and S.start == 0 else None
-        e = AUTO if e is None else e
         if case is None or e == GENERAL:
             if e == CLASSICAL:
                 raise ValueError("engine='classical': the linear form of the classical engine has the cases DK and DG only "
@@ -122,12 +121,12 @@ def ltratio_lincdf(b, a, cas, c=0, cbar=-13.5, *, engine=None, start=None, g0=0,
     if not isinstance(cas, Design) and dfl_num(g0, "g0") != 0:
         if case == "DG":
             raise ValueError("case DG has a zero start; a fixed start g0 applies to case DK and to designs")
-        if e is None or e == CLASSICAL:
+        if e == CLASSICAL:
             raise ValueError("the classical engine's linear form has a zero start only (a fixed start g0 in case DK: "
                              "engine='auto' or 'general', or a design)")
         return _general_lin(b, a, spec_of("DK", g0), c)
     x = dfl_real(b, "b")
-    if e is None or e == CLASSICAL:
+    if e == CLASSICAL:
         P = _engine.lincdf(x.tobytes(), float(a), model, dfl_num(c, "c"), dfl_num(cbar, "cbar"))
         return dfl_shape(f64(P), x)
     P, wd, wc = _engine.route_lin(x.tobytes(), float(a), model, dfl_num(c, "c"), dfl_num(cbar, "cbar"), e)
@@ -143,7 +142,7 @@ def _general_lin(b, a, S, c):
 
 
 @fill_doc(errors=ERRORS_DOC, references=ERS_REFERENCE_DOC, engine=ENGINE_DOC)
-def power_envelope(c, cas="DK", alpha=0.05, *, engine=None):
+def power_envelope(c, cas="DK", alpha=0.05, *, engine="auto"):
     """Asymptotic power envelope of Elliott, Rothenberg and Stock (1996).
 
     The power at ``c`` of the point-optimal level-``alpha`` test against ``c`` itself, the envelope of the powers
@@ -206,7 +205,6 @@ def power_envelope(c, cas="DK", alpha=0.05, *, engine=None):
     e = dfl_engine(engine)
     if isinstance(cas, Design):
         case = "DK" if is_trend(cas, -1) or is_trend(cas, 0) else "DG" if is_trend(cas, 1) else None
-        e = AUTO if e is None else e
         if case is None:
             if e == CLASSICAL:
                 raise ValueError("engine='classical': the envelope of the classical engine has the cases DK (DU) and DG "
@@ -215,7 +213,7 @@ def power_envelope(c, cas="DK", alpha=0.05, *, engine=None):
         cas = case
     _, model, _ = dfl_case(cas, ("DK", "DU", "DG"))
     x = dfl_real(c, "c")
-    if e is None or e == CLASSICAL:
+    if e == CLASSICAL:
         E = _engine.envelope(x.tobytes(), 4 if model == 4 else 1, dfl_num(alpha, "alpha"))
         return dfl_shape(f64(E), x)
     E, wd, wc = _engine.route_env(x.tobytes(), 4 if model == 4 else 1, dfl_num(alpha, "alpha"), e)

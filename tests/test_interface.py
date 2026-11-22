@@ -59,10 +59,11 @@ def test_scalars_give_floats_and_arrays_keep_their_shape():
 
 
 def test_info_results():
-    r = ltratio_icdf(0.05, "DU", info=True)
+    # (the information of the classical engine, engine="classical"; the router's, the default, has q and F)
+    r = ltratio_icdf(0.05, "DU", info=True, engine="classical")
     assert set(r) == {"q", "F", "iter", "conv"}
     assert r.q == r["q"] and type(r.q) is float and type(r.iter) is int and r.conv is True
-    r = ltratio_icdf([0.05, 0.1], "DU", info=True)
+    r = ltratio_icdf([0.05, 0.1], "DU", info=True, engine="classical")
     assert r.q.shape == r.F.shape == r.iter.shape == r.conv.shape == (2,) and r.conv.dtype == bool
     r = ltratio_mom(2, "DU", info=True)
     assert set(r) == {"m", "err"} and r.m.shape == r.err.shape == (2,)
@@ -79,7 +80,8 @@ def test_engine_errors_become_value_errors():
         (lambda: ltratio_cdf(0, "DU", -600), "at least -550"),
         (lambda: ltratio_cdf(0, "SU", 1), r"requires c <= -1e-4"),
         (lambda: ltratio_cdf(0, "DU", -5, g0=3), "fixed start"),
-        (lambda: ltratio_cdf(0, "SU", -5, g0=1), "applies to cases DK, DU, DT"),
+        (lambda: ltratio_cdf(0, "SU", -5, g0=1, engine="classical"), "applies to cases DK, DU, DT"),
+        (lambda: ltratio_cdf(0, "SU", -5, g0=1), "exclude each other"),
         (lambda: ltratio_mom(2, "DG"), "not available"),
         (lambda: ltratio_cdf(0, "DG", method="double"), "single integral only"),
         (lambda: ltratio_icdf(1, "DU"), r"\(0, 1\)"),
@@ -100,7 +102,8 @@ def test_engine_errors_become_value_errors():
         (lambda: ltratio_lincdf(0, 1, "DU"), "the case must be one of DK, DG"),
         (lambda: ltratio_lincdf(0, 1, "DK", c=math.inf), "finite"),
         (lambda: power_envelope(-5, "DT"), "the case must be one of DK, DU, DG"),
-        (lambda: power_envelope(-5, alpha=2), "no sign change"),
+        (lambda: power_envelope(-5, alpha=2, engine="classical"), "no sign change"),
+        (lambda: power_envelope(-5, alpha=2), r"the level must lie in \(0, 1\)"),
     ]
     for fun, msg in cases:
         with pytest.raises(ValueError, match=msg):
@@ -198,11 +201,12 @@ def test_warnings(monkeypatch):
         monkeypatch.setattr(mod, "_engine", fake)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        ltratio_cdf([-1, 0], "DU", method="auto")                        # (no warning without method double)
+        ltratio_cdf([-1, 0], "DU", method="auto", engine="classical")    # (no warning without method double)
+    # (the warnings of the classical entry points, engine="classical"; the fake engine has no router)
     cases = [
         (lambda: ltratio_cdf([-1, 0], "DU", method="double", verified=True), "did not meet its error estimate at 2 of 2 points"),
-        (lambda: ltratio_icdf([0.1, 0.2, 0.3], "DU"), "Newton's method did not converge at 3 of 3 points"),
-        (lambda: adfmax_cdf(-2, "DU"), "at 1 of 1 points; the result may be inaccurate there"),
+        (lambda: ltratio_icdf([0.1, 0.2, 0.3], "DU", engine="classical"), "Newton's method did not converge at 3 of 3 points"),
+        (lambda: adfmax_cdf(-2, "DU", engine="classical"), "at 1 of 1 points; the result may be inaccurate there"),
         (lambda: ltratio_region({"type": "line", "a": -3.5, "b": 0}), "the error estimate 1.0e-03 is above"),
     ]
     for fun, msg in cases:

@@ -16,12 +16,13 @@ def test_large_x_above_the_unit_root():
 
 
 def test_negative_c0_near_zero():
-    # more than 2 GB before: the conditional integral, with a warning where its values are flagged
+    # more than 2 GB before: the conditional integral, with a warning where its values are flagged (the classical engine;
+    # the default takes the general engine with a stationary start and c0 != 0 for c <= -3e-3)
     with pytest.warns(RuntimeWarning, match="flags some of them"):
-        F = ltratio_cdf(0.05, "SK", -1e-3, c0=-1e-3)
+        F = ltratio_cdf(0.05, "SK", -1e-3, c0=-1e-3, engine="classical")
     assert abs(F - 0.54749158678338294) < 1e-10
     with pytest.warns(RuntimeWarning, match="flags some of them"):
-        F = ltratio_cdf(1, "SK", -1e-2, c0=-1e-2)
+        F = ltratio_cdf(1, "SK", -1e-2, c0=-1e-2, engine="classical")
     assert abs(F - 0.87075930276798486) < 1e-10
     with pytest.warns(RuntimeWarning, match="exceed the bounds of the engine"):
         F = ltratio_cdf([-1, 0.05, 0.5, 1, 1.5], "SK", -1e-4, c0=-1e-4)

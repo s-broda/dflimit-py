@@ -54,7 +54,7 @@ ADFMAX_REFERENCES_DOC = """\
 
 @fill_doc(params=ADFMAX_PARAMS_DOC, errors=ERRORS_DOC, notes=ADFMAX_NOTES_DOC, references=ADFMAX_REFERENCES_DOC,
           route=ADFMAX_ROUTE_DOC)
-def adfmax_cdf(x, cas, c=0, info=False, *, engine=None, start=None, g0=0):
+def adfmax_cdf(x, cas, c=0, info=False, *, engine="auto", start=None, g0=0):
     """Distribution function of the limit of the ADFmax statistic of Leybourne (1995).
 
     Parameters
@@ -108,7 +108,7 @@ def adfmax_cdf(x, cas, c=0, info=False, *, engine=None, start=None, g0=0):
 
 @fill_doc(params=ADFMAX_PARAMS_DOC, errors=ERRORS_DOC, notes=ADFMAX_NOTES_DOC, references=ADFMAX_REFERENCES_DOC,
           route=ADFMAX_ROUTE_DOC)
-def adfmax_pdf(x, cas, c=0, info=False, *, engine=None, start=None, g0=0):
+def adfmax_pdf(x, cas, c=0, info=False, *, engine="auto", start=None, g0=0):
     """Density of the limit of the ADFmax statistic of Leybourne (1995).
 
     Parameters
@@ -167,7 +167,7 @@ def _adfspec(cas, start, g0, engine):
     return S, e
 
 
-def _adfmax(kind, x, cas, c, info, engine=None, start=None, g0=0):
+def _adfmax(kind, x, cas, c, info, engine="auto", start=None, g0=0):
     S, e = _adfspec(cas, start, g0, engine)
     if e != CLASSICAL:
         a = dfl_real(x, "x")
@@ -191,7 +191,7 @@ def _adfmax(kind, x, cas, c, info, engine=None, start=None, g0=0):
 
 @fill_doc(errors=ERRORS_DOC, notes=ADFMAX_NOTES_DOC, references=ADFMAX_REFERENCES_DOC, engine=ENGINE_DOC,
           route=ADFMAX_ROUTE_DOC)
-def adfmax_icdf(p, cas, c=0, tol=1e-10, x0=-2, *, engine=None, start=None, g0=0):
+def adfmax_icdf(p, cas, c=0, tol=1e-10, x0=-2, *, engine="auto", start=None, g0=0):
     """Quantiles of the limit of the ADFmax statistic of Leybourne (1995).
 
     `adfmax_icdf` has no entry point of its own in the C engine: as ``adfmax_icdf`` of the MATLAB and Julia programs,
@@ -272,7 +272,7 @@ def adfmax_icdf(p, cas, c=0, tol=1e-10, x0=-2, *, engine=None, start=None, g0=0)
     return dfl_shape(q, a)
 
 
-def _adfmax_quantile(pk, cas, c, tol, x0, engine=None):
+def _adfmax_quantile(pk, cas, c, tol, x0, engine="auto"):
     """One quantile by safeguarded Newton (adfmax_icdf of the R package and of the MATLAB and Julia programs)."""
     def cdf(y):
         return adfmax_cdf(y, cas, c, engine=engine)

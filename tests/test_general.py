@@ -14,7 +14,7 @@ import dflimit
 from dflimit import (Design, adfmax_cdf, adfmax_icdf, adfmax_pdf, adfmax_quantile, coef_cdf, coef_icdf, design_from_matrix, detrend_first, dist_cdf, dist_moments,
                      dist_pdf, dist_quantile, fdesign, lin_cdf, lin_pdf, lm_cdf, lm_quantile, ltratio_cdf, ltratio_icdf, ltratio_lincdf,
                      ltratio_mom, ltratio_pdf, ltratio_region, ltrend, msb_cdf, perron, power_envelope, pt_cdf,
-                     pt_envelope, pt_quantile, trend, v_cdf, v_pdf)
+                     pt_envelope, pt_quantile, trend, v_cdf, v_pdf, coef_cdf_gp, coef_quantile, lin_quantile)
 from helpers import det_check, det_designs, det_label, det_lines, det_route, det_value
 
 DESIGNS = det_designs()
@@ -198,30 +198,41 @@ def same(a, b):
     np.testing.assert_allclose(a, b, rtol=1e-14, atol=1e-300)
 
 
-def test_case_strings_keep_the_classical_engine():
-    """with a case string and no engine the values are the classical engine's (also through the C router's classical
-    branch, and for the design of the case with engine classical)"""
+def test_case_strings_classical_and_default():
+    """(i) engine="classical" for a case string is the classical engine (also through the C router's classical branch,
+    and for the design of the case with engine classical), the values of the versions before 0.5.0; (ii) the default,
+    engine="auto" also for a case string, agrees with it to the accuracy of the reference values (1e-9) on the same calls"""
     from dflimit import _engine
     x = np.array([-3.5, -2.0, -0.5, 1.0])
+
+    def close(a, b):
+        assert np.max(np.abs(np.asarray(a, float) - np.asarray(b, float))) < 1e-9
+
     for cas, D, c, c0, g0 in (("DU", trend(0), -5.0, 0.0, 0.0), ("DK", trend(-1), 2.0, 2.0, 0.0),
                               ("DT", trend(1), -5.0, -3.0, 0.0), ("SU", trend(0), -10.0, 0.0, 0.0),
                               ("DU", trend(0), -5.0, 0.0, 1.0)):
-        F = ltratio_cdf(x, cas, c, c0, g0)
-        same(F, ltratio_cdf(x, cas, c, c0, g0, engine="classical"))
+        F = ltratio_cdf(x, cas, c, c0, g0, engine="classical")
         start = "stationary" if cas[0] == "S" else None
         same(F, ltratio_cdf(x, D, c, c0, g0, engine="classical", start=start))
         model, stat = "KUT".index(cas[1]) + 1, int(cas[0] == "S")
         Fr = np.frombuffer(_engine.route(1, (None, model, 2 if stat else int(g0 != 0), g0, math.nan), x.tobytes(), c, c0, 1,
                                          0, 0, 0.0)[0])
         same(Fr, F)
-    same(ltratio_icdf([0.05, 0.5], "DT"), ltratio_icdf([0.05, 0.5], trend(1), engine="classical"))
-    same(ltratio_mom(3, "DU", -5), ltratio_mom(3, trend(0), -5, engine="classical"))
-    same(coef_cdf(-14.0, "DU"), coef_cdf(-14.0, trend(0), engine="classical"))
-    same(adfmax_cdf(-2.5, "DU"), adfmax_cdf(-2.5, trend(0), engine="classical"))
-    same(ltratio_lincdf(-0.26, -3.5, "DK"), ltratio_lincdf(-0.26, -3.5, trend(-1), engine="classical"))
-    same(power_envelope(-7.0), power_envelope(-7.0, trend(-1), engine="classical"))
+        close(ltratio_cdf(x, cas, c, c0, g0), F)
+        same(ltratio_cdf(x, cas, c, c0, g0), ltratio_cdf(x, cas, c, c0, g0, engine="auto"))
+    pairs = [(lambda e: ltratio_icdf([0.05, 0.5], "DT", engine=e), lambda: ltratio_icdf([0.05, 0.5], trend(1), engine="classical")),
+             (lambda e: ltratio_mom(3, "DU", -5, engine=e), lambda: ltratio_mom(3, trend(0), -5, engine="classical")),
+             (lambda e: coef_cdf(-14.0, "DU", engine=e), lambda: coef_cdf(-14.0, trend(0), engine="classical")),
+             (lambda e: adfmax_cdf(-2.5, "DU", engine=e), lambda: adfmax_cdf(-2.5, trend(0), engine="classical")),
+             (lambda e: ltratio_lincdf(-0.26, -3.5, "DK", engine=e), lambda: ltratio_lincdf(-0.26, -3.5, trend(-1), engine="classical")),
+             (lambda e: power_envelope(-7.0, engine=e), lambda: power_envelope(-7.0, trend(-1), engine="classical"))]
+    for f, g in pairs:
+        same(f("classical"), g())
+        v = np.asarray(f("auto"), float); w = np.asarray(g(), float)
+        close(v / np.where(np.abs(w) > 1, w, 1), w / np.where(np.abs(w) > 1, w, 1))       # (the moments relative)
     bnd = {"type": "line", "a": -3.5, "b": -0.2639}
-    same(ltratio_region(bnd), ltratio_region(bnd, trend(-1), engine="classical"))
+    same(ltratio_region(bnd, engine="classical"), ltratio_region(bnd, trend(-1), engine="classical"))
+    close(ltratio_region(bnd), ltratio_region(bnd, engine="classical"))
 
 
 def test_the_engines_agree():
@@ -280,13 +291,13 @@ def test_router_errors():
         (lambda: coef_icdf(0.05, D, method="single"), ValueError, "names a representation"),
         (lambda: adfmax_cdf(-2, "DK", engine="auto"), ValueError, "the case must be one of DU, DT, SU, ST"),
         (lambda: adfmax_cdf(-2, trend(-1), engine="classical"), ValueError, "the classical engine's ADFmax"),
-        (lambda: adfmax_cdf(-2, "DU", g0=1.0), ValueError, "with a zero or a stationary start only"),
+        (lambda: adfmax_cdf(-2, "DU", g0=1.0, engine="classical"), ValueError, "with a zero or a stationary start only"),
         (lambda: adfmax_icdf(0.05, "DU", g0=1.0, engine="classical"), ValueError, "with a zero or a stationary start"),
         (lambda: ltratio_lincdf(0, -2, D, engine="classical"), ValueError, "the linear form of the classical engine"),
-        (lambda: ltratio_lincdf(0, -2, "DK", g0=1), ValueError, "zero start only"),
+        (lambda: ltratio_lincdf(0, -2, "DK", g0=1, engine="classical"), ValueError, "zero start only"),
         (lambda: ltratio_lincdf(0, -2, "DG", g0=1, engine="auto"), ValueError, "case DG has a zero start"),
         (lambda: ltratio_lincdf(0, -2, "DK", start="fixed"), ValueError, "apply to a design"),
-        (lambda: ltratio_region({"type": "line", "a": -3.5, "b": 0}, "DK", g0=1.0), ValueError, "case DK only"),
+        (lambda: ltratio_region({"type": "line", "a": -3.5, "b": 0}, "DK", g0=1.0, engine="classical"), ValueError, "case DK only"),
         (lambda: power_envelope(-5, "DK", alpha=1.5, engine="auto"), ValueError, r"must lie in \(0, 1\)"),
         (lambda: power_envelope(-5, D, engine="classical"), ValueError, "the envelope of the classical engine"),
         (lambda: ltratio_region({"type": "wap", "k": 3.6658, "omega": 10}, D), ValueError, "not available by the general"),
@@ -452,3 +463,26 @@ def test_the_lm_statistic_above_the_unit_root():
         F = lm_cdf(trend(1), x, c)
         assert np.all((F >= 0) & (F <= 1 + 1e-12)) and np.all(np.diff(F) >= -1e-12)
 
+
+
+def test_nonfinite_arguments():
+    """the general engine and the router at non-finite arguments: a limit, or an error that names the argument (none of
+    them may hang: coef_cdf_gp at y = +-inf, the searches from x0 = +-inf and the point-optimal statistic at c = +-inf did
+    not return in the C engine)"""
+    D = trend(0)
+    np.testing.assert_array_equal(coef_cdf_gp(D, [math.inf, -math.inf, math.nan], -5), [1, 0, math.nan])
+    for f, text in [(lambda: dist_quantile(D, 0.05, -5, x0=math.inf), "x0 must be a finite"),
+                    (lambda: coef_quantile(D, 0.05, -5, y0=-math.inf), "y0 must be a finite"),
+                    (lambda: lin_quantile(D, 0.05, -3.5, -5, b0=math.inf), "b0 must be a finite"),
+                    (lambda: adfmax_quantile(D, 0.05, -5, x0=-math.inf), "x0 must be a finite"),
+                    (lambda: lin_cdf(D, -0.26, math.inf, -5), "a must be a finite"),
+                    (lambda: pt_cdf(trend(1), 4.0, -13.5, math.inf), "c must be a finite"),
+                    (lambda: dist_cdf(trend(1), -2.0, -5, gls=-math.inf), "cbar < 0"),
+                    (lambda: ltratio_region({"type": "line", "a": math.inf, "b": -0.26}, "DK", -5), "slope a of the line"),
+                    (lambda: ltratio_lincdf(-0.26, math.inf, "DK", -5), "a must be")]:
+        with pytest.raises(ValueError, match=re.escape(text)):
+            f()
+    np.testing.assert_array_equal(power_envelope([-math.inf, math.nan, math.inf], "DK"), [1, math.nan, 0.05])
+    np.testing.assert_array_equal(pt_envelope(trend(1), [-math.inf, math.nan, math.inf]), [1, math.nan, 0.05])
+    P = [ltratio_region({"type": "line", "a": -3.5, "b": b}, "DK", -5) for b in (math.inf, -math.inf)]
+    np.testing.assert_array_equal(P, [1, 0])

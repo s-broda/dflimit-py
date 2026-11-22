@@ -4,8 +4,10 @@
 
 The general engine of the C engine (dflimit-matlab, its branch `general-engine`; the port of the general engine of
 DFLimit.jl): the limits for any piecewise smooth deterministic terms, by the inversion formula on paths around the roots
-of the determinant of the joint moment generating function. With a case string and no `engine` keyword the values are
-those of before.
+of the determinant of the joint moment generating function. The engine is chosen automatically by default
+(`engine="auto"`, also for a case string): where the router's rule takes the general engine for a case string the two
+engines agree to about 1e-9, and the values move in the tenth digit or below against 0.4.x; `engine="classical"` gives
+the classical values, bit for bit those of before.
 
 - Designs: the immutable class `Design` and its constructors `trend`, `perron`, `fdesign`, `ltrend`,
   `design_from_matrix` and `detrend_first` (the names of the Julia package), with `Design.value` and `Design.regmat`.
@@ -17,10 +19,10 @@ those of before.
   keywords: `c0`, `start` (`"zero"`, `"fixed"`, `"stationary"`), `gamma0`, `gls` and `verified`.
 - The router: `ltratio_cdf`, `ltratio_pdf`, `ltratio_icdf`, `ltratio_mom`, `coef_cdf`, `coef_icdf`, `adfmax_cdf`,
   `adfmax_pdf`, `adfmax_icdf`, `ltratio_lincdf`, `power_envelope` and `ltratio_region` take a design in place of the
-  case (with the keywords `start` and `gls`) and the keyword `engine`: `None` (the default) keeps the classical
-  engine for a case string and takes the rule for a design, `"auto"` the rule of the router (the faster engine where
-  the two agree, the more accurate where they do not, the general engine where the classical one does not apply),
-  `"classical"` and `"general"` force one engine. The general engine's warnings are `RuntimeWarning`s.
+  case (with the keywords `start` and `gls`) and the keyword `engine`: `"auto"` (the default, also given as `None`)
+  the rule of the router for a case string as for a design (the faster engine where the two agree, the more accurate
+  where they do not, the general engine where the classical one does not apply), `"classical"` and `"general"` force
+  one engine. The general engine's warnings are `RuntimeWarning`s.
 - ADFmax with a fixed start (`g0` of `adfmax_cdf`, `adfmax_pdf`, `adfmax_icdf`, with `engine="auto"` or
   `"general"` for a case string, or a design) and the regions and the linear form of case DK with a fixed start (`g0`
   of `ltratio_region` and `ltratio_lincdf`) take the general engine; the classical engine, which has the zero and the

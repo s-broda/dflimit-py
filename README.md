@@ -81,15 +81,15 @@ The user-level functions above take a design in place of the case string (`ltrat
 with the keywords `start` (`"zero"`, `"fixed"` with `g0`, `"stationary"`) and `gls` (GLS detrending at cbar), and all
 of them take the keyword `engine`:
 
-- with a case string and no `engine` the classical engine computes, and the values are those of before;
-- `engine="auto"` (the default with a design) is the router's rule: where the classical engine accepts the arguments
+- `engine="auto"` (the default, for a case string as for a design) is the router's rule: where the classical engine accepts the arguments
   it takes, at each point, the faster engine where the two agree to 1e-10 and the more accurate one where they do not
   (for example the general engine for the t-ratio with a stationary start and c0 != 0, with a zero start and c0 > 0
   for -100 < c <= 1, and at c0 = 0 below c = -20; the classical engine for the regions and for the ADFmax test with a
   zero start), and the general engine for every other design; a `method` other than `"auto"`, or `verified=True`,
-  keeps the classical engine;
+  keeps the classical engine; where it takes the general engine for a case string the two engines agree to about
+  1e-9, so that the values can move in the tenth digit against the versions before 0.5.0;
 - `engine="classical"` and `engine="general"` force one engine (`"classical"` for the cases DK, DU, DT, SK, SU, ST,
-  DG only; `"general"` with `method="auto"` only).
+  DG only, with the values of the versions before 0.5.0; `"general"` with `method="auto"` only).
 
 The general engine's own functions of a design have the names of the Julia package: `dist_cdf`, `dist_pdf`,
 `dist_quantile`, `dist_moments` (the t-ratio), `coef_pdf`, `coef_quantile`, `coef_cdf_gp` (the coefficient statistic;

@@ -42,7 +42,7 @@ on a bracket grown from [-40, 10] until its width is below ``tol`` (about ten ev
 
 @fill_doc(params=COEF_PARAMS_DOC, errors=ERRORS_DOC, notes=COEF_NOTES_DOC, cases=CASES_DOC, engine=ENGINE_DOC,
           design=DESIGN_DOC, route=ROUTE_DOC, croute=COEF_ROUTE_DOC)
-def coef_cdf(y, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engine=None, start=None, gls=None):
+def coef_cdf(y, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engine="auto", start=None, gls=None):
     """Distribution function of the limit of the Dickey-Fuller coefficient statistic.
 
     The limit of P[n(phi^ - phi0) <= y] for the least squares estimate phi^ of phi in the regression of
@@ -124,13 +124,13 @@ def _coef_cdf(a, cas, c, c0, g0, method, verified):
         elif yk == -math.inf:
             F[k] = 0.0
         else:
-            F[k] = ltratio_cdf(0.0, cas, c, c0=c0 + yk, g0=g0, method=method, verified=verified)
+            F[k] = ltratio_cdf(0.0, cas, c, c0=c0 + yk, g0=g0, method=method, verified=verified, engine="classical")
     return dfl_shape(F, a)
 
 
 @fill_doc(params=COEF_PARAMS_DOC, errors=ERRORS_DOC, notes=COEF_NOTES_DOC, cases=CASES_DOC, engine=ENGINE_DOC,
           design=DESIGN_DOC, route=ROUTE_DOC, croute=COEF_ROUTE_DOC)
-def coef_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-9, verified=False, *, engine=None, start=None, gls=None):
+def coef_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-9, verified=False, *, engine="auto", start=None, gls=None):
     """Quantiles of the limit of the Dickey-Fuller coefficient statistic.
 
     The p-quantiles of the limit of n(phi^ - phi0) of `coef_cdf`.
@@ -207,7 +207,7 @@ def coef_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-9, verified=False, 
 def _coef_quantile(pk, cas, c, c0, g0, method, tol, verified=False):
     """One quantile by the Illinois variant of regula falsi (coef_icdf of the R package and of the MATLAB programs)."""
     def f(x):
-        return coef_cdf(x, cas, c, c0, g0, method, verified) - pk
+        return coef_cdf(x, cas, c, c0, g0, method, verified, engine="classical") - pk
 
     lo, hi = -40.0, 10.0
     flo, fhi = f(lo), f(hi)

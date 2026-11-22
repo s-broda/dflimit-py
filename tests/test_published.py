@@ -23,8 +23,11 @@ def test_power_is_the_cdf_at_the_critical_value():
 
 
 def test_quantiles_invert_the_cdf():
-    r = ltratio_icdf([0.1, 0.9], "ST", -10, info=True)
+    # (the convergence flags of the classical search, engine="classical"; the router's search, the default, reports F)
+    r = ltratio_icdf([0.1, 0.9], "ST", -10, info=True, engine="classical")
     assert np.all(r["conv"])
+    expect_equal(r["F"], [0.1, 0.9], 1e-9)
+    r = ltratio_icdf([0.1, 0.9], "ST", -10, info=True)
     expect_equal(r["F"], [0.1, 0.9], 1e-9)
     expect_equal(ltratio_cdf(r["q"], "ST", -10), [0.1, 0.9], 1e-9)
     expect_equal(adfmax_cdf(adfmax_icdf(0.05, "DU"), "DU"), 0.05, 1e-9)
