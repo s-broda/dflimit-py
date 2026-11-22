@@ -391,9 +391,9 @@ typedef struct { const logmt_t *L; const cdouble *grp; int ng; const cdouble *ot
 static double place_obj(const place_ctx *P, double sig)
 {
     int side = P->side;
-    double d = INFINITY, far = -INFINITY;
-    for (int i = 0; i < P->ng; i++) { d = dmin(d, side * (creal(P->grp[i]) - sig)); far = dmax(far, side * (creal(P->grp[i]) - sig)); }
-    far += d;
+    double d = INFINITY, span = -INFINITY;
+    for (int i = 0; i < P->ng; i++) { d = dmin(d, side * (creal(P->grp[i]) - sig)); span = dmax(span, side * (creal(P->grp[i]) - sig)); }
+    span += d;
     double ylo, yhi; ulevels(P->grp, P->ng, sig, side, 1, &ylo, &yhi);
     double m = -INFINITY;
 #define PR(s) do { cdouble s_ = (s); double v_ = relogMt(P->L, s_); if (side == 1) { v_ += dmax(0.0, -P->A * creal(s_)); if (P->xq > 0 && creal(s_) < 0) { double dd_ = P->tr + P->c0p * creal(s_); v_ += dd_ > 0 ? creal(s_) * creal(s_) * P->xq * P->xq / (4 * dd_) : INFINITY; } } m = dmax(m, isfinite(v_) ? v_ : INFINITY); } while (0)
@@ -401,7 +401,7 @@ static double place_obj(const place_ctx *P, double sig)
     for (int i = 0; i < P->ng; i++) { PR(CPX(sig, cimag(P->grp[i]))); PR(CPX(creal(P->grp[i]), yhi)); PR(CPX(creal(P->grp[i]), ylo)); }
     for (int i = 0; i < P->no; i++) PR(CPX(sig, dclamp(cimag(P->oth[i]), ylo, yhi)));
     double ys[2] = {ylo, yhi};
-    for (int l = 0; l < 2; l++) { PR(CPX(sig + side * far, ys[l])); PR(CPX(sig + side * 1e3 * dmax(far, 1.0), ys[l])); }
+    for (int l = 0; l < 2; l++) { PR(CPX(sig + side * span, ys[l])); PR(CPX(sig + side * 1e3 * dmax(span, 1.0), ys[l])); }
 #undef PR
     for (int i = 0; i < P->nfoc; i++) m += 0.5 * log(1 + d / dmax(fabs(sig - P->foc[i]), 1e-300));
     return m;
