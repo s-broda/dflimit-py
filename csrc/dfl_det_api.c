@@ -8,6 +8,7 @@
 void dfl_det_defaults(dfl_det_opts *o)
 {
     o->c0 = 0; o->start = DFL_START_ZERO; o->gamma0 = 0; o->gls = NAN; o->verified = 0; o->vtol = 1e-9; o->phi = NAN; o->hfac = 1;
+    o->method = DFL_DET_AUTO;
 }
 static const dfl_det_opts *opts_or_default(const dfl_det_opts *o, dfl_det_opts *d) { if (o) return o; dfl_det_defaults(d); return d; }
 static int check_common(const dfl_design *D, double c, const dfl_det_opts *o, char *err, size_t errlen)
@@ -102,31 +103,79 @@ static det_path *user_path(const dfl_design *D, double c, const dfl_det_opts *o,
 {
     return det_path_cached(D, o->gls, o->start, o->gamma0, c, o->phi, o->hfac, err, errlen);
 }
+/* the values at the finite points xf by the inversion on paths (one evaluation, or the checked computation), with the
+ * infinite density at the tangency of a rank-one design with c0 > 0 (tangency!) */
+static int paths_values(int kind, det_path *CP, int m, const double *xf, const dfl_det_opts *o, int verified, double *v, char *err, size_t errlen)
+{
+    tr_ctx t = {m, xf, o->c0, kind == 2 ? 1 : 2, 2};
+    int rc = run_eval(CP, tr_eval, &t, m, verified, o->vtol, v, err, errlen);
+    if (!rc && kind == 1 && o->c0 > 0 && CP->Mo->r == 1 && CP->Mo->rm == 0) {
+        double xs_ = -sqrt(4 * o->c0 * CP->Mo->a);
+        for (int j = 0; j < m; j++) if (fabs(xf[j] - xs_) <= 1e-12 * dmax(1.0, fabs(xf[j]))) v[j] = INFINITY;
+    }
+    return rc;
+}
+static int paths_subset(int kind, const dfl_design *D, double c, int m, const double *xf, const dfl_det_opts *o, int verified, double *v, char *err, size_t errlen)
+{
+    det_path *CP = user_path(D, c, o, err, errlen);
+    if (!CP) return 1;
+    int rc = paths_values(kind, CP, m, xf, o, verified, v, err, errlen);
+    det_path_release(CP);
+    return rc;
+}
+/* the values by the line integral with the explicit kernel (line_dist): one evaluation at each point; at a point where the
+ * classical integrator's paths would exceed the bounds of the engine (refused before anything is evaluated) or the
+ * continuation of log P fails, method auto takes the inversion on paths and method line returns an error.  verified = 1:
+ * the values checked against one evaluation of the inversion on paths; where the two differ by more than vtol, the checked
+ * inversion on paths is returned, with a warning */
+static int line_values(int kind, const dfl_design *D, dfl_prov *pv, double c, int m, const double *xf, const dfl_det_opts *o, double *v, char *err, size_t errlen)
+{
+    int *fb = malloc((m + 1) * sizeof(int)), nfb = 0, rc = 0;
+    for (int j = 0; j < m && !rc; j++) {
+        int r = det_line_value(pv, kind, xf[j], o->c0, &v[j]);
+        if (r == 0) continue;
+        if (o->method == DFL_DET_LINE) { det_line_point_error(err, errlen, kind == 2 ? "dist_cdf" : "dist_pdf", pv, xf[j], o->c0, r); rc = 1; break; }
+        fb[nfb++] = j;
+    }
+    if (!rc && nfb > 0) {
+        double *xb = malloc(nfb * sizeof(double)), *vb = malloc(nfb * sizeof(double));
+        for (int i = 0; i < nfb; i++) xb[i] = xf[fb[i]];
+        rc = paths_subset(kind, D, c, nfb, xb, o, 0, vb, err, errlen);
+        if (!rc) for (int i = 0; i < nfb; i++) v[fb[i]] = vb[i];
+        free(xb); free(vb);
+    }
+    if (!rc && o->verified) {
+        double *vp = malloc(m * sizeof(double)), d = 0;
+        rc = paths_subset(kind, D, c, m, xf, o, 0, vp, err, errlen);
+        for (int j = 0; j < m && !rc; j++) if (isfinite(v[j]) || isfinite(vp[j])) { double dj = fabs(v[j] - vp[j]); if (!(dj <= d)) d = dj; }
+        if (!rc && !(d <= o->vtol)) {
+            rc = paths_subset(kind, D, c, m, xf, o, 1, v, err, errlen);
+            det_warn("verified: the line integral and the inversion on paths differ by %.2g (above %g); the checked inversion on paths is returned (c = %g, c0 = %g)", d, o->vtol, c, o->c0);
+        }
+        free(vp);
+    }
+    free(fb);
+    return rc;
+}
 int dfl_det_dist(int kind, const dfl_design *D, int n, const double *x, double c, const dfl_det_opts *o0, double *out, char *err, size_t errlen)
 {
     dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
     det_warn_clear();
     if (kind != 1 && kind != 2) { snprintf(err, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
     if (check_common(D, c, o, err, errlen)) return 1;
-    det_path *CP = user_path(D, c, o, err, errlen);
-    if (!CP) return 1;
+    dfl_prov *pv;
+    if (det_line_select(D, c, o, &pv, err, errlen)) return 1;
+    det_path *CP = NULL;
+    if (!pv) { CP = user_path(D, c, o, err, errlen); if (!CP) return 1; }
     double *xf = malloc((n + 1) * sizeof(double)); int *ix = malloc((n + 1) * sizeof(int));
     int m = split_finite(n, x, kind == 2, out, xf, ix), rc = 0;
     if (m > 0) {
         double *v = malloc(m * sizeof(double));
-        tr_ctx t = {m, xf, o->c0, kind == 2 ? 1 : 2, 2};
-        rc = run_eval(CP, tr_eval, &t, m, o->verified, o->vtol, v, err, errlen);
-        if (!rc) {
-            /* the infinite density at the tangency of a rank-one design with c0 > 0 (tangency!) */
-            if (kind == 1 && o->c0 > 0 && CP->Mo->r == 1 && CP->Mo->rm == 0) {
-                double xs_ = -sqrt(4 * o->c0 * CP->Mo->a);
-                for (int j = 0; j < m; j++) if (fabs(xf[j] - xs_) <= 1e-12 * dmax(1.0, fabs(xf[j]))) v[j] = INFINITY;
-            }
-            for (int j = 0; j < m; j++) out[ix[j]] = v[j];
-        }
+        rc = pv ? line_values(kind, D, pv, c, m, xf, o, v, err, errlen) : paths_values(kind, CP, m, xf, o, o->verified, v, err, errlen);
+        if (!rc) for (int j = 0; j < m; j++) out[ix[j]] = v[j];
         free(v);
     }
-    free(xf); free(ix); det_path_release(CP);
+    free(xf); free(ix); det_path_release(CP); det_line_release(pv);
     return rc;
 }
 
@@ -142,7 +191,7 @@ static int newton_safe(ff_t ff, void *ctx, double p, double x0, double step, dou
         if (ff(x, ctx, &F, &f, err, errlen)) return 1;
         if (F > p) hi = x; else lo = x;
         double xn = x - (F - p) / f;
-        if (!(lo < xn && xn < hi && isfinite(xn))) xn = (lo + hi) / 2;
+        if (!(lo <= xn && xn <= hi && isfinite(xn))) xn = (lo + hi) / 2;   /* (a step below half an ulp lands on the end of the bracket: converged) */
         if (fabs(xn - x) < tol) { *xout = xn; return 0; }
         x = xn;
     }
@@ -175,6 +224,33 @@ static int quantile_search(q_ctx *q, double p, double x0, double tol, int maxit,
     }
     return newton_safe(q_ff, q, p, x0, lim, tol, out, err, errlen);
 }
+/* the quantile by the line integral (line_quantile): Newton's method on F(x) - p with the density, from x0, the step limited
+ * to 1, then the safeguarded search; rc 2 where a point of the search is beyond the line integral (the bounds, the
+ * continuation): method auto then takes the inversion on paths for this quantile, method line returns an error */
+typedef struct { dfl_prov *pv; double c0; int bad; double xbad; } lineq_ctx;
+static int lineq_ff(double x, void *v, double *F, double *f, char *err, size_t errlen)
+{
+    lineq_ctx *q = v; (void) err; (void) errlen;
+    int r = det_line_value(q->pv, 2, x, q->c0, F);
+    if (r == 0) r = det_line_value(q->pv, 1, x, q->c0, f);
+    if (r) { q->bad = r; q->xbad = x; return 1; }
+    return 0;
+}
+static int line_quantile(dfl_prov *pv, double c0, double p, double x0, double tol, double *out, char *err, size_t errlen)
+{
+    lineq_ctx qc = {pv, c0, 0, NAN};
+    double x = x0, F, f;
+    for (int it = 0; it < 30; it++) {
+        if (lineq_ff(x, &qc, &F, &f, err, errlen)) return 2;
+        double dx = dclamp((F - p) / f, -1.0, 1.0);
+        if ((F - p) / f != (F - p) / f) dx = NAN;
+        if (!isfinite(dx)) break;
+        x -= dx;
+        if (fabs(dx) < tol) { *out = x; return 0; }
+    }
+    int rc = newton_safe(lineq_ff, &qc, p, x0, 1.0, tol, out, err, errlen);
+    return qc.bad ? 2 : rc;
+}
 int dfl_det_quantile(const dfl_design *D, int n, const double *p, double c, double x0, double tol, const dfl_det_opts *o0, double *q, char *err, size_t errlen)
 {
     dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
@@ -184,12 +260,26 @@ int dfl_det_quantile(const dfl_design *D, int n, const double *p, double c, doub
     if (isnan(x0)) x0 = -2.0;
     if (start_tol_check("dist_quantile", "x0", x0, tol, err, errlen)) return 1;
     if (!(tol > 0)) tol = 1e-9;
-    det_path *CP = user_path(D, c, o, err, errlen);
-    if (!CP) return 1;
-    q_ctx qc = {CP, o->c0, 2, 1};
-    int rc = 0;
-    for (int k = 0; k < n && !rc; k++) rc = quantile_search(&qc, p[k], x0, tol, 30, 1.0, &q[k], err, errlen);
-    det_path_release(CP);
+    dfl_prov *pv;
+    if (det_line_select(D, c, o, &pv, err, errlen)) return 1;
+    int rc = 0, *todo = malloc((n + 1) * sizeof(int)), nt = 0;
+    for (int k = 0; k < n && !rc; k++) {
+        if (!pv) { todo[nt++] = k; continue; }
+        int r = line_quantile(pv, o->c0, p[k], x0, tol, &q[k], err, errlen);
+        if (r == 2) {
+            if (o->method == DFL_DET_LINE) { snprintf(err, errlen, "dist_quantile: method line: the line integral cannot take a point of the search (c = %g, c0 = %g, p = %g: the bounds of the engine or the continuation of log P); method auto takes the inversion on paths", c, o->c0, p[k]); rc = 1; }
+            else todo[nt++] = k;
+        } else rc = r;
+    }
+    det_line_release(pv);
+    if (!rc && nt > 0) {
+        det_path *CP = user_path(D, c, o, err, errlen);
+        if (!CP) { free(todo); return 1; }
+        q_ctx qc = {CP, o->c0, 2, 1};
+        for (int i = 0; i < nt && !rc; i++) rc = quantile_search(&qc, p[todo[i]], x0, tol, 30, 1.0, &q[todo[i]], err, errlen);
+        det_path_release(CP);
+    }
+    free(todo);
     return rc;
 }
 

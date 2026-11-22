@@ -486,3 +486,29 @@ def test_nonfinite_arguments():
     np.testing.assert_array_equal(pt_envelope(trend(1), [-math.inf, math.nan, math.inf]), [1, math.nan, 0.05])
     P = [ltratio_region({"type": "line", "a": -3.5, "b": b}, "DK", -5) for b in (math.inf, -math.inf)]
     np.testing.assert_array_equal(P, [1, 0])
+
+
+def test_line_integral_method():
+    """The line integral with the explicit kernel for a design of rank two (method), through dist_* and ltratio_*."""
+    import dflimit as d
+    D = d.trend(2)
+    x = np.array([-4.0, -3.2, -2.5, -1.8])
+    Fl = d.dist_cdf(D, x, -5, method="line")
+    Fp = d.dist_cdf(D, x, -5, method="paths")
+    assert np.max(np.abs(Fl - Fp)) < 1e-10
+    assert np.array_equal(d.dist_cdf(D, x, -5), Fl)                       # auto: the line integral at c0 = 0, c >= -20
+    assert np.array_equal(d.dist_cdf(D, x, -50), d.dist_cdf(D, x, -50, method="paths"))
+    assert np.array_equal(d.dist_pdf(D, x, -5, c0=-3), d.dist_pdf(D, x, -5, c0=-3, method="paths"))
+    assert abs(d.dist_quantile(D, 0.05, -5, method="line") - d.dist_quantile(D, 0.05, -5, method="paths")) < 1e-9
+    with pytest.raises(ValueError, match="GLS detrending is not covered"):
+        d.dist_cdf(D, x, -5, gls=-13.5, method="line")
+    with pytest.raises(ValueError, match="a jump"):
+        d.dist_cdf(d.perron("A", 0.5), x, 0, method="line")
+    with pytest.raises(ValueError, match="method must be"):
+        d.dist_cdf(D, x, -5, method="single")
+    assert np.array_equal(d.ltratio_cdf(x, D, -5, method="paths"), Fp)
+    assert np.array_equal(d.ltratio_cdf(x, D, -5, method="line"), Fl)
+    assert np.array_equal(d.ltratio_cdf(x, d.trend(0), -5, method="paths"), d.dist_cdf(d.trend(0), x, -5, method="paths"))
+    assert np.array_equal(d.ltratio_cdf(x, d.trend(0), -5, method="line"), d.ltratio_cdf(x, "DU", -5, method="single"))
+    with pytest.raises(ValueError):
+        d.ltratio_cdf(x, "DU", -5, method="paths")

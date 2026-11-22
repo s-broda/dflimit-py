@@ -1,8 +1,8 @@
 /* dfl_single.c: the single integral (the line integral representation) at c0 = 0: the inner transforms of the
- * tilted density along paths in the complex plane (adaptive Gauss-Legendre rules), the outer integral along Re t = tau (trapezoidal rule in u for
- * the smooth part, Filon's rule for the edge part), zero and stationary start.  A port of outer / inner_density /
- * inner_cdf of DFExact.jl; the fixed node layouts (the batched fast path) and the general kernel for c0 != 0 are in
- * dfl_batch.c and dfl_gen.c. */
+ * tilted density along paths in the complex plane (adaptive Gauss-Legendre rules, or the fixed node layouts of dfl_batch.c
+ * where they serve: c <= 0, |q| above about 0.034, opts->batched), the outer integral along Re t = tau (trapezoidal rule in
+ * u for the smooth part, Filon's rule for the edge part), zero and stationary start.  A port of outer / inner_density /
+ * inner_cdf / density / cdf of DFExact.jl; the general kernel for c0 != 0 is in dfl_gen.c. */
 #include "dflimit.h"
 #include "dfl_lock.h"
 #include <math.h>
@@ -367,12 +367,22 @@ static void edge_body(int j, void *v) { octx *o = v; cdouble Is, Ie; cdouble t =
     cdouble val = cmul(o->P[j + 1], Ie); if (o->kind == 2) val = cdiv(val, t);
     o->G[j] = cmul(val, cexp(cscale(o->y, t))); }
 
-/* the value in *out; 0, or the bound of the engine that the line would exceed (recorded in *bd, *out NaN) */
-static int outer_c0(int kind, int model, double c, double q, double tau, bool stat, const dfl_single_opts *o, double *out, dfl_bound_t *bd)
+/* the values of the smooth part from the fixed layouts bt: g[j] = Re(P_j v_j / t_j^(kind - 1)) w_j */
+static void batch_smooth(const dfl_batch *bt, int kind, int n, const cdouble *ts, const cdouble *P, const cdouble *s1, const cdouble *s2, const cdouble *M0, const double *wt, double *g)
+{
+    cdouble *sv = malloc((n + 1) * sizeof(cdouble));
+    dfl_batch_values(bt, 1, n, ts, s1, s2, M0, sv);
+    for (int j = 0; j < n; j++) { cdouble val = cmul(P[j], sv[j]); if (kind == 2) val = cdiv(val, ts[j]); g[j] = creal(val) * wt[j]; }
+    free(sv);
+}
+/* the value in *out; 0, or the bound of the engine that the line would exceed (recorded in *bd, *out NaN).  bt: the fixed
+ * layouts of the inner integrals (NULL: the adaptive rules); e1: the cap of the first piece of the K_0 kernel's edge segment
+ * for the adaptive rules (dfl_k0first) */
+static int outer_c0(int kind, int model, double c, double q, double tau, bool stat, const dfl_single_opts *o, const dfl_batch *bt, double e1, double *out, dfl_bound_t *bd)
 {
     *out = NAN;
-    int kern = ((model == 1 || model == 4) && !stat) ? 1 : 2;
-    double hu = o->hu * dfl_hufac(c), cde = tau, Wm = dfl_wmaxc(c); int N = o->N;
+    int kern = dfl_kern(model, stat);
+    double hu = o->hu * dfl_hufac(c), cde = tau, Wm = dfl_wmaxc_m(model, c); int N = o->N;
     /* the smooth part: the trapezoidal rule in u, w = tau sinh u */
     double umax = asinh(Wm / cde); int nu = (int) floor(umax / hu) + 1;
     cdouble *ts = malloc(nu * sizeof(cdouble)), *P = malloc(nu * sizeof(cdouble)), *s1 = malloc(nu * sizeof(cdouble)), *s2 = malloc(nu * sizeof(cdouble)), *M0 = malloc(nu * sizeof(cdouble));
@@ -410,11 +420,13 @@ static int outer_c0(int kind, int model, double c, double q, double tau, bool st
         double *gn = malloc(nn * sizeof(double));
         octx on = {kern, kind, nn, q, tn + 1, s1n + 1, s2n + 1, M0n + 1, Pn + 1, wn, gn, NULL, 0, cde, NULL, 0, &fail};
         /* (a line on which the inner integrals need a rule beyond DFL_RULEMAX is refused before anything is evaluated) */
-        if (!gauss_check(kern, q, nn + 1, tn, s1n, s2n, &fail)) dfl_parfor(nn, smooth_body, &on);
+        if (bt) batch_smooth(bt, kind, nn, tn + 1, Pn + 1, s1n + 1, s2n + 1, M0n + 1, wn, gn);
+        else if (!gauss_check(kern, q, nn + 1, tn, s1n, s2n, &fail)) dfl_parfor(nn, smooth_body, &on);
         if (!fail.bound) { val = 0; for (int j = 0; j < nn; j++) val += gn[j]; val /= M_PI; }
         free(edges0); free(te0); free(P0); free(s1e); free(s2e); free(M0e); free(psie); free(tn); free(wn); free(Pn); free(s1n); free(s2n); free(M0n); free(gn);
     } else {
-        if (!gauss_check(kern, q, nu, ts, s1, s2, &fail)) dfl_parfor(nu, smooth_body, &oc);
+        if (bt) batch_smooth(bt, kind, nu, ts, P, s1, s2, M0, wt, g);
+        else if (!gauss_check(kern, q, nu, ts, s1, s2, &fail)) dfl_parfor(nu, smooth_body, &oc);
         if (!fail.bound) { g[0] *= 0.5; val = 0; for (int j = 0; j < nu; j++) val += g[j]; val *= hu / M_PI; }
     }
     free(ts); free(P); free(s1); free(s2); free(M0); free(wt); free(g); free(psi);
@@ -449,11 +461,17 @@ static int outer_c0(int kind, int model, double c, double q, double tau, bool st
     dfl_tparts(model, c, nw + 1, te, stat, Pe, s1e, s2e, M0e);
     cdouble *G = malloc(nw * sizeof(cdouble));
     octx oe = {kern, kind, nw, q, te, s1e, s2e, M0e, Pe, NULL, NULL, G, y, cde, NULL, INFINITY, &fail};
-    /* the K_0 kernel for c < -20: the first piece of the edge segment is at most 1/b long, b = (s_2 - s_1)/2 at tau, the scale on
-     * which K_0(b X) turns from its logarithm to its exponential decay (with a zero start b ~ c^2/2 in case U; the 48 nodes of a
-     * first piece of up to 1/16 lose 5e-10 in F at c = -480); unchanged on [-20, inf) (k0first, edgehead in DFExact.jl) */
-    if (kern == 2 && c < -20) { cdouble t0 = CPX(tau, 0), P0, a1, a2, m0; dfl_tparts(model, c, 1, &t0, stat, &P0, &a1, &a2, &m0); oe.e1 = 1 / fabs(creal(csub(a2, a1)) / 2); }
-    dfl_parfor(nw, edge_body, &oe);
+    /* the K_0 kernel for c < -20 (and for a provider where |s_1(tau)| is large: dfl_k0first): the first piece of the edge
+     * segment is at most 1/b long, b = (s_2 - s_1)/2 at tau, the scale on which K_0(b X) turns from its logarithm to its
+     * exponential decay (with a zero start b ~ c^2/2 in case U; the 48 nodes of a first piece of up to 1/16 lose 5e-10 in F at
+     * c = -480); unchanged on [-20, inf) (k0first, edgehead in DFExact.jl) */
+    if (kern == 2) oe.e1 = e1;
+    if (bt) {
+        cdouble *ev = malloc((nw + 1) * sizeof(cdouble));
+        dfl_batch_values(bt, 2, nw, te + 1, s1e + 1, s2e + 1, M0e + 1, ev);
+        for (int j = 0; j < nw; j++) { cdouble t = te[j + 1], val = cmul(Pe[j + 1], ev[j]); if (kind == 2) val = cdiv(val, t); G[j] = cmul(val, cexp(cscale(y, t))); }
+        free(ev);
+    } else dfl_parfor(nw, edge_body, &oe);
     if (fail.bound) { free(edges0); free(edges); free(te); free(Pe); free(s1e); free(s2e); free(M0e); free(G); *bd = fail; return fail.bound; }
     cdouble acc = ZERO;
     for (int p = 0; p < np; p++) acc = cadd(acc, filon_panel(G + p * N, edges[p], edges[p + 1], y, N));
@@ -474,7 +492,7 @@ static void uni_body(int j, void *v) { uctx *o = v; cdouble Is, Ie;
     cdouble val = cmul(o->P[j], cadd(Is, Ie)); if (o->kind == 2) val = cdiv(val, o->t[j]); o->g[j] = creal(val); }
 static int uniform_c0(int kind, int model, double c, double q, double tau, bool stat, double hw, double *out, dfl_bound_t *bd)
 {
-    int kern = ((model == 1 || model == 4) && !stat) ? 1 : 2; int n = (int) floor(WMAX / hw) + 1;
+    int kern = dfl_kern(model, stat); int n = (int) floor(WMAX / hw) + 1;
     cdouble *t = malloc(n * sizeof(cdouble)), *P = malloc(n * sizeof(cdouble)), *s1 = malloc(n * sizeof(cdouble)), *s2 = malloc(n * sizeof(cdouble)), *M0 = malloc(n * sizeof(cdouble));
     double *g = malloc(n * sizeof(double));
     for (int j = 0; j < n; j++) t[j] = CPX(tau, j * hw);
@@ -494,6 +512,7 @@ void dfl_single_defaults(dfl_single_opts *o)
 }
 double dfl_default_tau(int model, double c, bool stat)
 {
+    if (model == DFL_MODEL_PROV) return dfl_prov_tau();
     if (c <= 0 && !stat) return 1.0;
     return fmin(1.0, dfl_tstar(model, c, stat) / 2);
 }
@@ -506,7 +525,32 @@ int dfl_single_value_c0_b(int kind, double x, int model, double c, bool stat, co
     DFL_NODEFAC = o->nodefac > 0 ? o->nodefac : 1;
     dfl_bound_clear();
     if (o->uniform_hw > 0) return uniform_c0(kind, model, c, q, tau, stat, o->uniform_hw, out, bd);
-    return outer_c0(kind, model, c, q, tau, stat, o, out, bd);
+    /* the fixed layouts (dfl_batch.c) where they serve: the chi-square kernel at tau = 1, the K_0 kernel's density at any tau
+     * and its distribution function at tau = 1 (density, cdf of DFExact.jl) */
+    int kern = dfl_kern(model, stat);
+    double e1 = INFINITY, r1 = INFINITY;
+    if (kern == 2) dfl_k0first(model, c, stat, tau, &e1, &r1);
+    const dfl_batch *bt = NULL;
+    if (dfl_usebatch(o->batched, c, q, tau)) {
+        if (kern == 1) { if (tau == 1.0) bt = dfl_batch_get(1, kind, q, tau, e1, r1); }
+        else if (DFL_BATCHK0 && (kind == 1 || tau == 1.0)) bt = dfl_batch_get(2, kind, q, tau, e1, r1);
+    }
+    int rc = outer_c0(kind, model, c, q, tau, stat, o, bt, e1, out, bd);
+    dfl_batch_release(bt);
+    return rc;
+}
+/* the caps of the first pieces of the K_0 kernel's edge segment and ray X < 0 (k0first of DFExact.jl; for a provider, also
+ * where |s_1(tau)| exceeds DFL_K0FIRST_S1: the root scale of case DU at c = -20, which higher-order trends reach nearer the
+ * unit root).  The scales of the kernel near X = 0 shrink as c decreases: the ray carries e^{-s_1 X}, and K_0(b X) turns
+ * from its logarithm to its exponential decay at X ~ 1/b; for c < -20 the first panels are at most 1/b and 1e-2/|s_1| long */
+void dfl_k0first(int model, double c, bool stat, double tau, double *e1, double *r1)
+{
+    *e1 = *r1 = INFINITY;
+    if (c >= -20 && model != DFL_MODEL_PROV) return;
+    cdouble t0 = CPX(tau, 0), P0, a1, a2, m0;
+    dfl_tparts(model, c, 1, &t0, stat, &P0, &a1, &a2, &m0);
+    if (c >= -20 && fabs(creal(a1)) <= DFL_K0FIRST_S1) return;
+    *e1 = 1 / fabs(creal(csub(a2, a1)) / 2); *r1 = 1e-2 / fabs(creal(a1));
 }
 double dfl_single_value_c0(int kind, double x, int model, double c, bool stat, const dfl_single_opts *o)
 {

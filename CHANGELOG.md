@@ -2,6 +2,21 @@
 
 ## 0.5.0
 
+- The C engine of dflimit-matlab 4910ea2: the line integral with the explicit kernel for the general designs of rank one
+  or two (polynomial trends of any order, an intercept with sines and cosines, the statistic that detrends first for a
+  continuous design with d(0) != 0; zero or stationary start, least squares detrending): `dist_cdf`, `dist_pdf` and
+  `dist_quantile` take `method="auto"` (the default), `"line"` or `"paths"`; `"auto"` takes the line integral at
+  `c0 = 0` for `c >= -20`, 2.2 to 3.5 times faster than the inversion on paths per value and 1.8 to 2.7 times per
+  quantile, and the paths elsewhere; `"line"` raises `ValueError` with the reason where it does not cover the design.
+  `ltratio_cdf`, `ltratio_pdf` and `ltratio_icdf` with a design take `method="line"` (for a design that is a classical
+  case, the classical line integral) or `"paths"` (the general engine's paths). The values at `c0 = 0` for these designs
+  move within 2e-11. The classical line integral takes its inner integrals on fixed node layouts at `c <= 0`, `c0 = 0`
+  (as the Julia engine; 8 to 20 times faster in case DK, 2 to 3 times in the other cases, the values within 3.2e-12 of
+  before), so that the router keeps the classical engine at `c0 = 0` below `c = -20` again, and the coefficient
+  statistic (`coef_cdf`, `coef_icdf`) takes the classical engine at its points with `c0 + y > 0` and in case DU (its
+  slowdown by three times at `c = -5` in case DU is gone). A quantile search whose last Newton step was below half an
+  ulp no longer falls into bisection.
+
 The general engine of the C engine (dflimit-matlab, its branch `general-engine`; the port of the general engine of
 DFLimit.jl): the limits for any piecewise smooth deterministic terms, by the inversion formula on paths around the roots
 of the determinant of the joint moment generating function. The engine is chosen automatically by default

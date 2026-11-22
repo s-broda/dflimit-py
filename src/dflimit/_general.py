@@ -59,10 +59,39 @@ def _design(D):
     return D._tuple()
 
 
-def _opts(c0=0.0, start=None, gamma0=0.0, gls=None, verified=False):
+def _opts(c0=0.0, start=None, gamma0=0.0, gls=None, verified=False, method=None):
     g0 = dfl_num(gamma0, "gamma0")
     s = start_code(start, g0, "gamma0")
-    return (dfl_num(c0, "c0"), s, g0 if s == 1 else 0.0, gls_value(gls), dfl_flag(verified, "verified"))
+    o = (dfl_num(c0, "c0"), s, g0 if s == 1 else 0.0, gls_value(gls), dfl_flag(verified, "verified"))
+    return o if method is None else o + (_gmethod(method),)
+
+
+_GMETHODS = {"auto": 0, "line": 1, "paths": 2}
+_GMETHOD_MSG = ('method must be "auto", "line" (the line integral with the explicit kernel) or "paths" (the inversion on '
+                'paths around the roots)')
+
+
+def _gmethod(method):
+    """The method of the general engine's t-ratio: 0 automatic, 1 the line integral with the explicit kernel, 2 the
+    inversion on paths around the roots."""
+    if not isinstance(method, str):
+        raise TypeError(_GMETHOD_MSG)
+    try:
+        return _GMETHODS[method.lower()]
+    except KeyError:
+        raise ValueError(_GMETHOD_MSG) from None
+
+
+METHOD_DOC = """method : {"auto", "line", "paths"}, default "auto"
+        The line integral with the explicit kernel (the classical engine's line integral with P(t) and the two roots
+        supplied by the general engine's transform) or the inversion on paths around the roots. The line integral
+        covers the designs whose numerator has rank one or two: no deterministic terms, continuous designs that do not
+        vanish at the origin and whose span is closed under differentiation (polynomial trends of any order, an
+        intercept with sines and cosines), and `detrend_first` of a continuous design that does not vanish at the
+        origin, with a zero or a stationary start and least squares detrending. ``"auto"`` takes it at ``c0 = 0`` for
+        ``c >= -20``, where it is 2.2 to 3.5 times faster than the paths per value and 1.8 to 2.7 times per quantile,
+        and the paths otherwise; ``"line"`` raises ``ValueError`` with the reason where it does not cover the design,
+        the start or the options (GLS detrending, a fixed start, a jump)."""
 
 
 _NOOPTS = (0.0, 0, 0.0, math.nan, 0)
@@ -97,8 +126,8 @@ def _quantiles(op, D, p, c, opts, *par):
     return dfl_shape(_call(op, D, a.ravel(), c, opts, *par).copy(), a)
 
 
-@fill_doc(opts=OPTS_DOC, verified=VERIFIED_DOC, notes=NOTES_DOC)
-def dist_cdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False):
+@fill_doc(opts=OPTS_DOC, verified=VERIFIED_DOC, notes=NOTES_DOC, method=METHOD_DOC)
+def dist_cdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False, method="auto"):
     """Distribution function of the limit of the Dickey-Fuller t-ratio for a design, by the general engine.
 
     The limit (U - c0 V)/sqrt(V) of the t-ratio of phi = phi0 = 1 + c0/n in the regression of y_t on d(t/n) and
@@ -112,6 +141,7 @@ def dist_cdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False)
         The points. ``-inf``, ``inf`` and ``nan`` give 0, 1 and ``nan``.
     {opts}
     {verified}
+    {method}
 
     Returns
     -------
@@ -137,11 +167,11 @@ def dist_cdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False)
     >>> dist_cdf(perron("C", [0.3, 0.7]), [-5, -4, -3], -5)
     array([0.030755..., 0.292180..., 0.790536...])
     """
-    return _values(DET_CDF, D, x, c, _opts(c0, start, gamma0, gls, verified))
+    return _values(DET_CDF, D, x, c, _opts(c0, start, gamma0, gls, verified, method))
 
 
-@fill_doc(opts=OPTS_DOC, verified=VERIFIED_DOC, notes=NOTES_DOC)
-def dist_pdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False):
+@fill_doc(opts=OPTS_DOC, verified=VERIFIED_DOC, notes=NOTES_DOC, method=METHOD_DOC)
+def dist_pdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False, method="auto"):
     """Density of the limit of the Dickey-Fuller t-ratio for a design, by the general engine.
 
     For a design whose numerator has rank one (no deterministic terms, GLS detrending) with ``c0 > 0`` the density is
@@ -156,6 +186,7 @@ def dist_pdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False)
         The points. ``-inf``, ``inf`` and ``nan`` give 0, 0 and ``nan``.
     {opts}
     {verified}
+    {method}
 
     Returns
     -------
@@ -181,11 +212,11 @@ def dist_pdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False)
     >>> dist_pdf(trend(2), -3.8)               # the quadratic trend at the unit root
     0.142477...
     """
-    return _values(DET_PDF, D, x, c, _opts(c0, start, gamma0, gls, verified))
+    return _values(DET_PDF, D, x, c, _opts(c0, start, gamma0, gls, verified, method))
 
 
-@fill_doc(opts=OPTS_DOC, notes=NOTES_DOC)
-def dist_quantile(D, p, c=0, *, x0=-2, tol=1e-9, c0=0, start=None, gamma0=0, gls=None):
+@fill_doc(opts=OPTS_DOC, notes=NOTES_DOC, method=METHOD_DOC)
+def dist_quantile(D, p, c=0, *, x0=-2, tol=1e-9, c0=0, start=None, gamma0=0, gls=None, method="auto"):
     """Quantiles of the limit of the Dickey-Fuller t-ratio for a design, by the general engine.
 
     Newton's method from ``x0`` on `dist_cdf` with `dist_pdf` from the same evaluation (the step limited to 1), the
@@ -203,6 +234,7 @@ def dist_quantile(D, p, c=0, *, x0=-2, tol=1e-9, c0=0, start=None, gamma0=0, gls
         The start of the search.
     tol : float, default 1e-9
         The tolerance on the quantile.
+    {method}
 
     Returns
     -------
@@ -223,7 +255,7 @@ def dist_quantile(D, p, c=0, *, x0=-2, tol=1e-9, c0=0, start=None, gamma0=0, gls
     >>> dist_quantile(perron("C", 0.3), [0.01, 0.05, 0.10])     # critical values of Perron's model C
     array([-4.625894..., -4.072544..., -3.782146...])
     """
-    return _quantiles(DET_Q, D, p, c, _opts(c0, start, gamma0, gls), dfl_num(x0, "x0"), dfl_num(tol, "tol"))
+    return _quantiles(DET_Q, D, p, c, _opts(c0, start, gamma0, gls, method=method), dfl_num(x0, "x0"), dfl_num(tol, "tol"))
 
 
 @fill_doc(opts=OPTS_DOC)

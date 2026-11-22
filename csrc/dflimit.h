@@ -107,6 +107,18 @@ extern const double K0C[], K0F[];                   /* the Taylor cells of e^z K
    with Re sqrt(d^2 - 2 i W) - d = sqrt(WMAX), d = -(c + 20), and the step of the trapezoidal rule in u is multiplied by
    20/|c| (the phase of the kernel, about w/(2|c|), outruns its decay); unchanged on [-20, inf) (as wmaxc, hufac in DFExact.jl) */
 static inline double dfl_wmaxc(double c) { if (c >= -20) return DFL_WMAX; double d = -(c + 20), a = d + sqrt(DFL_WMAX), w = a * sqrt(a * a - d * d); return w > DFL_WMAX ? w : DFL_WMAX; }
+/* the model code of a provider of the general engine (dfl_det_line.c): the line integral below takes P(t), the roots, the
+ * kernel (the rank of the numerator), the line and its end from the provider set on the calling thread, for the designs of
+ * the general engine whose numerator has rank one or two (the line integral with the explicit kernel of dfl_det_dist) */
+#define DFL_MODEL_PROV 100
+void dfl_prov_tparts(int nt, const cdouble *t, cdouble *P, cdouble *s1, cdouble *s2, cdouble *M0);
+int dfl_prov_kern(void);
+double dfl_prov_wend(void);
+double dfl_prov_tau(void);
+/* the kernel of the inner integrals (1: one positive root, the chi-square kernel; 2: one root of each sign, K_0) and the end
+ * of the line of a model */
+static inline int dfl_kern(int model, bool stat) { return model == DFL_MODEL_PROV ? dfl_prov_kern() : ((model == 1 || model == 4) && !stat) ? 1 : 2; }
+static inline double dfl_wmaxc_m(int model, double c) { return model == DFL_MODEL_PROV ? dfl_prov_wend() : dfl_wmaxc(c); }
 static inline double dfl_hufac(double c) { return c >= -20 ? 1.0 : 20 / (-c); }
 /* the number of Filon panels on [a, b], a panel of the geometric partition of an edge part with the frequency y: panels of at
    most 25/y up to w = DFL_FILONW/y; for c < -20 at most half the period 4 pi |c| of the factor e^{i w E V}, E V ~ 1/(2|c|), of the
@@ -138,6 +150,23 @@ static inline bool dfl_fixed_ok(int model, double c, double g0) { double l = (c 
 #define DFL_K0NI 100
 #define DFL_K0HF 0.125
 #define DFL_K0R 25.0
+
+/* ---- the fixed node layouts of the line integral's inner integrals (dfl_batch.c; the batched evaluation of DFExact.jl) ----
+ * For c <= 0, c0 = 0 and |q| above about 0.034 (dfl_usebatch) the inner integrals of the chi-square kernel (at tau = 1) and
+ * of the K_0 kernel (the density at any tau, the distribution function at tau = 1) are sums over nodes that do not depend on
+ * t, C_k exp(A_k t + B_k s(t)) (times K_0(b X_k)), on geometric panels; cached per (kernel, kind, q, tau, the caps). */
+typedef struct dfl_batch dfl_batch;
+const dfl_batch *dfl_batch_get(int kern, int kind, double q, double tau, double e1, double r1);
+void dfl_batch_release(const dfl_batch *B);
+void dfl_batch_empty_cache(void);
+void dfl_batch_values(const dfl_batch *B, int part, int n, const cdouble *t, const cdouble *s1, const cdouble *s2, const cdouble *M0, cdouble *out);
+int dfl_usebatch(int batched, double c, double q, double tau);
+extern int DFL_BATCHK0;
+/* the caps (e1, r1) of the first pieces of the K_0 kernel's edge segment and ray X < 0 (k0first of DFExact.jl): for c < -20,
+ * and for a provider wherever |s_1(tau)| exceeds DFL_K0FIRST_S1, 1/b and 1e-2/|s_1| (b = (s_2 - s_1)/2, s_1 at tau);
+ * Inf otherwise */
+#define DFL_K0FIRST_S1 450.0
+void dfl_k0first(int model, double c, bool stat, double tau, double *e1, double *r1);
 
 /* ---- special functions (dfl_special.c) ---- */
 cdouble dfl_erf(cdouble z);                         /* erf for complex z (Faddeeva) */
@@ -394,7 +423,18 @@ typedef struct {
     int verified;        /* 0 (default): one evaluation; 1: the checked computation (two rules, a third where they differ by vtol) */
     double vtol;         /* 1e-9 */
     double phi, hfac;    /* the outer contour: its asymptotic angle (NaN: the default rule) and the factor of its step (1) */
+    int method;          /* the t-ratio of dfl_det_dist, dfl_det_quantile: DFL_DET_AUTO (the default), DFL_DET_LINE, DFL_DET_PATHS */
 } dfl_det_opts;
+/* the method of the t-ratio's distribution function, density and quantiles: DFL_DET_AUTO the line integral with the explicit
+ * kernel where it covers the design and the rule takes it (c0 = 0 and c >= -20: dfl_det_line.c), the inversion on paths
+ * around the roots otherwise; DFL_DET_LINE the line integral (an error with the reason where it does not cover the design,
+ * the start or the options: no deterministic terms, continuous designs that do not vanish at the origin and whose span is
+ * closed under differentiation, such as polynomial trends and an intercept with sines and cosines, the statistic that
+ * detrends first for continuous designs that do not vanish at the origin; a zero or a stationary start; least squares
+ * detrending); DFL_DET_PATHS the inversion on paths */
+#define DFL_DET_AUTO 0
+#define DFL_DET_LINE 1
+#define DFL_DET_PATHS 2
 void dfl_det_defaults(dfl_det_opts *o);
 /* the warnings of the last call on this thread, or NULL: every user-level function of the general engine, every
  * dfl_engine_* function and dfl_design_from_matrix clear them at their start (a composite call keeps those of its parts);
@@ -463,6 +503,12 @@ typedef struct {
     double g0;            /* the fixed start */
     double gls;           /* (a design) NaN, or GLS detrending at cbar */
 } dfl_spec;
+/* method of dfl_engine_dist and dfl_engine_icdf: 0 automatic, 1 the line integral, 2 the double (conditional) integral, 3 the
+ * contour integral of the classical engine; where the general engine computes (engine general, or a design the classical
+ * engine does not have) 0 is its own rule, 1 its line integral with the explicit kernel and DFL_METHOD_PATHS its inversion on
+ * paths (a design that is a classical case takes them with DFL_METHOD_PATHS under engine auto too; a case code needs
+ * engine general) */
+#define DFL_METHOD_PATHS 4
 /* the functions of the rule */
 #define DFL_F_DIST 1
 #define DFL_F_ICDF 2

@@ -315,6 +315,7 @@ double dfl_tstar(int model, double c, bool stat)
 static void unwrap(double *ph, int n) { for (int j = 1; j < n; j++) ph[j] -= 2 * M_PI * round((ph[j] - ph[j - 1]) / (2 * M_PI)); }
 void dfl_tparts(int model, double c, int nt, const cdouble *t, bool stat, cdouble *P, cdouble *s1, cdouble *s2, cdouble *M0)
 {
+    if (model == DFL_MODEL_PROV) { dfl_prov_tparts(nt, t, P, s1, s2, M0); return; }   /* (a provider of the general engine, dfl_det_line.c) */
     double *ph = malloc(nt * sizeof(double));
     if (model == 1 && !stat) {
         for (int j = 0; j < nt; j++) {

@@ -12,8 +12,9 @@ import warnings
 import numpy as np
 
 CASES = ("DK", "DU", "DT", "SK", "SU", "ST", "DG")
-_METHODS = {"auto": 0, "single": 1, "line": 1, "double": 2, "conditional": 2, "contour": 3}
-_METHOD_MSG = 'method must be "auto", "single" ("line"), "double" ("conditional") or "contour"'
+_METHODS = {"auto": 0, "single": 1, "line": 1, "double": 2, "conditional": 2, "contour": 3, "paths": 4}
+_METHOD_MSG = ('method must be "auto", "single" ("line"), "double" ("conditional") or "contour" ("paths", the general '
+               "engine's inversion on paths around the roots, with a design or engine=\"general\")")
 
 
 def dfl_case(cas, allowed=CASES):

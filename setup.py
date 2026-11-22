@@ -19,11 +19,11 @@ from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
 CSRC = "csrc"
-ENGINE_C = ["dfl_special.c", "dfl_mgf.c", "dfl_single.c", "dfl_gen.c", "dfl_moments.c", "dfl_double.c", "dfl_api.c",
+ENGINE_C = ["dfl_special.c", "dfl_mgf.c", "dfl_single.c", "dfl_batch.c", "dfl_gen.c", "dfl_moments.c", "dfl_double.c", "dfl_api.c",
             "dfl_gilpelaez.c", "dfl_threads.c", "tables.c",
             # the general engine (any deterministic terms) and the router over the two engines
             "dfl_det_la.c", "dfl_det_design.c", "dfl_det_mgf.c", "dfl_det_path.c", "dfl_det_inner.c", "dfl_det_api.c",
-            "dfl_det_paper2.c", "dfl_det_route.c", "dfl_det_tables.c"]
+            "dfl_det_paper2.c", "dfl_det_route.c", "dfl_det_line.c", "dfl_det_tables.c"]
 ENGINE_CXX = ["Faddeeva.cc", "faddeeva_shim.cpp"]
 ENGINE_H = ["dflimit.h", "dfl_lock.h", "dfl_vmath.h", "dfl_det_int.h", "Faddeeva.h"]
 MACROS = [("DFL_QUIET", None)]

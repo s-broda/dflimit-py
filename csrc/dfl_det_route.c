@@ -67,7 +67,7 @@ static void cwarn_put(const cwarn_t *w) { dfl_warning_clear(); dfl_warning_join(
 /* the method checks of the classical engine (check_method of dfl_api.c, ltratio_args) */
 static int method_ok(int model, double g0, int stat, int method, char *err, size_t errlen)
 {
-    if (method < 0 || method > 3) { snprintf(err, errlen, "method must be 0 (automatic), 1 (single integral), 2 (double integral) or 3 (contour integral)"); return 0; }
+    if (method < 0 || method > 3) { snprintf(err, errlen, "method must be 0 (automatic), 1 (single integral), 2 (double integral) or 3 (contour integral) (4, the general engine's inversion on paths, with a design or engine general)"); return 0; }
     if (model == 4 && method == 2) { snprintf(err, errlen, "case DG has the line integral representation only"); return 0; }
     if (method == 3 && !((model == 2 || model == 3) && g0 != 0 && !stat)) { snprintf(err, errlen, "%s", DFL_CONTOUR_MSG); return 0; }
     return 1;
@@ -98,6 +98,20 @@ int dfl_autoengine(int f, int model, int stat, double g0, double gls, double c, 
     case DFL_F_DIST:
         /* the t-ratio: the faster engine where the two agree to 1e-10, the more accurate one where they do not */
         if (stat && c0 != 0 && c <= -3e-3) return DFL_ENGINE_GENERAL;
+        /* x = 0, the points of the coefficient statistic (dfl_engine_coef: F at x = 0 with the null value c0 + y), one point
+         * per call (scratch timings of November 2026, cases DK, DU, DT, c from 1 to -80, y at the 1 to 99% quantiles of the
+         * statistic and c0 = -3, 2; the Julia measurements agree): with c0 > 0 the classical line integral, 2 to 17 times
+         * faster there (X(v) = c0 v^2 + 1/2 has no root), where the rule below takes the general engine for the t-ratio; with
+         * c0 < 0 in case DK for c > -5 the general engine (1.0 to 2.1 times faster; the classical line integral with its
+         * general kernel), in case DU the classical engine (over the quantiles at c = 0, -5, -10 1.0 to 1.6 times faster,
+         * where the rule below takes the general engine for the t-ratio: coef_cdf of case DU at c = -5 was about three times
+         * slower in the R and Python packages at the median); case DT as the t-ratio (the general engine up to 1.7 times
+         * faster for -20 <= c <= 0) */
+        if (x == 0 && !fixed && !stat && c0 != 0 && -100 < c && c <= 1 && (DK || DU || DT)) {
+            if (c0 > 0) return DFL_ENGINE_CLASSICAL;
+            if (DK && c > -5) return DFL_ENGINE_GENERAL;
+            if (DU) return DFL_ENGINE_CLASSICAL;
+        }
         if (!fixed && !stat && c0 > 0 && -100 < c && c <= 1) {
             /* (case DK: the density is infinite at the tangency x* = -sqrt(2 c0); just above it the classical line integral) */
             if (DK) { double xs = -sqrt(2 * c0); if (xs < x && x <= xs + 1e-3 * dmax(1.0, fabs(xs))) return DFL_ENGINE_CLASSICAL; }
@@ -105,11 +119,12 @@ int dfl_autoengine(int f, int model, int stat, double g0, double gls, double c, 
         }
         if (!fixed && !stat && c0 != 0 && c < -100) return DFL_ENGINE_GENERAL;
         if (fixed && DK && c <= 1 && ((c * g0) * (c * g0) / 2 <= 400 || (g0 <= 0.5 && c >= -100))) return DFL_ENGINE_GENERAL;
-        /* (the C timings, not the Julia rule: at c0 = 0 with a zero or stationary start the classical line integral slows
-         * down beyond c = -20, where its outer integral grows longer: at c = -30 to -300 the general engine is 1.2 to 2.9
-         * times faster in cases DK, DU, DT, SK, SU, ST (case DU at c = -100: 1.4 times slower); case DG keeps the classical
-         * engine, 9 times faster) */
-        if (!fixed && c0 == 0 && !DG && c < -20) return DFL_ENGINE_GENERAL;
+        /* (at c0 = 0 with a zero or stationary start the classical line integral, as in the Julia rule: with its fixed node
+         * layouts (dfl_batch.c, November 2026) it is 1.1 to 1.7 times faster than the general engine at c = -30 to -100 in
+         * cases DU, DT, SK, SU, ST and 8 to 11 times in case DK, equal at c = -300 in cases DU, DT (c/test/engine_table_c.txt);
+         * without the layouts the general engine had been 1.2 to 2.9 times faster below c = -20, and the C rule took it there.
+         * For -20 <= c <= 0 the general engine computes a classical case by the same line integral, with P(t) and the roots
+         * from its transform, within 10% of the classical engine's time) */
         /* (the C timings: with a zero start and c0 < 0 the general engine is 1.15 to 1.7 times faster in case DT for
          * -30 <= c <= 0 and in case DU for -10 <= c <= 0; case DK and further out the classical engine.  The tails below 1e-3
          * go back to the classical conditional integral, as for every general value of these cases) */
@@ -118,10 +133,15 @@ int dfl_autoengine(int f, int model, int stat, double g0, double gls, double c, 
     case DFL_F_ICDF:
         /* the quantiles at c0 = 0 (the Julia rule: a fixed start, case DT at c <= 0, ST at c <= -1, DU at c = 0; the C timings
          * extend it: with a zero start the general search is 1.2 to 2 times faster in cases DK, DU, DT up to c = 2, with a
-         * stationary start at c <= -1, 1.3 to 1.6 times; case DG and c > 2 keep the classical search) */
+         * stationary start at c <= -1, 1.3 to 1.6 times; case DG and c > 2 keep the classical search.  With the fixed node
+         * layouts of the classical line integral (November 2026) the general search, whose F and f come from the general
+         * engine's line integral for -20 <= c <= 0 and from one pass on its paths beyond, stays 1.1 to 1.6 times faster in cases
+         * DU, DT, SU, ST down to c = -100 (case DU at c = -50 1.2 times slower) and 2.6 times in case DK at -20 <= c <= 0, but in
+         * case DK below c = -20 the classical search is 2.1 to 3 times faster) */
         if (c0 != 0) return DFL_ENGINE_CLASSICAL;
         if (fixed) return DFL_ENGINE_GENERAL;
         if (DG) return DFL_ENGINE_CLASSICAL;
+        if (DK && c < -20) return DFL_ENGINE_CLASSICAL;
         if (!stat && c <= 2) return DFL_ENGINE_GENERAL;
         if (stat && c <= -1) return DFL_ENGINE_GENERAL;
         return DFL_ENGINE_CLASSICAL;
@@ -153,9 +173,20 @@ int dfl_autoengine(int f, int model, int stat, double g0, double gls, double c, 
 
 /* ---------------------------------------------------------------------------------------------------------------- */
 /* the general engine's F (kind 2) or f (kind 1) of the computation (gen_dist: a negative density set to zero) */
-static int gen_dist(int kind, int n, const double *x, const spec_t *R, double c, double c0, int verified, double *out, char *err, size_t errlen)
+/* the method where the general engine computes (engine general, or a design the classical engine does not have): 0 its own
+ * rule (DFL_DET_AUTO), 1 the line integral (DFL_DET_LINE: the classical name of the line integral, as for the classical
+ * cases), DFL_METHOD_PATHS the inversion on paths; 2 (double) and 3 (contour) name representations of the classical engine */
+static int gen_method(int method, int *gm, char *err, size_t errlen)
 {
-    dfl_det_opts o; det_opts_of(R, c0, verified, &o);
+    if (method == 0) { *gm = DFL_DET_AUTO; return 0; }
+    if (method == 1) { *gm = DFL_DET_LINE; return 0; }
+    if (method == DFL_METHOD_PATHS) { *gm = DFL_DET_PATHS; return 0; }
+    snprintf(err, errlen, "method %d names a representation of the classical engine; it does not apply with the general engine (whose methods are 0 automatic, 1 the line integral and %d the inversion on paths)", method, DFL_METHOD_PATHS);
+    return 1;
+}
+static int gen_dist(int kind, int n, const double *x, const spec_t *R, double c, double c0, int verified, int gm, double *out, char *err, size_t errlen)
+{
+    dfl_det_opts o; det_opts_of(R, c0, verified, &o); o.method = gm;
     if (dfl_det_dist(kind, R->D, n, x, c, &o, out, err, errlen)) return 1;
     if (kind == 1) for (int k = 0; k < n; k++) if (out[k] < 0) out[k] = 0;
     return 0;
@@ -174,7 +205,7 @@ static int merged_dist(int kind, int n, const double *x, const spec_t *R, double
     if (ng == 0) { free(eng); return classical_dist(kind, n, x, R, c, c0, 0, 0, out, err, errlen); }
     double *xg = malloc((n + 1) * sizeof(double)), *vg = malloc((n + 1) * sizeof(double)); int *ig = malloc((n + 1) * sizeof(int)), m = 0;
     for (int k = 0; k < n; k++) if (eng[k] == DFL_ENGINE_GENERAL) { xg[m] = x[k]; ig[m++] = k; }
-    rc = gen_dist(kind, m, xg, R, c, c0, 0, vg, err, errlen);
+    rc = gen_dist(kind, m, xg, R, c, c0, 0, DFL_DET_AUTO, vg, err, errlen);
     if (!rc) for (int j = 0; j < m; j++) {
         out[ig[j]] = vg[j];
         if (vg[j] < 1e-3 && dfl_automethod(R->model, c, c0, R->g0, R->stat, xg[j]) == 2) eng[ig[j]] = DFL_ENGINE_CLASSICAL;
@@ -195,8 +226,8 @@ int dfl_engine_dist(int kind, int n, const double *x, const dfl_spec *S, double 
     spec_t R; if (resolve(S, &R, err, errlen)) return 1;
     int rc;
     if (engine == DFL_ENGINE_GENERAL || (engine == DFL_ENGINE_AUTO && S->D && !classical_valid(&R, c, c0, method))) {
-        if (method != 0) { snprintf(err, errlen, "method %d names a representation of the classical engine; it does not apply with the general engine", method); spec_free(&R); return 1; }
-        rc = gen_dist(kind, n, x, &R, c, c0, verified, out, err, errlen);
+        int gm; if (gen_method(method, &gm, err, errlen)) { spec_free(&R); return 1; }
+        rc = gen_dist(kind, n, x, &R, c, c0, verified, gm, out, err, errlen);
     } else if (engine == DFL_ENGINE_CLASSICAL) {
         if (R.model == 0) { snprintf(err, errlen, "engine classical: the classical engine has the cases DK, DU, DT, SK, SU, ST and DG only (trend(-1), trend(0), trend(1), the last GLS-detrended at cbar = -13.5)"); spec_free(&R); return 1; }
         rc = classical_dist(kind, n, x, &R, c, c0, method, verified, out, err, errlen);
@@ -225,7 +256,7 @@ static double erfinv_(double y)
     return x;
 }
 /* the general engine's quantiles, started at the normal approximation from the moments (gen_icdf) */
-static int gen_icdf(int n, const double *p, const spec_t *R, double c, double c0, double tol, double *q, char *err, size_t errlen)
+static int gen_icdf(int n, const double *p, const spec_t *R, double c, double c0, double tol, int gm, double *q, char *err, size_t errlen)
 {
     double x0 = -2.0, sd = 1.0, m[2], me[2]; int have = 0;
     if (R->model != 0 && R->model != 4 && classical_valid(R, c, c0, 0) && dfl_autoengine(DFL_F_MOM, R->model, R->stat, R->g0, R->gls, c, c0, 0.0) == DFL_ENGINE_CLASSICAL) {
@@ -235,7 +266,7 @@ static int gen_icdf(int n, const double *p, const spec_t *R, double c, double c0
         have = dfl_det_moments(R->D, c, 2, &o, m, NULL, err, errlen) == 0;
     }
     if (have) { x0 = m[0]; sd = sqrt(dmax(m[1] - m[0] * m[0], 1e-6)); }
-    dfl_det_opts o; det_opts_of(R, c0, 0, &o);
+    dfl_det_opts o; det_opts_of(R, c0, 0, &o); o.method = gm;
     det_warn_clear(); det_warn_hold(1);
     for (int k = 0; k < n; k++) {
         if (!(p[k] > 0 && p[k] < 1)) { snprintf(err, errlen, "p must lie in (0, 1)"); det_warn_hold(0); return 1; }
@@ -268,7 +299,7 @@ static int routed_icdf(int n, const double *p, const spec_t *R, double c, double
             CDF(x, F); PDF(x, f);
             if (F > pk) hi = x; else lo = x;
             double xn = x - (F - pk) / f;
-            if (!(lo < xn && xn < hi && isfinite(xn))) xn = (lo + hi) / 2;
+            if (!(lo <= xn && xn <= hi && isfinite(xn))) xn = (lo + hi) / 2;   /* (a step below half an ulp lands on the end of the bracket: converged) */
             if (fabs(xn - x) < tol) { x = xn; conv = 1; break; }
             x = xn;
         }
@@ -289,14 +320,14 @@ int dfl_engine_icdf(int n, const double *p, const dfl_spec *S, double c, double 
     if (!(tol > 0)) tol = 1e-10;
     int rc;
     if (engine == DFL_ENGINE_GENERAL || (engine == DFL_ENGINE_AUTO && S->D && !classical_valid(&R, c, c0, method))) {
-        if (method != 0) { snprintf(err, errlen, "method %d names a representation of the classical engine; it does not apply with the general engine", method); spec_free(&R); return 1; }
-        rc = gen_icdf(n, p, &R, c, c0, tol, q, err, errlen);
+        int gm; if (gen_method(method, &gm, err, errlen)) { spec_free(&R); return 1; }
+        rc = gen_icdf(n, p, &R, c, c0, tol, gm, q, err, errlen);
     } else if (engine == DFL_ENGINE_CLASSICAL) {
         if (R.model == 0) { snprintf(err, errlen, "engine classical: the classical engine has the cases DK, DU, DT, SK, SU, ST and DG only"); spec_free(&R); return 1; }
         rc = dfl_icdf(n, p, R.model, c, c0, R.g0, R.stat, method, tol, NULL, NULL, q, NULL, NULL, NULL, err, errlen);
     } else {
         if (dfl_check_args(R.model, c, c0, R.g0, R.stat, err, errlen) || !method_ok(R.model, R.g0, R.stat, method, err, errlen)) { spec_free(&R); return 1; }
-        if (method == 0 && dfl_autoengine(DFL_F_ICDF, R.model, R.stat, R.g0, R.gls, c, c0, 0.0) == DFL_ENGINE_GENERAL) rc = gen_icdf(n, p, &R, c, c0, tol, q, err, errlen);
+        if (method == 0 && dfl_autoengine(DFL_F_ICDF, R.model, R.stat, R.g0, R.gls, c, c0, 0.0) == DFL_ENGINE_GENERAL) rc = gen_icdf(n, p, &R, c, c0, tol, DFL_DET_AUTO, q, err, errlen);
         else rc = routed_icdf(n, p, &R, c, c0, method, tol, q, err, errlen);
     }
     spec_free(&R);

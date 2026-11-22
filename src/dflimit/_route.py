@@ -134,7 +134,10 @@ def det_opts(S, c0=0.0, verified=False):
 
 
 def method_ok(model, g0, stat, me):
-    """The classical engine's check of the method (check_method of dfl_api.c)."""
+    """The classical engine's check of the method (check_method of dfl_api.c; 4, the general engine's inversion on paths,
+    is not a representation of the classical engine)."""
+    if me == 4:
+        return False
     if model == 4 and me == 2:
         return False
     if me == 3 and not (model in (2, 3) and g0 != 0 and not stat):

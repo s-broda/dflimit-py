@@ -84,12 +84,25 @@ of them take the keyword `engine`:
 - `engine="auto"` (the default, for a case string as for a design) is the router's rule: where the classical engine accepts the arguments
   it takes, at each point, the faster engine where the two agree to 1e-10 and the more accurate one where they do not
   (for example the general engine for the t-ratio with a stationary start and c0 != 0, with a zero start and c0 > 0
-  for -100 < c <= 1, and at c0 = 0 below c = -20; the classical engine for the regions and for the ADFmax test with a
-  zero start), and the general engine for every other design; a `method` other than `"auto"`, or `verified=True`,
-  keeps the classical engine; where it takes the general engine for a case string the two engines agree to about
-  1e-9, so that the values can move in the tenth digit against the versions before 0.5.0;
+  for -100 < c <= 1; the classical engine for the regions and for the ADFmax test with a zero start), and the general
+  engine for every other design; a `method` other than `"auto"`, or `verified=True`, keeps the classical engine for a
+  classical case; where it takes the general engine for a case string the two engines agree to about 1e-9, so that the
+  values can move in the tenth digit against the versions before 0.5.0;
 - `engine="classical"` and `engine="general"` force one engine (`"classical"` for the cases DK, DU, DT, SK, SU, ST,
-  DG only, with the values of the versions before 0.5.0; `"general"` with `method="auto"` only).
+  DG only, with the values of the versions before 0.5.0; `"general"` with the general engine's methods `"auto"`,
+  `"line"` and `"paths"`).
+
+For the designs whose numerator has rank one or two (polynomial trends of any order, an intercept with sines and
+cosines, `detrend_first` of a continuous design that does not vanish at the origin; a zero or a stationary start and
+least squares detrending) the general engine also has the line integral with the explicit kernel: the classical line
+integral with P(t) and the two roots supplied by the general engine's transform. `dist_cdf`, `dist_pdf` and
+`dist_quantile` choose by `method`: `"auto"` (the default) takes it at c0 = 0 for c >= -20, where it is 2.2 to 3.5
+times faster than the inversion on paths per value and 1.8 to 2.7 times per quantile, and the paths otherwise; `"line"`
+forces it (`ValueError` with the reason where it does not cover the design) and `"paths"` the paths. `ltratio_cdf`,
+`ltratio_pdf` and `ltratio_icdf` with a design pass `method="line"` or `"paths"` on (for a design that is a classical
+case, `"line"` is the classical line integral). The classical engine's line integral takes its inner integrals on
+fixed node layouts at c <= 0, c0 = 0 (8 to 20 times faster than the adaptive rules in case DK, 2 to 3 times in the
+other cases).
 
 The general engine's own functions of a design have the names of the Julia package: `dist_cdf`, `dist_pdf`,
 `dist_quantile`, `dist_moments` (the t-ratio), `coef_pdf`, `coef_quantile`, `coef_cdf_gp` (the coefficient statistic;
@@ -98,8 +111,8 @@ its distribution function is `coef_cdf` with the design), `local_power`, `lin_cd
 and the companions `pt_cdf`, `pt_pdf`, `pt_quantile`, `pt_power`, `pt_envelope` (the point-optimal statistic of
 Elliott, Rothenberg and Stock and the power envelope of any design), `lm_cdf`, `lm_quantile`, `lm_power` (the LM
 statistic of Schmidt and Phillips), `mza_cdf`, `mza_quantile` (MZ_alpha) and `msb_cdf`, `msb_quantile` (MSB), with
-the options `c0`, `start`, `gamma0` (the fixed start), `gls` and, for the distribution functions and densities,
-`verified` (the checked computation: two evaluations on different paths, a third where they differ by more than
+the options `c0`, `start`, `gamma0` (the fixed start), `gls`, `method` (the t-ratio) and, for the distribution
+functions and densities, `verified` (the checked computation: two evaluations on different paths, a third where they differ by more than
 1e-9). Every value is one evaluation by default. The engine's warnings (where one evaluation may be inaccurate) are
 `RuntimeWarning`s.
 

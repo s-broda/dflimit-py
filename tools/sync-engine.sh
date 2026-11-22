@@ -24,10 +24,10 @@ PKG=$(cd "$(dirname "$0")/.." && pwd)
 [ -f "$PKG/pyproject.toml" ] && [ -d "$PKG/src/dflimit" ] || { echo "$PKG is not the package root" >&2; exit 1; }
 
 ENGINE="dflimit.h dfl_lock.h dfl_vmath.h dfl_api.c dfl_double.c dfl_gen.c dfl_gilpelaez.c dfl_mgf.c dfl_moments.c
-        dfl_single.c dfl_special.c dfl_threads.c tables.c"
+        dfl_single.c dfl_batch.c dfl_special.c dfl_threads.c tables.c"
 # the general engine (any deterministic terms) and the router over the two engines
 GENERAL="dfl_det_int.h dfl_det_api.c dfl_det_design.c dfl_det_inner.c dfl_det_la.c dfl_det_mgf.c dfl_det_paper2.c
-         dfl_det_path.c dfl_det_route.c dfl_det_tables.c"
+         dfl_det_path.c dfl_det_route.c dfl_det_line.c dfl_det_tables.c"
 FADDEEVA="Faddeeva.cc Faddeeva.h faddeeva_shim.cpp"
 
 mkdir -p "$PKG/csrc"

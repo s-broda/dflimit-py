@@ -397,7 +397,7 @@ int dfl_icdf(int n, const double *p, int model, double c, double c0, double g0, 
             CDF(x, F); PDF(x, f);
             if (F > pk) hi = x; else lo = x;
             double xn = x - (F - pk) / f;
-            if (!(lo < xn && xn < hi) || !isfinite(xn)) xn = (lo + hi) / 2;
+            if (!(lo <= xn && xn <= hi) || !isfinite(xn)) xn = (lo + hi) / 2;   /* (a step below half an ulp lands on the end of the bracket: converged) */
             if (fabs(xn - x) < tol) { x = xn; cv = 1; break; }
             x = xn;
         }

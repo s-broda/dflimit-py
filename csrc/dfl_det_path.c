@@ -88,6 +88,7 @@ void dfl_det_empty_caches(void)
     for (int i = 0; i < NPREPC; i++) prep_unref(PREPC[i].P);
     NPATHC = NLINEC = NPREPC = 0;
     dfl_unlock(&CLOCK_);
+    det_line_empty_cache();      /* (the providers of the line integral, dfl_det_line.c) */
 }
 
 /* ---------------------------------------------------------------------------------------------------------------- */

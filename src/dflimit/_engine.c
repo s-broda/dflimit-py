@@ -291,15 +291,17 @@ static PyObject *design_out(const dfl_design *D)
                          D->K, D->deg, D->loc, D->first);
 }
 
-/* the options of the general engine: the tuple (c0, start, gamma0, gls, verified), gls NaN for least squares */
+/* the options of the general engine: the tuple (c0, start, gamma0, gls, verified) or (c0, start, gamma0, gls, verified,
+ * method), gls NaN for least squares, method 0 auto, 1 the line integral with the explicit kernel, 2 the inversion on
+ * paths around the roots */
 static int detopts_in(PyObject *t, dfl_det_opts *o)
 {
-    int start, verified;
+    int start, verified, method = DFL_DET_AUTO;
     double c0, g0, gls;
     dfl_det_defaults(o);
-    if (!PyTuple_Check(t)) { PyErr_SetString(PyExc_TypeError, "the options must be a tuple (c0, start, gamma0, gls, verified)"); return -1; }
-    if (!PyArg_ParseTuple(t, "diddi:opts", &c0, &start, &g0, &gls, &verified)) return -1;
-    o->c0 = c0; o->start = start; o->gamma0 = g0; o->gls = gls; o->verified = verified != 0;
+    if (!PyTuple_Check(t)) { PyErr_SetString(PyExc_TypeError, "the options must be a tuple (c0, start, gamma0, gls, verified[, method])"); return -1; }
+    if (!PyArg_ParseTuple(t, "diddi|i:opts", &c0, &start, &g0, &gls, &verified, &method)) return -1;
+    o->c0 = c0; o->start = start; o->gamma0 = g0; o->gls = gls; o->verified = verified != 0; o->method = method;
     return 0;
 }
 

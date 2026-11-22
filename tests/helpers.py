@@ -73,7 +73,9 @@ def det_designs(path=None):
     import dflimit
     funs = {"sincos": (lambda r: [math.sin(2 * math.pi * r), math.cos(2 * math.pi * r)], ()),
             "perronC04": (lambda r: [1.0, r, 1.0 if r > 0.4 else 0.0, r - 0.4 if r > 0.4 else 0.0], (0.4,)),
-            "expr": (lambda r: [math.exp(r)], ())}
+            "expr": (lambda r: [math.exp(r)], ()),
+            "trig": (lambda r: [1.0, math.sin(2 * math.pi * r), math.cos(2 * math.pi * r)], ()),
+            "rlin": (lambda r: [r], ())}
     D = {}
     with open(path or os.path.join(REF, "det_ref.txt")) as fh:
         for line in fh:
@@ -163,12 +165,14 @@ def det_value(r, D):
     G = D[r["id"]]
     fn, x, c, c0, par = r["fn"], r["x"], r["c"], r["c0"], r["par"]
     kw = dict(start=STARTS[r["st"]], gamma0=r["g0"] if r["st"] == 1 else 0.0, gls=None if math.isnan(r["cb"]) else r["cb"])
+    fn, _, me = fn.partition("@")                     # ('cdf@line', 'pdf@paths', 'quant@auto': the method of the t-ratio)
+    me = me or "auto"
     if fn == "cdf":
-        return d.dist_cdf(G, x, c, c0=c0, verified=r["ver"], **kw)
+        return d.dist_cdf(G, x, c, c0=c0, verified=r["ver"], method=me, **kw)
     if fn == "pdf":
-        return d.dist_pdf(G, x, c, c0=c0, verified=r["ver"], **kw)
+        return d.dist_pdf(G, x, c, c0=c0, verified=r["ver"], method=me, **kw)
     if fn == "quant":
-        return d.dist_quantile(G, x, c, x0=par, tol=1e-9, c0=c0, **kw)
+        return d.dist_quantile(G, x, c, x0=par, tol=1e-9, c0=c0, method=me, **kw)
     if fn == "coefcdf":
         return d.coef_cdf(x, G, c, c0=c0, g0=kw["gamma0"], start=kw["start"], gls=kw["gls"], engine="general",
                           verified=r["ver"])

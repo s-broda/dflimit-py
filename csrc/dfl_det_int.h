@@ -252,6 +252,22 @@ int det_contour_eval_specs(const det_path *CP, int ne, const int *nt, const det_
                            double *F, double *f, double *eF, double *ef, char *err, size_t errlen);
 double det_vsum(const det_path *CP, double y, int cdf);
 
+/* ---- the line integral with the explicit kernel for the designs of rank one or two (dfl_det_line.c) ---- */
+typedef struct dfl_prov dfl_prov;
+/* method auto takes the line integral at c0 = 0 from this c on (the C timings: det_line_auto) */
+#define DET_LINE_AUTO_CMIN (-20.0)
+int det_line_auto(double c, double c0);
+/* the provider when the method (o->method auto or line) takes the line integral (*out, a reference: det_line_release), NULL
+ * when the paths compute; 1 with the error in err where method line is refused (the reason) or the provider fails */
+int det_line_select(const dfl_design *D, double c, const dfl_det_opts *o, dfl_prov **out, char *err, size_t errlen);
+void det_line_release(dfl_prov *pv);
+/* one value (kind 1 density, 2 distribution function) at x with the null value c0: 0, the bound of the classical
+ * integrator's paths (DFL_BOUND_*), or -1 where the provider failed */
+int det_line_value(dfl_prov *pv, int kind, double x, double c0, double *out);
+void det_line_point_error(char *err, size_t errlen, const char *fn, const dfl_prov *pv, double x, double c0, int rc);
+void det_line_empty_cache(void);
+int det_line_cache_size(void);
+
 /* the generated tables (dfl_det_tables.c) */
 typedef struct { int K, r, rp; double sc[9]; const double *t, *dt, *R, *lP, *wt; } det_path_table;
 extern const det_path_table DET_PATH_TABLES[3];          /* trend(-1), trend(0), trend(1) at c = 0, zero start */
