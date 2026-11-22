@@ -10,7 +10,8 @@ from ._route import AUTO, CLASSICAL, ENGINE_DOC, GENERAL, engine_of, route_tuple
 from ._utils import Result, cint, dfl_case, dfl_num, dfl_real, dfl_shape, f64, fill_doc, warn
 
 ADFMAX_CASES = ("DU", "DT", "SU", "ST")
-NOT_CLASSICAL_ADF = "engine='classical': ADFmax of the classical engine has the cases DU, DT, SU, ST only"
+NOT_CLASSICAL_ADF = ("the classical engine's ADFmax has the cases DU, DT, SU, ST with a zero or a stationary start only "
+                     "(a fixed start: engine='auto' or 'general', or a design)")
 
 ADFMAX_NOTES_DOC = """\
 ADFmax is the larger of the Dickey-Fuller t-ratios of the forward regression (y_t on y_{t-1}) and of the reverse
@@ -32,14 +33,19 @@ info : bool, default False
     estimates ``err`` and the statuses ``status`` (nonzero: the error estimate is not met) of the conditional
     integral, each of the shape of ``x`` (by the router: ``err`` nan, ``status`` 0).
 {engine}
-start : {None, "zero", "stationary"}, optional
-    With a design: the start (``None``: zero; ``"stationary"`` needs c < 0); with a case string the start is that of
-    the case.""".replace("{engine}", ENGINE_DOC)
+start : {None, "zero", "fixed", "stationary"}, optional
+    With a design: the start (``None``: ``"fixed"`` when ``g0 != 0``, else zero; ``"stationary"`` needs c < 0); with
+    a case string the start is that of the case.
+g0 : float, default 0
+    A fixed start J(0) = g0 (cases DU, DT, or a design): the general engine (the classical engine's ADFmax has the zero
+    and the stationary start only; with a case string ``engine="auto"`` or ``"general"`` is needed).""".replace(
+    "{engine}", ENGINE_DOC)
 
 ADFMAX_ROUTE_DOC = """\
 With a design, or with ``engine="auto"`` or ``"general"``, the router computes: ``"auto"`` takes the general engine
-with a stationary start for c <= -0.1 (its values below 1e-3 by the classical conditional integral) and the classical
-engine otherwise, and the general engine for every other design."""
+with a stationary start for c <= -0.1 (its values below 1e-3 by the classical conditional integral), the classical
+engine otherwise with a zero or a stationary start, and the general engine with a fixed start and for every other
+design. ADFmax is that of least-squares detrending at the null value phi = 1 (no GLS detrending, no c0)."""
 
 ADFMAX_REFERENCES_DOC = """\
 .. [1] Leybourne, S. J. (1995), "Testing for Unit Roots Using Forward and Reverse Dickey-Fuller Regressions", Oxford
@@ -48,7 +54,7 @@ ADFMAX_REFERENCES_DOC = """\
 
 @fill_doc(params=ADFMAX_PARAMS_DOC, errors=ERRORS_DOC, notes=ADFMAX_NOTES_DOC, references=ADFMAX_REFERENCES_DOC,
           route=ADFMAX_ROUTE_DOC)
-def adfmax_cdf(x, cas, c=0, info=False, *, engine=None, start=None):
+def adfmax_cdf(x, cas, c=0, info=False, *, engine=None, start=None, g0=0):
     """Distribution function of the limit of the ADFmax statistic of Leybourne (1995).
 
     Parameters
@@ -94,13 +100,15 @@ def adfmax_cdf(x, cas, c=0, info=False, *, engine=None, start=None):
     >>> from dflimit import perron
     >>> adfmax_cdf(-3.0, perron("C", 0.3))   # ADFmax with a break in level and slope (the general engine)
     0.230935...
+    >>> adfmax_cdf([-3.0, -1.5], "DU", -5, g0=1.5, engine="auto")   # a fixed start (the general engine)
+    array([3.768998...e-08, 5.923944...e-04])
     """
-    return _adfmax(2, x, cas, c, info, engine, start)
+    return _adfmax(2, x, cas, c, info, engine, start, g0)
 
 
 @fill_doc(params=ADFMAX_PARAMS_DOC, errors=ERRORS_DOC, notes=ADFMAX_NOTES_DOC, references=ADFMAX_REFERENCES_DOC,
           route=ADFMAX_ROUTE_DOC)
-def adfmax_pdf(x, cas, c=0, info=False, *, engine=None, start=None):
+def adfmax_pdf(x, cas, c=0, info=False, *, engine=None, start=None, g0=0):
     """Density of the limit of the ADFmax statistic of Leybourne (1995).
 
     Parameters
@@ -146,22 +154,21 @@ def adfmax_pdf(x, cas, c=0, info=False, *, engine=None, start=None):
     >>> adfmax_pdf([-3, -2], "SU", -10, engine="auto")   # the router: the general engine with a stationary start
     array([0.401807..., 0.566121...])
     """
-    return _adfmax(1, x, cas, c, info, engine, start)
+    return _adfmax(1, x, cas, c, info, engine, start, g0)
 
 
-def _adfspec(cas, start, engine):
-    """The computation and the engine of ADFmax (zero or stationary start, least squares)."""
-    S = spec_of(cas, 0.0, start, None, ADFMAX_CASES)
-    if S.start == 1:
-        raise ValueError('ADFmax has a zero or a stationary start (start="zero" or "stationary")')
+def _adfspec(cas, start, g0, engine):
+    """The computation and the engine of ADFmax (least-squares detrending, c0 = 0): the classical engine for a case
+    DU, DT, SU, ST with a zero or a stationary start, the router otherwise."""
+    S = spec_of(cas, g0, start, None, ADFMAX_CASES)
     e = engine_of(S, engine)
-    if e == CLASSICAL and S.case not in ADFMAX_CASES:
+    if e == CLASSICAL and (S.case not in ADFMAX_CASES or S.start == 1):
         raise ValueError(NOT_CLASSICAL_ADF)
     return S, e
 
 
-def _adfmax(kind, x, cas, c, info, engine=None, start=None):
-    S, e = _adfspec(cas, start, engine)
+def _adfmax(kind, x, cas, c, info, engine=None, start=None, g0=0):
+    S, e = _adfspec(cas, start, g0, engine)
     if e != CLASSICAL:
         a = dfl_real(x, "x")
         out, wd, wc = _engine.route(R_ADF_CDF if kind == 2 else R_ADF_PDF, route_tuple(S), a.tobytes(), dfl_num(c, "c"), 0.0,
@@ -184,7 +191,7 @@ def _adfmax(kind, x, cas, c, info, engine=None, start=None):
 
 @fill_doc(errors=ERRORS_DOC, notes=ADFMAX_NOTES_DOC, references=ADFMAX_REFERENCES_DOC, engine=ENGINE_DOC,
           route=ADFMAX_ROUTE_DOC)
-def adfmax_icdf(p, cas, c=0, tol=1e-10, x0=-2, *, engine=None, start=None):
+def adfmax_icdf(p, cas, c=0, tol=1e-10, x0=-2, *, engine=None, start=None, g0=0):
     """Quantiles of the limit of the ADFmax statistic of Leybourne (1995).
 
     `adfmax_icdf` has no entry point of its own in the C engine: as ``adfmax_icdf`` of the MATLAB and Julia programs,
@@ -204,8 +211,10 @@ def adfmax_icdf(p, cas, c=0, tol=1e-10, x0=-2, *, engine=None, start=None):
     x0 : float, default -2
         The starting point of the search.
     {engine}
-    start : {None, "zero", "stationary"}, optional
+    start : {None, "zero", "fixed", "stationary"}, optional
         With a design: the start.
+    g0 : float, default 0
+        A fixed start (the general engine), as in `adfmax_cdf`.
 
     Returns
     -------
@@ -250,13 +259,13 @@ def adfmax_icdf(p, cas, c=0, tol=1e-10, x0=-2, *, engine=None, start=None):
     a = dfl_real(p, "p")
     if not np.all((a > 0) & (a < 1)):
         raise ValueError("p must lie in (0, 1)")
-    S, e = _adfspec(cas, start, engine)
+    S, e = _adfspec(cas, start, g0, engine)
     c = dfl_num(c, "c")
     tol = dfl_num(tol, "tol")
     x0 = dfl_num(x0, "x0")
-    if e == GENERAL or (e == AUTO and S.case not in ADFMAX_CASES):
-        st = {0: "zero", 2: "stationary"}[S.start]
-        return _general.adfmax_quantile(S.design, a, c, x0=x0, tol=tol, start=st)
+    if e == GENERAL or (e == AUTO and (S.case not in ADFMAX_CASES or S.start == 1)):
+        st = ("zero", "fixed", "stationary")[S.start]
+        return _general.adfmax_quantile(S.design, a, c, x0=x0, tol=tol, start=st, gamma0=S.g0)
     q = np.empty(a.size)
     for k, pk in enumerate(a.ravel()):
         q[k] = _adfmax_quantile(pk, S.case, c, tol, x0, "classical" if e == CLASSICAL else "auto")

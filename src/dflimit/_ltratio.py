@@ -7,8 +7,8 @@ import math
 import numpy as np
 
 from . import _engine
-from ._route import (AUTO, CLASSICAL, DESIGN_DOC, ENGINE_DOC, F_DIST, F_ICDF, classical_ok, engine_of, route_tuple,
-                     spec_of, warn_brittle, warn_lines)
+from ._route import (AUTO, CLASSICAL, DESIGN_DOC, ENGINE_DOC, F_ICDF, brittle, classical_ok, engine_of, route_tuple,
+                     spec_of, warn_lines)
 from ._utils import Result, cint, dfl_case, dfl_flag, dfl_method, dfl_num, dfl_posint, dfl_real, dfl_shape, f64, fill_doc, warn
 
 # the operations of _engine.route (py_route in _engine.c)
@@ -255,10 +255,9 @@ def _dist(kind, x, cas, c, c0, g0, method, verified=False, engine=None, start=No
     a = dfl_real(x, "x")
     c, c0 = dfl_num(c, "c"), dfl_num(c0, "c0")
     out, wd, wc = _engine.route(R_CDF if kind == 2 else R_PDF, route_tuple(S), a.tobytes(), c, c0, e, me, ve, 0.0)
-    if e == AUTO:
-        warn_brittle(kind, S, c, c0, a, F_DIST)
-    warn_lines(wc, wd)
-    return dfl_shape(f64(out), a)
+    v = f64(out)
+    warn_lines(brittle(kind, S, c, c0, a, v) if e == AUTO else "", wc, wd)
+    return dfl_shape(v, a)
 
 
 def _dist_classical(kind, x, cas, c, c0, g0, me, ve):
@@ -351,16 +350,11 @@ def ltratio_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-10, info=False, 
         raise ValueError("verified=True: the checked computation of the quantiles is the classical engine's; the general "
                          "engine has none")
     a = dfl_real(p, "p")
-    if not np.all((a > 0) & (a < 1)):
-        raise ValueError("p must lie in (0, 1)")
     c, c0, tol = dfl_num(c, "c"), dfl_num(c0, "c0"), dfl_num(tol, "tol")
     q, wd, wc = _engine.route(R_ICDF, route_tuple(S), a.tobytes(), c, c0, e, me, 0, tol)
     qv = f64(q)
-    if e == AUTO and S.case is not None and me == 0:
-        gen = np.frombuffer(_engine.autoengine(F_ICDF, S.model, S.stat, S.g0, S.gls, c, c0, np.zeros(1).tobytes()), np.intc)
-        if not gen[0]:
-            warn_brittle(2, S, c, c0, qv, F_DIST)
-    warn_lines(wc, wd)
+    # (the brittle regime of the classical search, where the rule takes it)
+    warn_lines(brittle(2, S, c, c0, [0.0], f=F_ICDF) if e == AUTO else "", wc, wd)
     q = dfl_shape(qv, a)
     if not info:
         return q

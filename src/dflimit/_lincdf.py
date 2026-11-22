@@ -13,8 +13,8 @@ from ._utils import dfl_case, dfl_num, dfl_real, dfl_shape, f64, fill_doc
 LIN_ROUTE_DOC = """\
 With a design, or with ``engine="auto"`` or ``"general"``, the router computes: for cases DK and DG ``"auto"`` takes
 the general engine for P(V <= b) (case DK) and in case DG for ``a != 0`` above the unit root (c > 2, or c > 0 with
-cbar >= -5), the classical engine otherwise; every other design (any start and GLS detrending) has the general
-engine, `lin_cdf`."""
+cbar >= -5), the classical engine otherwise; a fixed start and every other design (any start and GLS detrending) have
+the general engine, `lin_cdf`. By the general engine P(V <= b) is 0 at b <= 0."""
 ERS_REFERENCE_DOC = """\
 .. [1] Elliott, G., Rothenberg, T. J. and Stock, J. H. (1996), "Efficient Tests for an Autoregressive Unit Root",
    Econometrica 64, 813-836."""
@@ -48,7 +48,8 @@ def ltratio_lincdf(b, a, cas, c=0, cbar=-13.5, *, engine=None, start=None, g0=0,
     {engine}
     start, g0, gls
         With a design: the start (``None``, ``"zero"``, ``"fixed"`` with ``g0``, ``"stationary"``) and the GLS
-        detrending (cbar < 0; default least squares), as in `ltratio_cdf`.
+        detrending (cbar < 0; default least squares), as in `ltratio_cdf`; with case DK a fixed start ``g0`` (the
+        general engine: ``engine="auto"`` or ``"general"``).
 
     Returns
     -------
@@ -113,13 +114,18 @@ def ltratio_lincdf(b, a, cas, c=0, cbar=-13.5, *, engine=None, start=None, g0=0,
             if e == CLASSICAL:
                 raise ValueError("engine='classical': the linear form of the classical engine has the cases DK and DG only "
                                  "(trend(-1), and trend(1) with gls = -13.5, zero start)")
-            st = {0: "zero", 1: "fixed", 2: "stationary"}[S.start]
-            return _general._values(_general.DET_LIN_CDF, S.design, b, c, _general._opts(0.0, st, S.g0, gls),
-                                    _general._a(a), name="b", cdf=True)
+            return _general_lin(b, a, S, c)
         cas, cbar = case, -13.5
-    elif start is not None or gls is not None or g0 != 0:
-        raise ValueError("start, g0 and gls apply to a design (case DG has cbar)")
-    _, model, _ = dfl_case(cas, ("DK", "DG"))
+    elif start is not None or gls is not None:
+        raise ValueError("start and gls apply to a design (case DG has cbar)")
+    case, model, _ = dfl_case(cas, ("DK", "DG"))
+    if not isinstance(cas, Design) and dfl_num(g0, "g0") != 0:
+        if case == "DG":
+            raise ValueError("case DG has a zero start; a fixed start g0 applies to case DK and to designs")
+        if e is None or e == CLASSICAL:
+            raise ValueError("the classical engine's linear form has a zero start only (a fixed start g0 in case DK: "
+                             "engine='auto' or 'general', or a design)")
+        return _general_lin(b, a, spec_of("DK", g0), c)
     x = dfl_real(b, "b")
     if e is None or e == CLASSICAL:
         P = _engine.lincdf(x.tobytes(), float(a), model, dfl_num(c, "c"), dfl_num(cbar, "cbar"))
@@ -127,6 +133,13 @@ def ltratio_lincdf(b, a, cas, c=0, cbar=-13.5, *, engine=None, start=None, g0=0,
     P, wd, wc = _engine.route_lin(x.tobytes(), float(a), model, dfl_num(c, "c"), dfl_num(cbar, "cbar"), e)
     warn_lines(wc, wd)
     return dfl_shape(f64(P), x)
+
+
+def _general_lin(b, a, S, c):
+    """The linear form (a = nan: the law of V) of the computation S by the general engine (lin_cdf)."""
+    st = ("zero", "fixed", "stationary")[S.start]
+    return _general._values(_general.DET_LIN_CDF, S.design, b, c,
+                            _general._opts(0.0, st, S.g0, None if np.isnan(S.gls) else S.gls), _general._a(a), name="b")
 
 
 @fill_doc(errors=ERRORS_DOC, references=ERS_REFERENCE_DOC, engine=ENGINE_DOC)

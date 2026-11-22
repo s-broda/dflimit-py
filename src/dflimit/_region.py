@@ -48,7 +48,8 @@ def ltratio_region(bnd, cas="DK", c=0, info=False, *, engine=None, start=None, g
         ``err`` is nan and ``status`` 0.
     {engine}
     start, g0, gls
-        With a design: the start and the GLS detrending, as in `ltratio_cdf`.
+        With a design: the start and the GLS detrending, as in `ltratio_cdf`; with case DK a fixed start ``g0`` (the
+        general engine: ``engine="auto"`` or ``"general"``).
 
     Returns
     -------
@@ -73,9 +74,10 @@ def ltratio_region(bnd, cas="DK", c=0, info=False, *, engine=None, start=None, g
 
     Notes
     -----
-    The rule of ``engine="auto"`` takes the classical engine for case DK (2.7 to 3.1 times faster, and the only engine
-    for the weighted-average-power boundary); other designs, and ``engine="general"``, have the general engine
-    (`region_prob`: the line and the parabola, without ``"v0"`` and ``"brks"``).
+    The rule of ``engine="auto"`` takes the classical engine for case DK with a zero start (2.7 to 3.1 times faster,
+    and the only engine for the weighted-average-power boundary); a fixed start, other designs, and
+    ``engine="general"`` have the general engine (`region_prob`: the line and the parabola, without ``"v0"`` and
+    ``"brks"``).
 
     Examples
     --------
@@ -98,12 +100,18 @@ def ltratio_region(bnd, cas="DK", c=0, info=False, *, engine=None, start=None, g
                                  "start)")
             return _general_region(bnd, S, c, info)
     else:
-        if start is not None or gls is not None or g0 != 0:
-            raise ValueError("start, g0 and gls apply to a design")
+        if start is not None or gls is not None:
+            raise ValueError("start and gls apply to a design")
         if not isinstance(cas, str):
             raise TypeError("the case must be DK (zero start)")
         if cas.upper() != "DK":
             raise ValueError("the case must be DK (zero start)")
+        g0 = dfl_num(g0, "g0")
+        if g0 != 0:
+            if e is None or e == CLASSICAL:
+                raise ValueError("the regions of the classical engine have case DK only with a zero start (a fixed start g0: "
+                                 "engine='auto' or 'general', or a design)")
+            return _general_region(bnd, spec_of("DK", g0), c, info)
         if e == GENERAL:
             return _general_region(bnd, spec_of("DK"), c, info)
     if not isinstance(bnd, Mapping) or bnd.get("type") is None:

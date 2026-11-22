@@ -48,7 +48,9 @@ NOTES_DOC = """\
 The general engine computes the limit for any piecewise smooth design by the inversion formula on paths around the
 singularities of the joint moment generating function of numerator and denominator, a small determinant. Points of
 one call share their paths: pass a whole vector in one call. The prepared designs and the paths are cached (see
-`empty_caches`). Designs whose roots run far out on the vertical line (``c > 0``, exotic designs) can need several GB."""
+`empty_caches`). Where the roots of a design run far out on the vertical line (``c > 0``, exotic designs such as
+(1 + r, 1{r < 0.4}), which has no proper intercept) the paths around them would need more than a million nodes at a node
+of the outer contour, and the engine refuses with a ``ValueError``."""
 
 
 def _design(D):
@@ -76,7 +78,7 @@ def _call(op, D, a, c, opts, *par):
 
 def _values(op, D, x, c, opts, *par, name="x", cdf=None):
     """The values at the points x in the shape of x; cdf True/False: the non-finite points set here (0 at -inf, 1 or 0
-    at inf, nan at nan) and the finite ones computed."""
+    at inf, nan at nan) and the finite ones computed (for the functions of the engine that do not set them)."""
     a = dfl_real(x, name)
     flat = a.ravel()
     if cdf is None:
@@ -89,15 +91,9 @@ def _values(op, D, x, c, opts, *par, name="x", cdf=None):
     return dfl_shape(out, a)
 
 
-def _probs(p, name="p"):
-    a = dfl_real(p, name)
-    if not np.all((a > 0) & (a < 1)):
-        raise ValueError(f"{name} must lie in (0, 1)")
-    return a
-
-
 def _quantiles(op, D, p, c, opts, *par):
-    a = _probs(p)
+    """The quantiles at the probabilities p (in (0, 1): the engine's check) in the shape of p."""
+    a = dfl_real(p, "p")
     return dfl_shape(_call(op, D, a.ravel(), c, opts, *par).copy(), a)
 
 
@@ -462,7 +458,7 @@ def lin_cdf(D, b, a, c=0, *, start=None, gamma0=0, gls=None, verified=False):
     0.04999...
     """
     av = _a(a)
-    return _values(DET_LIN_CDF, D, b, c, _opts(0.0, start, gamma0, gls, verified), av, name="b", cdf=True)
+    return _values(DET_LIN_CDF, D, b, c, _opts(0.0, start, gamma0, gls, verified), av, name="b")
 
 
 @fill_doc(opts=OPTS_DOC, verified=VERIFIED_DOC)
@@ -496,7 +492,7 @@ def lin_pdf(D, b, a, c=0, *, start=None, gamma0=0, gls=None, verified=False):
     array([0.521943..., 0.541021...])
     """
     av = _a(a)
-    return _values(DET_LIN_PDF, D, b, c, _opts(0.0, start, gamma0, gls, verified), av, name="b", cdf=False)
+    return _values(DET_LIN_PDF, D, b, c, _opts(0.0, start, gamma0, gls, verified), av, name="b")
 
 
 @fill_doc(opts=OPTS_DOC)
@@ -542,7 +538,7 @@ def lin_quantile(D, p, a, c=0, *, b0=0, tol=1e-10, start=None, gamma0=0, gls=Non
 def v_cdf(D, y, c=0, *, start=None, gamma0=0, gls=None):
     """Limiting distribution of the denominator V = int J~^2 of the t-ratio for a design.
 
-    P(V <= y) by the single inversion of the transform of V on the outer contour.
+    P(V <= y) by the single inversion of the transform of V on the outer contour; 0 at y <= 0 (V > 0).
 
     Parameters
     ----------
@@ -567,7 +563,7 @@ def v_cdf(D, y, c=0, *, start=None, gamma0=0, gls=None):
     >>> v_cdf(trend(-1), [0.1, 0.5, 2])       # P(V <= y) at the unit root, no deterministic terms
     array([0.161002..., 0.677827..., 0.969685...])
     """
-    return _values(DET_LIN_CDF, D, y, c, _opts(0.0, start, gamma0, gls), math.nan, name="y", cdf=True)
+    return _values(DET_LIN_CDF, D, y, c, _opts(0.0, start, gamma0, gls), math.nan, name="y")
 
 
 @fill_doc(opts=OPTS_DOC)
@@ -579,7 +575,7 @@ def v_pdf(D, y, c=0, *, start=None, gamma0=0, gls=None):
     D : Design
         The design.
     y : array_like
-        The points. ``-inf``, ``inf`` and ``nan`` give 0, 0 and ``nan``.
+        The points (0 at y <= 0). ``-inf``, ``inf`` and ``nan`` give 0, 0 and ``nan``.
     {opts}
 
     Returns
@@ -597,7 +593,7 @@ def v_pdf(D, y, c=0, *, start=None, gamma0=0, gls=None):
     >>> v_pdf(trend(0), 0.06)
     6.300094...
     """
-    return _values(DET_LIN_PDF, D, y, c, _opts(0.0, start, gamma0, gls), math.nan, name="y", cdf=False)
+    return _values(DET_LIN_PDF, D, y, c, _opts(0.0, start, gamma0, gls), math.nan, name="y")
 
 
 def adfmax_quantile(D, p, c=0, *, x0=-2, tol=1e-10, start=None, gamma0=0):
@@ -716,6 +712,11 @@ def pt_cdf(D, q, cbar, c=0, *, N=60000, umax=4000):
     way), under phi = 1 + c/n, zero start, by one inversion of the characteristic function of its limit, a quadratic
     form. The test rejects for small values.
 
+    The inversion is the trapezoidal rule of Gil-Pelaez on a grid of ``N`` steps in u = sinh(v) up to ``umax``. Where
+    that grid does not resolve the transform (its singularity near the real line, far above the unit root: with a
+    linear trend at cbar = -13.5 from c = 3.7) the functions of the point-optimal statistic raise a ``ValueError`` that
+    names the ``N`` that would serve, and so they do at |q| beyond 0.15 N/asinh(umax) (1000 with the default grid).
+
     Parameters
     ----------
     D : Design
@@ -744,7 +745,7 @@ def pt_cdf(D, q, cbar, c=0, *, N=60000, umax=4000):
     array([0.009748..., 0.100187...])
     """
     return _values(DET_PT_CDF, D, q, c, _NOOPTS, dfl_num(cbar, "cbar"), dfl_posint(N, "N"), dfl_num(umax, "umax"),
-                   name="q", cdf=True)
+                   name="q")
 
 
 @fill_doc(gp=GP_DOC)
@@ -775,7 +776,7 @@ def pt_pdf(D, q, cbar, c=0, *, N=60000, umax=4000):
     0.0...
     """
     return _values(DET_PT_PDF, D, q, c, _NOOPTS, dfl_num(cbar, "cbar"), dfl_posint(N, "N"), dfl_num(umax, "umax"),
-                   name="q", cdf=False)
+                   name="q")
 
 
 @fill_doc(gp=GP_DOC)
@@ -871,14 +872,8 @@ def pt_envelope(D, cs, *, level=0.05, N=60000, umax=4000):
     >>> pt_envelope(perron("C", 0.3), [-5.0, -10.0, 1.0])
     array([0.081798..., 0.178810..., 0.05    ...])
     """
-    a = dfl_real(cs, "cs")
-    flat = a.ravel()
-    out = np.full(flat.size, math.nan)
-    fin = ~np.isnan(flat)
-    if fin.any():
-        out[fin] = _call(DET_PT_ENV, D, flat[fin], 0.0, _NOOPTS, dfl_num(level, "level"), dfl_posint(N, "N"),
-                         dfl_num(umax, "umax"))
-    return dfl_shape(out, a)
+    return _values(DET_PT_ENV, D, cs, 0.0, _NOOPTS, dfl_num(level, "level"), dfl_posint(N, "N"), dfl_num(umax, "umax"),
+                   name="cs")
 
 
 def lm_cdf(D, x, c=0):
@@ -887,7 +882,8 @@ def lm_cdf(D, x, c=0):
 
     The trend coefficients are estimated from the first differences; with a linear trend among the trend functions the
     statistic converges to -1/(2 sqrt V) for every c, so that F(x) = P(V <= 1/(4 x^2)) for x < 0 and 1 for x >= 0
-    (one inversion of the transform of V).
+    (one inversion of the transform of V, on the path of V alone, a hyperbola above the unit root). ``c`` must be at
+    most 10 (above, the inversion of its V is not accurate; a ``ValueError``), as for `lm_quantile` and `lm_power`.
 
     Parameters
     ----------
@@ -913,7 +909,7 @@ def lm_cdf(D, x, c=0):
     >>> lm_cdf(trend(1), [-3.0, -2.2])
     array([0.053182..., 0.312176...])
     """
-    return _values(DET_LM_CDF, D, x, c, _NOOPTS, cdf=True)
+    return _values(DET_LM_CDF, D, x, c, _NOOPTS)
 
 
 def lm_quantile(D, p, *, c=0):
@@ -926,7 +922,7 @@ def lm_quantile(D, p, *, c=0):
     p : array_like
         The probabilities, in (0, 1).
     c : float, default 0
-        The local-to-unity parameter.
+        The local-to-unity parameter, at most 10.
 
     Returns
     -------
@@ -950,9 +946,9 @@ def lm_power(D, cs, *, level=0.05):
     D : Design
         The design (a linear trend among its trend functions).
     cs : array_like
-        The local alternatives.
+        The local alternatives, at most 10.
     level : float, default 0.05
-        The level.
+        The level, in (0, 1).
 
     Returns
     -------
@@ -1074,7 +1070,7 @@ def msb_cdf(D, x, c=0, *, gls=-13.5):
     >>> msb_cdf(trend(1), 0.171)               # 0.171: the 5% critical value of MSB with a trend (msb_quantile)
     0.0499...
     """
-    return _values(DET_MSB_CDF, D, x, c, _NOOPTS, dfl_num(gls, "gls"), cdf=True)
+    return _values(DET_MSB_CDF, D, x, c, _NOOPTS, dfl_num(gls, "gls"))
 
 
 def msb_quantile(D, p, c=0, *, gls=-13.5):

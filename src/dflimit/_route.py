@@ -108,9 +108,12 @@ def spec_of(cas, g0=0.0, start=None, gls=None, allowed=CASES):
         case = classical_case(cas, s, gl)
         model, stat = _model(case)
         return Spec(cas, case, model, stat, s, g0 if s == 1 else 0.0, gl, False)
-    if start is not None or gls is not None:
-        raise ValueError("start and gls apply to a design; a case string has its start in its code (D: zero or fixed g0, "
-                         "S: stationary) and case DG its GLS detrending")
+    if gls is not None:
+        raise ValueError("gls applies to a design; a case string has its detrending in its code (case DG: GLS detrending "
+                         "at cbar = -13.5)")
+    if start is not None:
+        raise ValueError("start applies to a design; a case string has its start in its code (D: zero, or fixed with g0; "
+                         "S: stationary)")
     case, model, stat = dfl_case(cas, allowed)
     s = 2 if stat else (1 if g0 != 0 else 0)
     D = _trend(1) if model == 4 else _trend(model - 2)
@@ -167,18 +170,28 @@ def warn_lines(*msgs):
                 warn(line)
 
 
-def warn_brittle(kind, S, c, c0, xs, f=F_DIST):
+def brittle(kind, S, c, c0, xs, values=None, f=F_DIST):
     """The warning of a regime in which one evaluation of the classical engine is brittle, where the router takes the
-    classical engine at some of the points xs (the rule f; the classical engine's own calls give it once per call)."""
+    classical engine at some of the points xs (the rule f), or where it sends a value of the general engine below 1e-3
+    back to the classical conditional integral (values: those returned); "" otherwise.  The classical engine's own
+    calls give it once per call; the router's calls give it as the MEX file of dflimit-matlab does."""
     if S.case is None:
-        return
-    bm = _engine.brittle(kind, S.model, dfl_num(c, "c"), dfl_num(c0, "c0"), S.g0, S.stat, 0)
+        return ""
+    g0 = 0.0 if S.stat else S.g0
+    bm = _engine.brittle(kind, S.model, dfl_num(c, "c"), dfl_num(c0, "c0"), g0, S.stat, 0)
     if not bm:
-        return
+        return ""
     x = np.asarray(xs, dtype=np.float64).ravel()
-    x = x[np.isfinite(x)]
-    if x.size == 0:
-        return
-    gen = np.frombuffer(_engine.autoengine(f, S.model, S.stat, S.g0, S.gls, c, c0, x.tobytes()), dtype=np.intc)
+    fin = np.isfinite(x)
+    if not fin.any():
+        return ""
+    xf = x[fin]
+    gen = np.frombuffer(_engine.autoengine(f, S.model, S.stat, g0, S.gls, c, c0, xf.tobytes()), dtype=np.intc)
     if not np.all(gen):
-        warn(bm)
+        return bm
+    if values is not None:
+        v = np.asarray(values, dtype=np.float64).ravel()[fin]
+        meth = np.frombuffer(_engine.automethod(S.model, c, c0, g0, S.stat, xf.tobytes()), dtype=np.intc)
+        if np.any((v < 1e-3) & (meth == 2)):
+            return bm
+    return ""

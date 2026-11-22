@@ -7,8 +7,8 @@ import numpy as np
 
 from . import _engine, _general
 from ._ltratio import CASES_DOC, ERRORS_DOC, R_COEF, R_COEF_ICDF, ROUTE_DOC, _classical, ltratio_cdf
-from ._route import (AUTO, DESIGN_DOC, ENGINE_DOC, F_DIST, GENERAL, NO_METHOD, classical_ok, det_opts, engine_of,
-                     route_tuple, spec_of, warn_brittle, warn_lines)
+from ._route import (AUTO, DESIGN_DOC, ENGINE_DOC, GENERAL, NO_METHOD, brittle, classical_ok, det_opts, engine_of,
+                     route_tuple, spec_of, warn_lines)
 from ._utils import dfl_flag, dfl_method, dfl_num, dfl_real, dfl_shape, f64, fill_doc, warn
 
 COEF_PARAMS_DOC = """\
@@ -104,10 +104,14 @@ def coef_cdf(y, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engine=N
             raise ValueError(NO_METHOD)
         return _general._values(_general.DET_COEF_CDF, S.design, a, c, det_opts(S, c0, ve), name="y")
     out, wd, wc = _engine.route(R_COEF, route_tuple(S), a.tobytes(), c, c0, AUTO, 0, 0, 0.0)
-    for yk in np.unique(a[np.isfinite(a)]):
-        warn_brittle(2, S, c, c0 + yk, [0.0], F_DIST)
-    warn_lines(wc, wd)
+    warn_lines(_coef_brittle(S, c, c0, a), wc, wd)
     return dfl_shape(f64(out), a)
+
+
+def _coef_brittle(S, c, c0, ys):
+    """The brittle regimes of the t-ratio at 0 with the null values c0 + y where the router takes the classical engine
+    (each message once)."""
+    return "\n".join(sorted({brittle(2, S, c, c0 + y, [0.0]) for y in np.unique(ys[np.isfinite(ys)])} - {""}))
 
 
 def _coef_cdf(a, cas, c, c0, g0, method, verified):
@@ -195,8 +199,9 @@ def coef_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-9, verified=False, 
     if me != 0:
         raise ValueError(NO_METHOD)
     q, wd, wc = _engine.route(R_COEF_ICDF, route_tuple(S), a.tobytes(), c, c0, e, 0, 0, tol)
-    warn_lines(wc, wd)
-    return dfl_shape(f64(q), a)
+    qv = f64(q)
+    warn_lines(_coef_brittle(S, c, c0, qv) if e == AUTO else "", wc, wd)
+    return dfl_shape(qv, a)
 
 
 def _coef_quantile(pk, cas, c, c0, g0, method, tol, verified=False):
