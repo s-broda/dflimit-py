@@ -4,4 +4,4 @@ recursive-include csrc *.c *.h *.cc *.cpp
 include src/dflimit/_engine.c src/dflimit/UPSTREAM
 include tests/*.py
 include tests/ref/*.txt
-include tools/sync-engine.sh
+include tools/sync-engine.sh tools/det-ref.py

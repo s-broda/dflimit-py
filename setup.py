@@ -1,7 +1,8 @@
 """setup.py: the extension module dflimit._engine (the metadata is in pyproject.toml).
 
 The extension is the gateway src/dflimit/_engine.c and the C engine in csrc/ (copied from c/ of dflimit-matlab by
-tools/sync-engine.sh): C11 (dfl_*.c, tables.c) and the C++ of the Faddeeva package (Faddeeva.cc, faddeeva_shim.cpp).
+tools/sync-engine.sh): C11 (dfl_*.c, tables.c; the general engine and the router in dfl_det_*.c) and the C++ of the
+Faddeeva package (Faddeeva.cc, faddeeva_shim.cpp).
 The two languages need different flags (-std=c11 on a C++ file is an error under clang), so build_ext below compiles
 the engine's sources itself, each with the flags of its language, and links the objects into the extension, with the
 C++ driver (language="c++": the C++ runtime) and -pthread.  The flags are those of c/build.sh of dflimit-matlab (gcc, clang)
@@ -19,9 +20,12 @@ from setuptools.command.build_ext import build_ext
 
 CSRC = "csrc"
 ENGINE_C = ["dfl_special.c", "dfl_mgf.c", "dfl_single.c", "dfl_gen.c", "dfl_moments.c", "dfl_double.c", "dfl_api.c",
-            "dfl_gilpelaez.c", "dfl_threads.c", "tables.c"]
+            "dfl_gilpelaez.c", "dfl_threads.c", "tables.c",
+            # the general engine (any deterministic terms) and the router over the two engines
+            "dfl_det_la.c", "dfl_det_design.c", "dfl_det_mgf.c", "dfl_det_path.c", "dfl_det_inner.c", "dfl_det_api.c",
+            "dfl_det_paper2.c", "dfl_det_route.c", "dfl_det_tables.c"]
 ENGINE_CXX = ["Faddeeva.cc", "faddeeva_shim.cpp"]
-ENGINE_H = ["dflimit.h", "dfl_lock.h", "dfl_vmath.h", "Faddeeva.h"]
+ENGINE_H = ["dflimit.h", "dfl_lock.h", "dfl_vmath.h", "dfl_det_int.h", "Faddeeva.h"]
 MACROS = [("DFL_QUIET", None)]
 
 LIMITED_API = not sysconfig.get_config_var("Py_GIL_DISABLED")
