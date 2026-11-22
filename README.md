@@ -119,9 +119,17 @@ array([-5.28735943, -4.75056961, -4.46887591])
 
 ```
 
+The general engine also gives ADFmax with a fixed start (through the router: `adfmax_cdf(x, "DU", c, g0=1.5,
+engine="auto")`, or a design), and the regions and the linear form of case DK with a fixed start; the classical engine
+has the zero and the stationary start only there, and refuses a fixed start. It refuses, with a `ValueError` that says
+why: probabilities and levels outside (0, 1); the LM statistic above c = 10; the point-optimal statistic where the
+grid of its inversion does not resolve the transform (far above the unit root; the message names the grid size `N`
+that serves) and at |q| beyond 0.15 N/asinh(umax) (1000 with the default grid); and a design whose roots run off on
+the vertical line, where the paths around them would need more than a million nodes (such as (1 + r, 1{r < 0.4}),
+which has no proper intercept). The law of V is 0 at b <= 0.
+
 Points of one call share the paths of the inversion, so pass a whole vector in one call. The engine caches up to 64
-prepared designs, paths and refined lines; `empty_caches()` frees them. Designs whose roots run far out on the
-vertical line (c > 0, exotic designs) can need several GB.
+prepared designs, paths and refined lines; `empty_caches()` frees them.
 
 ## Example
 

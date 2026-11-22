@@ -21,8 +21,18 @@ those of before.
   engine for a case string and takes the rule for a design, `"auto"` the rule of the router (the faster engine where
   the two agree, the more accurate where they do not, the general engine where the classical one does not apply),
   `"classical"` and `"general"` force one engine. The general engine's warnings are `RuntimeWarning`s.
-- The tests compare 280 values of the general engine and 104 of the router with the stored values of the Julia
-  engine (a subset of `c/test/det_ref.txt` of dflimit-matlab, copied by `tools/det-ref.py`).
+- ADFmax with a fixed start (`g0` of `adfmax_cdf`, `adfmax_pdf`, `adfmax_icdf`, with `engine="auto"` or
+  `"general"` for a case string, or a design) and the regions and the linear form of case DK with a fixed start (`g0`
+  of `ltratio_region` and `ltratio_lincdf`) take the general engine; the classical engine, which has the zero and the
+  stationary start only there, refuses a fixed start.
+- The general engine refuses, with a `ValueError`: probabilities and levels outside (0, 1); the LM statistic above
+  c = 10; the point-optimal statistic where the grid of its inversion does not resolve the transform (far above the
+  unit root; the message names the grid size `N` that serves) and at |q| beyond 0.15 N/asinh(umax); a design whose
+  roots run off on the vertical line (paths of more than a million nodes, such as (1 + r, 1{r < 0.4})). The law of V
+  is 0 at b <= 0; above the unit root the LM statistic is computed on the path of V alone.
+- The tests compare 299 values of the general engine and 118 of the router with the stored values of the Julia
+  engine, and 44 calls that must fail with the expected errors (a subset of `c/test/det_ref.txt` of dflimit-matlab,
+  copied by `tools/det-ref.py`).
 
 Four errors of the engine are repaired (the C engine of dflimit-matlab 0.5.0, the repairs of DFLimit.jl 0.5.0). Values
 outside the regions named below are unchanged.
