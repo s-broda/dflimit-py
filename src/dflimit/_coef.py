@@ -1,15 +1,20 @@
-"""The coefficient statistic n(phi^ - phi0): coef_cdf, coef_icdf (R/coef.R of the R package dflimit)."""
+"""The coefficient statistic n(phi^ - phi0): coef_cdf, coef_icdf (R/coef.R of the R package dflimit).  With a design or
+the keyword engine, the router (_route.py) or the general engine."""
 import math
 import warnings
 
 import numpy as np
 
-from ._ltratio import CASES_DOC, ERRORS_DOC, ltratio_cdf
-from ._utils import dfl_case, dfl_method, dfl_num, dfl_real, dfl_shape, fill_doc, warn
+from . import _engine, _general
+from ._ltratio import CASES_DOC, ERRORS_DOC, R_COEF, R_COEF_ICDF, ROUTE_DOC, _classical, ltratio_cdf
+from ._route import (AUTO, DESIGN_DOC, ENGINE_DOC, F_DIST, GENERAL, NO_METHOD, classical_ok, det_opts, engine_of,
+                     route_tuple, spec_of, warn_brittle, warn_lines)
+from ._utils import dfl_case, dfl_flag, dfl_method, dfl_num, dfl_real, dfl_shape, f64, fill_doc, warn
 
 COEF_PARAMS_DOC = """\
-cas : str
-    The case, one of ``"DK"``, ``"DU"``, ``"DT"``, ``"SK"``, ``"SU"``, ``"ST"``, ``"DG"`` (see Notes).
+cas : str or Design
+    The case, one of ``"DK"``, ``"DU"``, ``"DT"``, ``"SK"``, ``"SU"``, ``"ST"``, ``"DG"`` (see Notes), or a design of
+    the general engine.
 c : float, default 0
     The local-to-unity parameter c, phi = 1 + c/n.
 c0 : float, default 0
@@ -21,6 +26,11 @@ method : {"auto", "single", "line", "double", "conditional", "contour"}, default
 verified : bool, default False
     One evaluation (False) or the checked computation (True), as in `ltratio_cdf`."""
 
+COEF_ROUTE_DOC = """\
+With a design or ``engine="auto"`` the router evaluates the t-ratio at 0 with the null value c0 + y by the engine of
+its rule; the general engine (a design beyond the classical cases, or ``engine="general"``) computes the coefficient
+statistic directly, by the inversion on paths around the roots, and its quantiles by Newton's method from y = -10."""
+
 COEF_NOTES_DOC = """\
 The limit is (U - c0 V)/V, so that P[(U - c0 V)/V <= y] = P[U - (c0 + y)V <= 0]: the distribution function of the
 t-ratio at 0 with the local null value c0 + y. The C engine has no entry point of its own for the coefficient
@@ -30,8 +40,9 @@ option of `ltratio_cdf`, and `coef_icdf` finds each quantile by the Illinois var
 on a bracket grown from [-40, 10] until its width is below ``tol`` (about ten evaluations of `coef_cdf`)."""
 
 
-@fill_doc(params=COEF_PARAMS_DOC, errors=ERRORS_DOC, notes=COEF_NOTES_DOC, cases=CASES_DOC)
-def coef_cdf(y, cas, c=0, c0=0, g0=0, method="auto", verified=False):
+@fill_doc(params=COEF_PARAMS_DOC, errors=ERRORS_DOC, notes=COEF_NOTES_DOC, cases=CASES_DOC, engine=ENGINE_DOC,
+          design=DESIGN_DOC, route=ROUTE_DOC, croute=COEF_ROUTE_DOC)
+def coef_cdf(y, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engine=None, start=None, gls=None):
     """Distribution function of the limit of the Dickey-Fuller coefficient statistic.
 
     The limit of P[n(phi^ - phi0) <= y] for the least squares estimate phi^ of phi in the regression of
@@ -43,6 +54,8 @@ def coef_cdf(y, cas, c=0, c0=0, g0=0, method="auto", verified=False):
     y : array_like
         The points. ``-inf``, ``inf`` and ``nan`` give 0, 1 and ``nan``.
     {params}
+    {engine}
+    {design}
 
     Returns
     -------
@@ -55,7 +68,7 @@ def coef_cdf(y, cas, c=0, c0=0, g0=0, method="auto", verified=False):
 
     See Also
     --------
-    coef_icdf, ltratio_cdf
+    coef_icdf, ltratio_cdf, coef_pdf
 
     Notes
     -----
@@ -63,20 +76,38 @@ def coef_cdf(y, cas, c=0, c0=0, g0=0, method="auto", verified=False):
 
     {cases}
 
+    {route}
+
+    {croute}
+
     Examples
     --------
     >>> from dflimit import coef_cdf
     >>> coef_cdf(-14.0936, "DU", -10)    # power of the 5% coefficient test of rho_mu at c = -10
     0.4592525632...
+    >>> from dflimit import perron
+    >>> coef_cdf(-30.0, perron("A", 0.5))     # Perron's model A with a break at the middle
+    0.018386...
     """
-    dfl_case(cas)
+    S = spec_of(cas, g0, start, gls)
+    e = engine_of(S, engine)
+    me = dfl_method(method)
+    ve = dfl_flag(verified, "verified")
     c = dfl_num(c, "c")
     c0 = dfl_num(c0, "c0")
-    g0 = dfl_num(g0, "g0")
-    dfl_method(method)
     a = dfl_real(y, "y")
-    with _once():
-        return _coef_cdf(a, cas, c, c0, g0, method, verified)
+    if _classical(S, e, c, c0, me, ve):
+        with _once():
+            return _coef_cdf(a, S.case, c, c0, S.g0, method, verified)
+    if e == GENERAL or not (S.named or classical_ok(S, c, c0, 0)):
+        if me != 0:
+            raise ValueError(NO_METHOD)
+        return _general._values(_general.DET_COEF_CDF, S.design, a, c, det_opts(S, c0, ve), name="y")
+    out, wd, wc = _engine.route(R_COEF, route_tuple(S), a.tobytes(), c, c0, AUTO, 0, 0, 0.0)
+    for yk in np.unique(a[np.isfinite(a)]):
+        warn_brittle(2, S, c, c0 + yk, [0.0], F_DIST)
+    warn_lines(wc, wd)
+    return dfl_shape(f64(out), a)
 
 
 def _coef_cdf(a, cas, c, c0, g0, method, verified):
@@ -93,8 +124,9 @@ def _coef_cdf(a, cas, c, c0, g0, method, verified):
     return dfl_shape(F, a)
 
 
-@fill_doc(params=COEF_PARAMS_DOC, errors=ERRORS_DOC, notes=COEF_NOTES_DOC, cases=CASES_DOC)
-def coef_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-9, verified=False):
+@fill_doc(params=COEF_PARAMS_DOC, errors=ERRORS_DOC, notes=COEF_NOTES_DOC, cases=CASES_DOC, engine=ENGINE_DOC,
+          design=DESIGN_DOC, route=ROUTE_DOC, croute=COEF_ROUTE_DOC)
+def coef_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-9, verified=False, *, engine=None, start=None, gls=None):
     """Quantiles of the limit of the Dickey-Fuller coefficient statistic.
 
     The p-quantiles of the limit of n(phi^ - phi0) of `coef_cdf`.
@@ -105,7 +137,9 @@ def coef_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-9, verified=False):
         The probabilities, in (0, 1).
     {params}
     tol : float, default 1e-9
-        The width of the final bracket.
+        The width of the final bracket (with the general engine: the tolerance of Newton's method).
+    {engine}
+    {design}
 
     Returns
     -------
@@ -118,7 +152,7 @@ def coef_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-9, verified=False):
 
     See Also
     --------
-    coef_cdf, ltratio_icdf
+    coef_cdf, ltratio_icdf, coef_quantile
 
     Notes
     -----
@@ -126,26 +160,43 @@ def coef_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-9, verified=False):
 
     {cases}
 
+    {route}
+
+    {croute}
+
     Examples
     --------
     >>> from dflimit import coef_icdf
     >>> coef_icdf(0.05, "DK")            # -8.039, the 5% critical value of rho
     -8.03912890...
+    >>> from dflimit import trend
+    >>> coef_icdf(0.05, trend(2))        # with a quadratic trend
+    -28.11298...
     """
     a = dfl_real(p, "p")
     if not np.all((a > 0) & (a < 1)):
         raise ValueError("p must lie in (0, 1)")
     tol = dfl_num(tol, "tol")
-    dfl_case(cas)
+    S = spec_of(cas, g0, start, gls)
+    e = engine_of(S, engine)
+    me = dfl_method(method)
+    ve = dfl_flag(verified, "verified")
     c = dfl_num(c, "c")
     c0 = dfl_num(c0, "c0")
-    g0 = dfl_num(g0, "g0")
-    dfl_method(method)
-    y = np.empty(a.size)
-    with _once():
-        for k, pk in enumerate(a.ravel()):
-            y[k] = _coef_quantile(pk, cas, c, c0, g0, method, tol, verified)
-    return dfl_shape(y, a)
+    if _classical(S, e, c, c0, me, ve):
+        y = np.empty(a.size)
+        with _once():
+            for k, pk in enumerate(a.ravel()):
+                y[k] = _coef_quantile(pk, S.case, c, c0, S.g0, method, tol, verified)
+        return dfl_shape(y, a)
+    if ve:
+        raise ValueError("verified=True: the checked computation of the quantiles is the classical engine's; the general "
+                         "engine has none")
+    if me != 0:
+        raise ValueError(NO_METHOD)
+    q, wd, wc = _engine.route(R_COEF_ICDF, route_tuple(S), a.tobytes(), c, c0, e, 0, 0, tol)
+    warn_lines(wc, wd)
+    return dfl_shape(f64(q), a)
 
 
 def _coef_quantile(pk, cas, c, c0, g0, method, tol, verified=False):

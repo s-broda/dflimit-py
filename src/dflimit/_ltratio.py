@@ -1,9 +1,18 @@
 """The limiting distribution of the Dickey-Fuller t-ratio: ltratio_cdf, ltratio_pdf, ltratio_icdf, ltratio_mom
-(R/ltratio.R of the R package dflimit)."""
+(R/ltratio.R of the R package dflimit).  With a design in place of the case, or with the keyword engine, they go to
+the router over the classical and the general engine (_route.py); with a case string and no engine, to the classical
+engine as before."""
+import math
+
 import numpy as np
 
 from . import _engine
+from ._route import (AUTO, CLASSICAL, DESIGN_DOC, ENGINE_DOC, F_DIST, F_ICDF, classical_ok, engine_of, route_tuple,
+                     spec_of, warn_brittle, warn_lines)
 from ._utils import Result, cint, dfl_case, dfl_flag, dfl_method, dfl_num, dfl_posint, dfl_real, dfl_shape, f64, fill_doc, warn
+
+# the operations of _engine.route (py_route in _engine.c)
+R_CDF, R_PDF, R_ICDF, R_MOM, R_COEF, R_COEF_ICDF, R_ADF_CDF, R_ADF_PDF = range(1, 9)
 
 CASES_DOC = """\
 **Cases.** ``cas`` is a two-letter code, the initial observation (``D``: deterministic, i.e. fixed; ``S``: drawn
@@ -61,8 +70,9 @@ which has the line integral only, raise a ``ValueError`` that names the argument
 The computation runs on the engine's worker threads; see `ltratio_threads`."""
 
 PARAMS_DOC = """\
-cas : str
-    The case, one of ``"DK"``, ``"DU"``, ``"DT"``, ``"SK"``, ``"SU"``, ``"ST"``, ``"DG"`` (see Notes).
+cas : str or Design
+    The case, one of ``"DK"``, ``"DU"``, ``"DT"``, ``"SK"``, ``"SU"``, ``"ST"``, ``"DG"`` (see Notes), or a design of
+    the general engine (`trend`, `perron`, `fdesign`, `ltrend`, `design_from_matrix`, `detrend_first`).
 c : float, default 0
     The local-to-unity parameter c, phi = 1 + c/n.
 c0 : float, default 0
@@ -70,9 +80,20 @@ c0 : float, default 0
 g0 : float, default 0
     The fixed start, y_0 = g0 sigma sqrt(n) (cases DK, DU, DT).
 method : {"auto", "single", "line", "double", "conditional", "contour"}, default "auto"
-    The representation (``"contour"``: a fixed start in cases DU, DT only); see Notes.
+    The representation of the classical engine (``"contour"``: a fixed start in cases DU, DT only); see Notes. A
+    method other than ``"auto"`` keeps the classical engine with ``engine="auto"``.
 verified : bool, default False
-    False: one evaluation by one method; True: the checked computation (see Notes)."""
+    False: one evaluation by one method; True: the checked computation (see Notes; with ``engine="auto"`` the
+    classical engine's)."""
+
+ROUTE_DOC = """\
+**The general engine.** With a design in place of the case, or with ``engine="auto"`` or ``"general"``, the call
+goes to the router over the classical engine and the general engine (any piecewise smooth deterministic terms, the
+inversion on paths around the roots of the determinant of the moment generating function): ``engine="auto"`` takes,
+at each point, the faster engine where the two agree and the more accurate where they do not, and the general engine
+where the classical one does not apply (the README, "The general engine"). With a case string and no ``engine`` the
+classical engine computes, as before. The general engine's warnings (where one evaluation may be inaccurate) are
+``RuntimeWarning``s."""
 
 ERRORS_DOC = """\
 TypeError
@@ -85,8 +106,9 @@ REFERENCES_DOC = """\
    Related Statistics", working paper."""
 
 
-@fill_doc(params=PARAMS_DOC, errors=ERRORS_DOC, cases=CASES_DOC, methods=METHODS_DOC, references=REFERENCES_DOC)
-def ltratio_cdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False):
+@fill_doc(params=PARAMS_DOC, errors=ERRORS_DOC, cases=CASES_DOC, methods=METHODS_DOC, references=REFERENCES_DOC,
+          engine=ENGINE_DOC, design=DESIGN_DOC, route=ROUTE_DOC)
+def ltratio_cdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engine=None, start=None, gls=None):
     """Distribution function of the limit of the Dickey-Fuller t-ratio.
 
     The limit, as the sample size grows, of the distribution function of the least squares t-ratio of the
@@ -102,6 +124,8 @@ def ltratio_cdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False):
     x : array_like
         The points. ``-inf``, ``inf`` and ``nan`` give 0, 1 (density 0) and ``nan``.
     {params}
+    {engine}
+    {design}
 
     Returns
     -------
@@ -113,7 +137,8 @@ def ltratio_cdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False):
     RuntimeWarning
         In a regime in which one evaluation is known to be brittle; where points that the line integral refuses get
         flagged values from the conditional integral (see Notes); with ``verified=True`` and ``method="double"`` or
-        ``"contour"``, if the integral reports at some points that its error estimate is not met.
+        ``"contour"``, if the integral reports at some points that its error estimate is not met; where the general
+        engine reports that one evaluation may be inaccurate.
 
     Raises
     ------
@@ -121,13 +146,15 @@ def ltratio_cdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False):
 
     See Also
     --------
-    ltratio_pdf, ltratio_icdf, ltratio_mom, coef_cdf, adfmax_cdf, ltratio_region, ltratio_threads
+    ltratio_pdf, ltratio_icdf, ltratio_mom, coef_cdf, adfmax_cdf, ltratio_region, ltratio_threads, dist_cdf, perron
 
     Notes
     -----
     {cases}
 
     {methods}
+
+    {route}
 
     References
     ----------
@@ -144,12 +171,18 @@ def ltratio_cdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False):
     0.1249641227...
     >>> ltratio_cdf(0, "DK", 2, c0=2)        # t-ratio centred at the true value
     0.6504355619...
+    >>> from dflimit import perron
+    >>> ltratio_cdf(-4.5, perron("C", 0.3))  # Perron's model C with a break at 0.3 (the general engine)
+    0.014908314...
+    >>> ltratio_cdf(-2.86157, "DU", -5, engine="auto")    # the router's rule for a case string
+    0.1165135620...
     """
-    return _dist(2, x, cas, c, c0, g0, method, verified)
+    return _dist(2, x, cas, c, c0, g0, method, verified, engine, start, gls)
 
 
-@fill_doc(params=PARAMS_DOC, errors=ERRORS_DOC, cases=CASES_DOC, methods=METHODS_DOC, references=REFERENCES_DOC)
-def ltratio_pdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False):
+@fill_doc(params=PARAMS_DOC, errors=ERRORS_DOC, cases=CASES_DOC, methods=METHODS_DOC, references=REFERENCES_DOC,
+          engine=ENGINE_DOC, design=DESIGN_DOC, route=ROUTE_DOC)
+def ltratio_pdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engine=None, start=None, gls=None):
     """Density of the limit of the Dickey-Fuller t-ratio.
 
     The density of the limit tau = (U - c0 V)/sqrt(V) of `ltratio_cdf`, under phi = 1 + c/n, phi0 = 1 + c0/n.
@@ -159,6 +192,8 @@ def ltratio_pdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False):
     x : array_like
         The points. ``-inf``, ``inf`` and ``nan`` give 0, 0 and ``nan``.
     {params}
+    {engine}
+    {design}
 
     Returns
     -------
@@ -178,13 +213,15 @@ def ltratio_pdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False):
 
     See Also
     --------
-    ltratio_cdf, ltratio_icdf
+    ltratio_cdf, ltratio_icdf, dist_pdf
 
     Notes
     -----
     {cases}
 
     {methods}
+
+    {route}
 
     References
     ----------
@@ -195,14 +232,38 @@ def ltratio_pdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False):
     >>> from dflimit import ltratio_pdf
     >>> ltratio_pdf([-3, -2, -1], "DT", -5)  # density
     array([0.405856..., 0.508800..., 0.040584...])
+    >>> from dflimit import trend
+    >>> ltratio_pdf(-3.5, trend(2), -5)      # a quadratic trend
+    0.326334...
     """
-    return _dist(1, x, cas, c, c0, g0, method, verified)
+    return _dist(1, x, cas, c, c0, g0, method, verified, engine, start, gls)
 
 
-def _dist(kind, x, cas, c, c0, g0, method, verified=False):
-    _, model, stat = dfl_case(cas)
+def _classical(S, e, c, c0, me, ve):
+    """Whether the classical engine computes: engine "classical", or "auto" with a representation named or the checked
+    computation, where the classical engine accepts the arguments (for a case string its checks give the errors)."""
+    return e == CLASSICAL or (e == AUTO and (me != 0 or ve) and (S.named or classical_ok(S, c, c0, me)))
+
+
+def _dist(kind, x, cas, c, c0, g0, method, verified=False, engine=None, start=None, gls=None):
+    S = spec_of(cas, g0, start, gls)
+    e = engine_of(S, engine)
     me = dfl_method(method)
     ve = dfl_flag(verified, "verified")
+    if _classical(S, e, c, c0, me, ve):
+        return _dist_classical(kind, x, S.case, c, c0, S.g0, me, ve)
+    a = dfl_real(x, "x")
+    c, c0 = dfl_num(c, "c"), dfl_num(c0, "c0")
+    out, wd, wc = _engine.route(R_CDF if kind == 2 else R_PDF, route_tuple(S), a.tobytes(), c, c0, e, me, ve, 0.0)
+    if e == AUTO:
+        warn_brittle(kind, S, c, c0, a, F_DIST)
+    warn_lines(wc, wd)
+    return dfl_shape(f64(out), a)
+
+
+def _dist_classical(kind, x, cas, c, c0, g0, me, ve):
+    """The classical engine (dfl_dist), with its warnings."""
+    _, model, stat = dfl_case(cas)
     a = dfl_real(x, "x")
     out, ns, bm, wm = _engine.dist(kind, a.tobytes(), model, dfl_num(c, "c"), dfl_num(c0, "c0"), dfl_num(g0, "g0"),
                                    stat, me, ve)
@@ -216,8 +277,10 @@ def _dist(kind, x, cas, c, c0, g0, method, verified=False):
     return dfl_shape(f64(out), a)
 
 
-@fill_doc(params=PARAMS_DOC, errors=ERRORS_DOC, cases=CASES_DOC, references=REFERENCES_DOC)
-def ltratio_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-10, info=False, verified=False):
+@fill_doc(params=PARAMS_DOC, errors=ERRORS_DOC, cases=CASES_DOC, references=REFERENCES_DOC, engine=ENGINE_DOC,
+          design=DESIGN_DOC, route=ROUTE_DOC)
+def ltratio_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-10, info=False, verified=False, *, engine=None, start=None,
+                 gls=None):
     """Quantiles of the limit of the Dickey-Fuller t-ratio.
 
     The p-quantiles of the limit of `ltratio_cdf`, by Newton's method with `ltratio_pdf` as the derivative,
@@ -233,7 +296,9 @@ def ltratio_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-10, info=False, 
     info : bool, default False
         If true, return a `Result` (a dict whose keys are also attributes) with the quantiles ``q``, the
         distribution function ``F`` at ``q``, the numbers of iterations ``iter`` and the convergence flags ``conv``,
-        each of the shape of ``p``.
+        each of the shape of ``p`` (by the router: ``q`` and ``F`` only).
+    {engine}
+    {design}
 
     Returns
     -------
@@ -252,11 +317,16 @@ def ltratio_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-10, info=False, 
 
     See Also
     --------
-    ltratio_cdf
+    ltratio_cdf, dist_quantile
 
     Notes
     -----
     {cases}
+
+    {route}
+
+    By the router the quantiles of the general engine start at the normal approximation from its moments too;
+    ``verified=True`` is the classical engine's.
 
     References
     ----------
@@ -267,11 +337,42 @@ def ltratio_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-10, info=False, 
     >>> from dflimit import ltratio_icdf
     >>> ltratio_icdf([0.01, 0.05, 0.10], "DU")   # asymptotic critical values of tau_mu
     array([-3.430353..., -2.861568..., -2.566791...])
+    >>> from dflimit import perron
+    >>> ltratio_icdf(0.05, perron("C", [0.3, 0.7]))     # Perron's model C with two breaks
+    -4.750569...
     """
+    S = spec_of(cas, g0, start, gls)
+    e = engine_of(S, engine)
+    me = dfl_method(method)
+    ve = dfl_flag(verified, "verified")
+    if _classical(S, e, c, c0, me, ve):
+        return _icdf_classical(p, S.case, c, c0, S.g0, me, tol, info, ve)
+    if ve:
+        raise ValueError("verified=True: the checked computation of the quantiles is the classical engine's; the general "
+                         "engine has none")
+    a = dfl_real(p, "p")
+    if not np.all((a > 0) & (a < 1)):
+        raise ValueError("p must lie in (0, 1)")
+    c, c0, tol = dfl_num(c, "c"), dfl_num(c0, "c0"), dfl_num(tol, "tol")
+    q, wd, wc = _engine.route(R_ICDF, route_tuple(S), a.tobytes(), c, c0, e, me, 0, tol)
+    qv = f64(q)
+    if e == AUTO and S.case is not None and me == 0:
+        gen = np.frombuffer(_engine.autoengine(F_ICDF, S.model, S.stat, S.g0, S.gls, c, c0, np.zeros(1).tobytes()), np.intc)
+        if not gen[0]:
+            warn_brittle(2, S, c, c0, qv, F_DIST)
+    warn_lines(wc, wd)
+    q = dfl_shape(qv, a)
+    if not info:
+        return q
+    return Result(q=q, F=_dist(2, q, cas, c, c0, g0, method, False, engine, start, gls))
+
+
+def _icdf_classical(p, cas, c, c0, g0, me, tol, info, ve):
+    """The quantiles of the classical engine (dfl_icdf), with its warnings."""
     _, model, stat = dfl_case(cas)
     a = dfl_real(p, "p")
     q, F, it, cv, bm, wm = _engine.icdf(a.tobytes(), model, dfl_num(c, "c"), dfl_num(c0, "c0"), dfl_num(g0, "g0"), stat,
-                                        dfl_method(method), dfl_num(tol, "tol"), dfl_flag(verified, "verified"))
+                                        me, dfl_num(tol, "tol"), ve)
     if bm:
         warn(bm)
     if wm:
@@ -284,8 +385,9 @@ def ltratio_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-10, info=False, 
     return r if info else r["q"]
 
 
-@fill_doc(errors=ERRORS_DOC, cases=CASES_DOC, references=REFERENCES_DOC)
-def ltratio_mom(p, cas, c=0, c0=0, g0=0, info=False):
+@fill_doc(errors=ERRORS_DOC, cases=CASES_DOC, references=REFERENCES_DOC, engine=ENGINE_DOC, design=DESIGN_DOC,
+          route=ROUTE_DOC)
+def ltratio_mom(p, cas, c=0, c0=0, g0=0, info=False, *, engine=None, start=None, gls=None):
     """Moments of the limit of the Dickey-Fuller t-ratio.
 
     The moments E[tau^j], j = 1, ..., p, of the limit tau = (U - c0 V)/sqrt(V) of `ltratio_cdf`, as one-dimensional
@@ -296,8 +398,9 @@ def ltratio_mom(p, cas, c=0, c0=0, g0=0, info=False):
     ----------
     p : int
         The number of moments, a positive integer.
-    cas : str
-        The case, one of ``"DK"``, ``"DU"``, ``"DT"``, ``"SK"``, ``"SU"``, ``"ST"`` (see Notes; not ``"DG"``).
+    cas : str or Design
+        The case, one of ``"DK"``, ``"DU"``, ``"DT"``, ``"SK"``, ``"SU"``, ``"ST"`` (see Notes; not ``"DG"``), or a
+        design of the general engine.
     c : float, default 0
         The local-to-unity parameter c, phi = 1 + c/n.
     c0 : float, default 0
@@ -305,7 +408,10 @@ def ltratio_mom(p, cas, c=0, c0=0, g0=0, info=False):
     g0 : float, default 0
         The fixed start, y_0 = g0 sigma sqrt(n) (cases DK, DU, DT).
     info : bool, default False
-        If true, return a `Result` with the moments ``m`` and the error estimates ``err`` of the integrals.
+        If true, return a `Result` with the moments ``m`` and the error estimates ``err`` of the integrals (by the
+        router ``nan``; `dist_moments` has those of the general engine).
+    {engine}
+    {design}
 
     Returns
     -------
@@ -318,11 +424,15 @@ def ltratio_mom(p, cas, c=0, c0=0, g0=0, info=False):
 
     See Also
     --------
-    ltratio_cdf
+    ltratio_cdf, dist_moments
 
     Notes
     -----
     {cases}
+
+    {route}
+
+    The general engine has the moments of case DG and of other designs too (not of the statistic that detrends first).
 
     References
     ----------
@@ -335,9 +445,20 @@ def ltratio_mom(p, cas, c=0, c0=0, g0=0, info=False):
     array([ -2.181355...,   5.320675..., -14.035800...,  39.554430...])
     >>> float(ltratio_mom(2, "DU")[1])     # 3.0559953450 (Nabeya, 1999)
     3.0559953450...
+    >>> from dflimit import trend
+    >>> ltratio_mom(2, trend(2))           # a quadratic trend
+    array([-2.631415..., 7.445401...])
     """
     pm = dfl_posint(p, "p")
-    _, model, stat = dfl_case(cas)
-    m, e = _engine.moments(pm, model, dfl_num(c, "c"), dfl_num(c0, "c0"), dfl_num(g0, "g0"), stat)
-    r = Result(m=f64(m), err=f64(e))
+    S = spec_of(cas, g0, start, gls)
+    e = engine_of(S, engine)
+    if e == CLASSICAL:
+        _, model, stat = dfl_case(S.case)
+        m, er = _engine.moments(pm, model, dfl_num(c, "c"), dfl_num(c0, "c0"), S.g0, stat)
+        r = Result(m=f64(m), err=f64(er))
+        return r if info else r["m"]
+    m, wd, wc = _engine.route(R_MOM, route_tuple(S), np.array([float(pm)]).tobytes(), dfl_num(c, "c"), dfl_num(c0, "c0"), e,
+                              0, 0, 0.0)
+    warn_lines(wc, wd)
+    r = Result(m=f64(m), err=np.full(pm, math.nan))
     return r if info else r["m"]

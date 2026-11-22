@@ -15,12 +15,31 @@ Julia).
 - `power_envelope`: the asymptotic power envelope of Elliott, Rothenberg and Stock (1996);
 - `ltratio_threads`: the number of worker threads.
 
+The general engine (any piecewise smooth deterministic terms: polynomial trends, breaks in level and slope, designs
+given by a function or by the regressor matrix of a sample; the inversion on paths around the roots of the determinant
+of the joint moment generating function):
+
+- the designs `Design`, `trend`, `perron`, `fdesign`, `ltrend`, `design_from_matrix`, `detrend_first`, which the
+  functions above take in place of the case, with the keyword ``engine`` ("auto", "classical", "general") of the
+  router over the two engines;
+- `dist_cdf`, `dist_pdf`, `dist_quantile`, `dist_moments`, `coef_pdf`, `coef_quantile`, `coef_cdf_gp`,
+  `local_power`, `lin_cdf`, `lin_pdf`, `lin_quantile`, `v_cdf`, `v_pdf`, `adfmax_quantile`, `region_prob`: its
+  functions of a design, with the start, the fixed start, a local null value, GLS detrending and ``verified``;
+- the companions `pt_cdf`, `pt_pdf`, `pt_quantile`, `pt_power`, `pt_envelope` (the point-optimal statistic),
+  `lm_cdf`, `lm_quantile`, `lm_power` (the LM statistic), `mza_cdf`, `mza_quantile` (MZ_alpha), `msb_cdf`,
+  `msb_quantile` (MSB); `empty_caches`.
+
 Not in the package, because the C engine does not have it: the boundary type ``"fun"`` (any function g) of
 ``ltratio_region``.  (A new entry point of the engine: a function in _engine.c, see the comment at its top, and a
 function in a module like _lincdf.py, exported here.)
 """
 from ._adfmax import adfmax_cdf, adfmax_icdf, adfmax_pdf
 from ._coef import coef_cdf, coef_icdf
+from ._design import Design, design_from_matrix, detrend_first, fdesign, ltrend, perron, trend
+from ._general import (adfmax_quantile, coef_cdf_gp, coef_pdf, coef_quantile, dist_cdf, dist_moments, dist_pdf,
+                       dist_quantile, empty_caches, lin_cdf, lin_pdf, lin_quantile, lm_cdf, lm_power, lm_quantile,
+                       local_power, msb_cdf, msb_quantile, mza_cdf, mza_quantile, pt_cdf, pt_envelope, pt_pdf, pt_power,
+                       pt_quantile, region_prob, v_cdf, v_pdf)
 from ._lincdf import ltratio_lincdf, power_envelope
 from ._ltratio import ltratio_cdf, ltratio_icdf, ltratio_mom, ltratio_pdf
 from ._region import ltratio_region
@@ -38,6 +57,11 @@ __all__ = [
     "ltratio_lincdf", "power_envelope",
     "ltratio_threads",
     "Result",
+    "Design", "trend", "perron", "fdesign", "ltrend", "design_from_matrix", "detrend_first",
+    "dist_cdf", "dist_pdf", "dist_quantile", "dist_moments", "coef_pdf", "coef_quantile", "coef_cdf_gp", "local_power",
+    "lin_cdf", "lin_pdf", "lin_quantile", "v_cdf", "v_pdf", "adfmax_quantile", "region_prob",
+    "pt_cdf", "pt_pdf", "pt_quantile", "pt_power", "pt_envelope", "lm_cdf", "lm_quantile", "lm_power",
+    "mza_cdf", "mza_quantile", "msb_cdf", "msb_quantile", "empty_caches",
 ]
 
 _n = _default_threads()

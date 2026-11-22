@@ -4,15 +4,18 @@ from collections.abc import Mapping
 
 import numpy as np
 
-from . import _engine
-from ._utils import Result, dfl_num, dfl_real, warn
+from . import _engine, _general
+from ._design import Design
+from ._route import CLASSICAL, ENGINE_DOC, GENERAL, dfl_engine, spec_of
+from ._utils import Result, dfl_num, dfl_real, fill_doc, warn
 
 _TYPES = ("line", "parabola", "wap")
 _TYPE_MSG = ('the boundary type must be "line", "parabola" or "wap" (the type "fun" of the MATLAB programs is not '
              'available in the C engine)')
 
 
-def ltratio_region(bnd, cas="DK", c=0, info=False):
+@fill_doc(engine=ENGINE_DOC)
+def ltratio_region(bnd, cas="DK", c=0, info=False, *, engine=None, start=None, g0=0, gls=None):
     """Limiting probability of a region of the plane.
 
     The limit of the probability P{U <= g(V)} under phi = 1 + c/n, no drift, zero start, case DK (no deterministic
@@ -35,13 +38,17 @@ def ltratio_region(bnd, cas="DK", c=0, info=False):
         and optionally ``"v0"`` (g = +inf on (0, v0), whose probability P(V < v0) is added) and ``"brks"`` (kinks
         of g, breakpoints of the outer rule). The boundary type ``"fun"`` of the MATLAB programs (any function g) is
         not available: the C engine has the three families above only.
-    cas : str, default "DK"
-        The case: ``"DK"`` only.
+    cas : str or Design, default "DK"
+        The case: ``"DK"`` only, or a design of the general engine (``trend(-1)`` with a zero start is case DK).
     c : float, default 0
         The local-to-unity parameter.
     info : bool, default False
         If true, return a `Result` (a dict whose keys are also attributes) with the probability ``P``, the error
-        estimate ``err`` and the status ``status`` (nonzero: the error estimate is not met).
+        estimate ``err`` and the status ``status`` (nonzero: the error estimate is not met); with the general engine
+        ``err`` is nan and ``status`` 0.
+    {engine}
+    start, g0, gls
+        With a design: the start and the GLS detrending, as in `ltratio_cdf`.
 
     Returns
     -------
@@ -62,7 +69,13 @@ def ltratio_region(bnd, cas="DK", c=0, info=False):
 
     See Also
     --------
-    ltratio_cdf
+    ltratio_cdf, region_prob
+
+    Notes
+    -----
+    The rule of ``engine="auto"`` takes the classical engine for case DK (2.7 to 3.1 times faster, and the only engine
+    for the weighted-average-power boundary); other designs, and ``engine="general"``, have the general engine
+    (`region_prob`: the line and the parabola, without ``"v0"`` and ``"brks"``).
 
     Examples
     --------
@@ -72,11 +85,27 @@ def ltratio_region(bnd, cas="DK", c=0, info=False):
     >>> # the point-optimal test against cbar = -7: size 0.05
     >>> ltratio_region({"type": "line", "a": -3.5, "b": -0.2639}, "DK", 0)
     0.0499967819...
+    >>> from dflimit import trend
+    >>> ltratio_region({"type": "parabola", "x": -2.86157}, trend(0))     # the t-ratio of case DU at 5%
+    0.049999857...
     """
-    if not isinstance(cas, str):
-        raise TypeError("the case must be DK (zero start)")
-    if cas.upper() != "DK":
-        raise ValueError("the case must be DK (zero start)")
+    e = dfl_engine(engine)
+    if isinstance(cas, Design):
+        S = spec_of(cas, g0, start, gls)
+        if not (S.case == "DK" and S.start == 0) or e == GENERAL:
+            if e == CLASSICAL:
+                raise ValueError("engine='classical': the regions of the classical engine have case DK only (trend(-1), zero "
+                                 "start)")
+            return _general_region(bnd, S, c, info)
+    else:
+        if start is not None or gls is not None or g0 != 0:
+            raise ValueError("start, g0 and gls apply to a design")
+        if not isinstance(cas, str):
+            raise TypeError("the case must be DK (zero start)")
+        if cas.upper() != "DK":
+            raise ValueError("the case must be DK (zero start)")
+        if e == GENERAL:
+            return _general_region(bnd, spec_of("DK"), c, info)
     if not isinstance(bnd, Mapping) or bnd.get("type") is None:
         raise TypeError("bnd must be a dict with the key 'type'")
     btype = bnd["type"]
@@ -108,3 +137,10 @@ def ltratio_region(bnd, cas="DK", c=0, info=False):
     if status != 0:
         warn(f"the error estimate {err:.1e} is above the tolerance; the result may be inaccurate")
     return Result(P=P, err=err, status=status) if info else P
+
+
+def _general_region(bnd, S, c, info):
+    """The region by the general engine (region_prob)."""
+    st = {0: "zero", 1: "fixed", 2: "stationary"}[S.start]
+    P = _general.region_prob(S.design, bnd, c, start=st, gamma0=S.g0, gls=None if math.isnan(S.gls) else S.gls)
+    return Result(P=P, err=math.nan, status=0) if info else P
