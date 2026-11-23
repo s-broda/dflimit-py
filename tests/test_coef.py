@@ -37,8 +37,11 @@ def test_coef_icdf_inverts_coef_cdf():
 
 def test_coef_cdf_is_the_ltratio_cdf_at_0_with_the_shifted_null():
     # equal to rounding, not identical: with threads the order of summation in the engine can differ by one ulp
-    expect_equal(coef_cdf(-5, "DT", -2, c0=1), ltratio_cdf(0, "DT", -2, c0=-4), 1e-13)
-    expect_equal(coef_cdf(-3, "DK", 0, g0=1), ltratio_cdf(0, "DK", 0, c0=-3, g0=1), 1e-13)
+    # (method="engine", the computation of before; the default, the single inversion of Bao and Kan, to 1e-11)
+    expect_equal(coef_cdf(-5, "DT", -2, c0=1, method="engine"), ltratio_cdf(0, "DT", -2, c0=-4), 1e-13)
+    expect_equal(coef_cdf(-3, "DK", 0, g0=1, method="engine"), ltratio_cdf(0, "DK", 0, c0=-3, g0=1), 1e-13)
+    assert abs(coef_cdf(-5, "DT", -2, c0=1) - ltratio_cdf(0, "DT", -2, c0=-4)) < 1e-11
+    assert abs(coef_cdf(-3, "DK", 0, g0=1) - ltratio_cdf(0, "DK", 0, c0=-3, g0=1)) < 1e-11
 
 
 def test_shape_and_argument_checks():

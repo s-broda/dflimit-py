@@ -87,7 +87,7 @@ def test_reference_coverage():
     assert {r["st"] for r in VAL} == {0, 1, 2}
     assert any(not math.isnan(r["cb"]) for r in VAL) and any(r["c0"] != 0 for r in VAL) and any(r["ver"] for r in VAL)
     assert {r["e"] for r in ROUTE} == {0, 1, 2} and {r["spec"] for r in ROUTE} == {"case", "design"}
-    assert {r["fn"] for r in ERR} >= {"lmcdf", "lmq", "lmpow", "cdf", "ptcdf", "linq", "adfq", "ptq", "quant", "coefq", "msbq",
+    assert {r["fn"] for r in ERR} >= {"lmcdf", "lmq", "lmpow", "cdf", "ptcdfG", "linq", "adfq", "ptq", "quant", "coefq", "msbq",
                                       "mzaq", "ptpow", "env"}
     assert any(r["fn"] == "adf" and r["st"] == 1 for r in ROUTE) and any(r["fn"] == "lmcdf" and r["c"] == 5 for r in VAL)
 
@@ -441,14 +441,18 @@ def test_refusals():
         lm_cdf(trend(1), -0.5, 11)
     with pytest.raises(ValueError, match="at most 10"):
         lm_quantile(trend(1), 0.05, c=10.5)
+    # (the fixed grid of the point-optimal statistic, method="grid" or N given; the default up to c = 4, the single
+    # inversion of Bao and Kan, has no such refusals)
     with pytest.raises(ValueError, match=r"does not resolve.*needs N >= (\d+)") as e:
-        pt_cdf(trend(1), [4.0, 10.0], -13.5, 3.8)
+        pt_cdf(trend(1), [4.0, 10.0], -13.5, 3.8, method="grid")
     N = int(re.search(r"needs N >= (\d+)", str(e.value)).group(1))
     F = pt_cdf(trend(1), [4.0, 10.0, 30.0], -13.5, 3.8, N=N)       # (the grid it names serves)
     assert np.all((F >= 0) & (F <= 1)) and np.all(np.diff(F) > 0)
+    assert pt_cdf(trend(1), [4.0, 10.0, 30.0], -13.5, 3.8) == pytest.approx(F, abs=1e-8)
     with pytest.raises(ValueError, match="beyond the range"):
-        pt_cdf(trend(1), 2000.0, -13.5)
-    assert pt_cdf(trend(1), 999.0, -13.5) == pytest.approx(1, abs=1e-9)
+        pt_cdf(trend(1), 2000.0, -13.5, method="grid")
+    assert pt_cdf(trend(1), 999.0, -13.5, method="grid") == pytest.approx(1, abs=1e-9)
+    assert pt_cdf(trend(1), 2000.0, -13.5) == pytest.approx(1, abs=1e-9)
     for f in (lambda: pt_quantile(trend(1), 1.0, -13.5), lambda: dist_quantile(trend(1), math.nan),
               lambda: pt_envelope(trend(1), [-5.0], level=0.0), lambda: adfmax_quantile(trend(0), -0.1)):
         with pytest.raises(ValueError, match=r"must lie in \(0, 1\)"):
@@ -532,4 +536,6 @@ def test_above_the_unit_root():
         dist_cdf(perron("A", 0.5), 0, 18, c0=2)
     with pytest.raises(ValueError, match="up to c = 20"):
         dist_moments(trend(-1), 21)
-    assert np.allclose(ltratio_mom(2, "DU", 18), ltratio_mom(2, "DU", 18, engine="classical"), rtol=0, atol=0)
+    # (the default up to c = 20 is the moments from jets of Bao and Kan; method="engine" the classical engine here)
+    assert np.allclose(ltratio_mom(2, "DU", 18, method="engine"), ltratio_mom(2, "DU", 18, engine="classical"), rtol=0, atol=0)
+    assert np.allclose(ltratio_mom(2, "DU", 18), ltratio_mom(2, "DU", 18, engine="classical"), rtol=1e-9, atol=0)

@@ -1,4 +1,4 @@
-# a subset of c/test/det_ref.txt of dflimit-matlab (commit 4910ea2bccf4ecb9ce3bcf77c86d46935c8171ec): the values of the Julia general engine of
+# a subset of c/test/det_ref.txt of dflimit-matlab (commit f9868cc1b93060183d2544fede400a2807025002): the values of the Julia general engine of
 # DFLimit.jl, copied unchanged by tools/det-ref.py: 27 designs, 435 of 520 val lines, 118 of 118 route lines, 42 of 44 err lines and 9 of 11 rerr lines.
 # design id spec: trend p | perron M q lam... | ltrend p | fdesign name | matrix base n | first base | raw np deg K loc br... C...
 # val func id cbar start g0 c c0 verified par n x... nv values... tol [brittle]   (start 0 zero, 1 fixed, 2 stationary)
@@ -426,15 +426,15 @@ err lmcdf 3 NaN 0 0 11 0 0 0 1 -0.10000000000000001 | must be at most 10
 err lmq 3 NaN 0 0 11 0 0 0 1 0.050000000000000003 | must be at most 10
 err lmpow 3 NaN 0 0 0 0 0 0.050000000000000003 2 -5 11 | must be at most 10
 err cdf 19 NaN 0 0 1 0 0 0 1 -2 | the U-shapes of the zero start
-val ptcdf 3 -13.5 0 0 3.6000000000000001 0 0 -13.5 3 4 10 30 3 0.0011489850764827558 0.028946361502326878 0.11703619312448654 1.0000000000000001e-09
-err ptcdf 3 -13.5 0 0 3.7000000000000002 0 0 -13.5 3 4 10 30 | does not resolve
-val ptcdf 2 -7 0 0 3 0 0 -7 3 4 10 30 3 0.014721314685950893 0.055017656345660138 0.12536503745679328 1.0000000000000001e-09
-err ptcdf 2 -7 0 0 3.1000000000000001 0 0 -7 3 4 10 30 | does not resolve
-err ptcdf 8 -17.800000000000001 0 0 4.4000000000000004 0 0 -17.800000000000001 3 4 10 30 | does not resolve
+val ptcdfG 3 -13.5 0 0 3.6000000000000001 0 0 -13.5 3 4 10 30 3 0.0011489850764827558 0.028946361502326878 0.11703619312448654 1.0000000000000001e-09
+err ptcdfG 3 -13.5 0 0 3.7000000000000002 0 0 -13.5 3 4 10 30 | does not resolve
+val ptcdfG 2 -7 0 0 3 0 0 -7 3 4 10 30 3 0.014721314685950893 0.055017656345660138 0.12536503745679328 1.0000000000000001e-09
+err ptcdfG 2 -7 0 0 3.1000000000000001 0 0 -7 3 4 10 30 | does not resolve
+err ptcdfG 8 -17.800000000000001 0 0 4.4000000000000004 0 0 -17.800000000000001 3 4 10 30 | does not resolve
 design 24 perron C 1 0.5
-err ptcdf 24 -20 0 0 4.2999999999999998 0 0 -20 3 4 10 30 | does not resolve
+err ptcdfG 24 -20 0 0 4.2999999999999998 0 0 -20 3 4 10 30 | does not resolve
 val ptcdf 3 -13.5 0 0 0 0 0 -13.5 4 1000 Inf -Inf NaN 4 0.999999999962637 1 0 NaN 1.0000000000000001e-09
-err ptcdf 3 -13.5 0 0 0 0 0 -13.5 1 100000 | beyond the range
+err ptcdfG 3 -13.5 0 0 0 0 0 -13.5 1 100000 | beyond the range
 val ptcdfN 3 -13.5 0 0 5 1000000 0 -13.5 2 73.280000000000001 100 2 0.050074617171658842 0.059602719820209593 1.0000000000000001e-09
 err linq 1 NaN 0 0 0 0 0 -3.5 1 1.5 | must lie in (0, 1)
 err linq 1 NaN 0 0 0 0 0 -3.5 1 0 | must lie in (0, 1)
