@@ -20,7 +20,7 @@ static inline JT JF(neg)(JT a) { for (int k = 0; k < a.n; k++) a.c[k] = cneg(a.c
 static inline JT JF(addc)(JT a, cdouble z) { a.c[0] = cadd(a.c[0], z); return a; }
 static inline JT JF(subc)(JT a, cdouble z) { a.c[0] = csub(a.c[0], z); return a; }
 static inline JT JF(csub)(cdouble z, JT a) { cdouble v = csub(z, a.c[0]); a = JF(neg)(a); a.c[0] = v; return a; }
-static inline JT JF(addr)(JT a, double r) { a.c[0] = CPX(creal(a.c[0]) + r, cimag(a.c[0])); return a; }
+static inline JT JF(plusr)(JT a, double r) { a.c[0] = CPX(creal(a.c[0]) + r, cimag(a.c[0])); return a; }
 static inline JT JF(subr)(JT a, double r) { a.c[0] = CPX(creal(a.c[0]) - r, cimag(a.c[0])); return a; }
 static inline JT JF(rsub)(double r, JT a) { cdouble v = CPX(r - creal(a.c[0]), -cimag(a.c[0])); a = JF(neg)(a); a.c[0] = v; return a; }
 /* a z, a r (the complex product with r + 0i), a / z, a / r */
@@ -93,6 +93,6 @@ static inline JT JF(logc)(JT a, double ph) { return JF(logv)(a, CPX(log(cabs(a.c
 static inline JT JF(ser)(const double *cf, int ncf, JT z)
 {
     JT y = JF(const)(z.n, CPX(0, 0));
-    for (int k = ncf - 1; k >= 0; k--) y = JF(addr)(JF(mul)(y, z), cf[k]);
+    for (int k = ncf - 1; k >= 0; k--) y = JF(plusr)(JF(mul)(y, z), cf[k]);
     return y;
 }

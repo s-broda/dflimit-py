@@ -71,7 +71,7 @@ static inline cdouble s_neg(cdouble a) { return cneg(a); }
 static inline cdouble s_addc(cdouble a, cdouble z) { return cadd(a, z); }
 static inline cdouble s_subc(cdouble a, cdouble z) { return csub(a, z); }
 static inline cdouble s_csub(cdouble z, cdouble a) { return csub(z, a); }
-static inline cdouble s_addr(cdouble a, double r) { return CPX(creal(a) + r, cimag(a)); }
+static inline cdouble s_plusr(cdouble a, double r) { return CPX(creal(a) + r, cimag(a)); }
 static inline cdouble s_subr(cdouble a, double r) { return CPX(creal(a) - r, cimag(a)); }
 static inline cdouble s_rsub(double r, cdouble a) { return CPX(r - creal(a), -cimag(a)); }
 static inline cdouble s_mulc(cdouble a, cdouble z) { return cmul(a, z); }
@@ -85,7 +85,7 @@ static inline cdouble s_sqrt(cdouble a) { return dfl_csqrt(a); }
 static inline cdouble s_exp(cdouble a) { return cexp(a); }
 static inline cdouble s_logp(cdouble a) { return clog(a); }
 static inline cdouble s_logc(cdouble a, double ph) { return CPX(log(cabs(a)), ph); }
-static inline cdouble s_ser(const double *cf, int ncf, cdouble z) { cdouble y = CPX(0, 0); for (int k = ncf - 1; k >= 0; k--) y = s_addr(cmul(y, z), cf[k]); return y; }
+static inline cdouble s_ser(const double *cf, int ncf, cdouble z) { cdouble y = CPX(0, 0); for (int k = ncf - 1; k >= 0; k--) y = s_plusr(cmul(y, z), cf[k]); return y; }
 
 /* jets of capacity 2 (the density's integrand), 10 (the tails, the scale, moments up to the ninth) and DFL_KAN_JMAX */
 #define JT dfl_jet2
@@ -131,7 +131,7 @@ static double dfl_kan_argcos(cdouble z)
 static double dfl_kan_argtau4(cdouble z0, cdouble zc0, cdouble D2, cdouble T0)
 {
     cdouble D1 = cabs(z0) < 4 ? s_ser(DFL_KAN_SER_D1, 40, CPX(creal(z0) / 4, cimag(z0) / 4)) : cdiv(s_subr(cscale(2, D2), 1), z0);
-    cdouble rho = s_addr(cmul(zc0, D1), 1);
+    cdouble rho = s_plusr(cmul(zc0, D1), 1);
     cdouble Sinf = cdiv(cmul(T0, D2), cscale(2, rho));
     cdouble W = cdiv(CPX(1, 0), cscale(2, D2));
     return carg(W) + carg(rho) + carg(Sinf);
