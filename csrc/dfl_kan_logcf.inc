@@ -122,10 +122,10 @@ static KT KNAME(lcf)(const dfl_limcf *F, KT t1, KT t2)
     KT tau0 = KF(sub)(KF(mul)(t1, t1), KF(mulc)(t2, CPX(0, 2)));
     if (F->det == 3) return KNAME(trendlim)(F, t1, t2, om, zc, tau0);
     cdouble z0 = KF(val)(zeta);
-    int small = cabs(z0) < 4;
+    int below4 = cabs(z0) < 4;
     if (F->det == 1) {
         KT lC, lg, Kf;
-        if (small) {
+        if (below4) {
             KT C = KF(ser)(DFL_KAN_SER_COS, 27, zeta), S = KF(ser)(DFL_KAN_SER_SIN, 27, zeta);
             KT f = KF(sub)(C, KF(mul)(om, S));
             KT g = KF(rsub)(1, KF(div)(KF(mul)(om, S), C));
@@ -149,7 +149,7 @@ static KT KNAME(lcf)(const dfl_limcf *F, KT t1, KT t2)
     KT tau2 = KF(plusr)(KF(sub)(KF(mulc)(t1, cscale(c, CPX(0, c - 2))), tau0), c2 * c);
     KT T0, lS, Q;
     cdouble D2;
-    if (small) {
+    if (below4) {
         KT S = KF(ser)(DFL_KAN_SER_SIN, 27, zeta), Sh = KF(ser)(DFL_KAN_SER_SH, 27, zeta), ShmCh = KF(ser)(DFL_KAN_SER_CD, 27, zeta);
         KT tau10 = KF(add)(tau1, KF(mulr)(zeta, 2 * c)), tau20 = KF(sub)(tau2, zeta);
         KT Nz = KF(const)(n_, CPX(0, 0));

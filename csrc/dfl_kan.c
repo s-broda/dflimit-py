@@ -314,13 +314,13 @@ int dfl_quadgk(dfl_qfun f, void *ctx, int np, const double *pts, double atol, do
  * ===================================================================================================================== */
 int dfl_kan_decades(dfl_qfun f, void *ctx, double b, double tol, double rtol, double *Iout, double *eout, long *nev)
 {
-    double Is = 0, e = 0, a = 0; int small = 0, k = 1;
+    double Is = 0, e = 0, a = 0; int quiet = 0, k = 1;
     while (a < b) {
         double hi = isinf(b) ? pow(10.0, k) : (pow(10.0, k + 0.5) >= b ? b : pow(10.0, k)), pts[2] = {a, hi}, Ik, ek;
         if (dfl_quadgk(f, ctx, 2, pts, tol / 10, rtol, 1000000L, &Ik, &ek, nev)) return 1;
         Is += Ik; e += ek; a = hi; k++;
-        if (fabs(Ik) + ek <= tol / 20) small++; else small = 0;
-        if (small >= 2 || k > 31) break;
+        if (fabs(Ik) + ek <= tol / 20) quiet++; else quiet = 0;
+        if (quiet >= 2 || k > 31) break;
     }
     *Iout = Is; *eout = e;
     return 0;
