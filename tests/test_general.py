@@ -424,6 +424,24 @@ def test_a_fixed_start_of_case_dk():
     assert ltratio_lincdf(-0.2639, -3.5, "DK", -5, g0=1.5, engine="general") == pytest.approx(P, abs=1e-14)
 
 
+def test_the_rules_of_one_evaluation():
+    """the rule of one evaluation of the paths (rule; November 2026): the thin rule within the criterion of the rule of
+    before (7.6e-10 in F and 4e-9 of the peak in f on a dense grid; the values of every rule against DFLimit.jl are lines
+    of ref/det_ref.txt, 'cdf#thin' and so on); the fixed start of case DK in the upper tail near the unit root; the
+    router's cell of case DK with c0 < 0 there"""
+    D = trend(1)
+    x = [-3.5, -2.3, -0.7, 0.4]
+    assert np.max(np.abs(dist_cdf(D, x, -5, c0=2) - dist_cdf(D, x, -5, c0=2, rule="present"))) < 1e-9
+    assert np.max(np.abs(dist_pdf(D, x, -5, c0=2) - dist_pdf(D, x, -5, c0=2, rule="present"))) < 1e-8
+    assert abs(dist_quantile(D, 0.05, -5, c0=2) - dist_quantile(D, 0.05, -5, c0=2, rule="present")) < 1e-8
+    assert np.max(np.abs(dist_cdf(trend(-1), [9.732, 12, 20], 0, start="fixed", gamma0=1) - 1)) < 1e-10
+    assert ltratio_cdf(45.11, "DK", 0.5, c0=-10, g0=1) == pytest.approx(0.99981515720, abs=1e-10)
+    with pytest.raises(ValueError, match="rule must be"):
+        dist_cdf(D, 0, rule="finest")
+    with pytest.raises(TypeError, match="rule must be"):
+        dist_quantile(D, 0.05, rule=1)
+
+
 def test_the_law_of_v_off_its_support():
     """P(V <= b) and its density are 0 at b <= 0"""
     for D in (trend(-1), trend(1), perron("A", 0.5)):
