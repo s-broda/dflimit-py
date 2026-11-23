@@ -490,12 +490,20 @@ static double ufixed_count(const cdouble *rts, int r, double sp, double sm, doub
     for (int i = 0; i < r; i++) { cdouble z = rts[i]; *hmx = dmax(*hmx, fabs(cimag(z)) + fabs(creal(z) - (creal(z) > 0 ? sp : sm))); }
     return 2 * *hmx / dmin(hp, hm) * n;
 }
-/* the abscissas of the U-shapes of the fixed start (ufixed_place): the defaults replaced by those of place */
+/* the abscissas of the U-shapes of the fixed start (ufixed_place): the defaults replaced by those of place.  The objective
+ * of place also counts the growth e^{sigma^2 xq^2/(4 Re(t + c0 s))} of the v-kernels of the upper tail (x up to xq > 0, c0
+ * the largest positive one) on G+ to the left of the origin, at every c.  Until November 2026 only above the unit root: in
+ * case DK near it (c = 0 and -0.5) G+ went left of the origin in the upper tail as well, and one evaluation was off by 3e-7
+ * at x = 9.7 (g0 = 1), 7e-3 at x = 12 and 1e39 at x = 20, with c0 = 2 by 55 at x = 4 and with c0 = -2 by 9e-5 at x = 20,
+ * where F is 1 to 1e-12 (the default route takes the general engine for these arguments); with the growth counted at every
+ * c these points are within 1e-12 of the classical engine and the bulk is unchanged (cases DU, DT, whose G+ stays right of
+ * the origin, bit for bit; ufixed_place of DFDet.jl).  Above the unit root with c0 > 0 the placement is searched right of
+ * the branch point -Re(t)/c0, which the semi-infinite piece of V+ needs */
 static void ufixed_place(const det_path *CP, const logmt_t *L, const double *c0s, int nc0, const cdouble *gp, int rp, const cdouble *gm, int rm,
                          double hi, double lo, double tr, double alpha, double A, double xq, double *sp, double *sm)
 {
-    double xg = CP->c > 0 ? xq : 0.0, lbp = -INFINITY, c0p = 0;
-    if (CP->c > 0) for (int i = 0; i < nc0; i++) if (c0s[i] > 0) { lbp = dmax(lbp, -tr / c0s[i]); c0p = dmax(c0p, c0s[i]); }
+    double xg = xq, lbp = -INFINITY, c0p = 0;
+    for (int i = 0; i < nc0; i++) if (c0s[i] > 0) { if (CP->c > 0) lbp = dmax(lbp, -tr / c0s[i]); c0p = dmax(c0p, c0s[i]); }
     double sp0 = isfinite(lbp) ? dmax(*sp, lbp + alpha * (hi - lbp)) : *sp;
     if (rm > 0) {
         *sp = place(L, gp, rp, gm, rm, 1, dmax(lo, lbp), hi, A, sp0, xg, tr, c0p);
@@ -940,9 +948,12 @@ int det_contour_eval(const det_path *CP, int nx, const double *xs, double c0, in
 {
     det_eval_opts o; if (o0) o = *o0; else det_eval_defaults(CP, &o);
     if (nx == 0) return 0;
-    {   /* the guard on the nodes of the U-shapes, before the outer sum */
+    {   /* the guard on the nodes of the U-shapes, before the outer sum.  (It counts the nodes of the present rule's
+         * U-shapes, so that it refuses what it refused before November 2026 whatever the rule of one evaluation: with the
+         * 16 nodes of the thin rule the count of the design (1 + r, 1{r <= 0.4}) stays below the cap where the transform
+         * matters, and ushapes refused it only after seconds; contour_eval of DFDet.jl) */
         double xq = 0; for (int ix = 0; ix < nx; ix++) xq = dmax(xq, xs[ix]);
-        if (ushape_guard(CP, &c0, 1, CP->Mo->a, o.n, o.alpha, o.tol, dmax(0.0, xq), err, errlen)) return 1;
+        if (ushape_guard(CP, &c0, 1, CP->Mo->a, imax(o.n, CP->Mo->start == 1 ? 48 : 24), o.alpha, o.tol, dmax(0.0, xq), err, errlen)) return 1;
     }
     double *vr = NULL;
     /* Filon's rule on the line for the t-ratio with one root of the parabola per x (filon_roots_x) */

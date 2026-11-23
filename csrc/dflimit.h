@@ -259,6 +259,16 @@ int dfl_single(int kind, int n, const double *x, int model, double c, double c0,
 #define DFL_CONTOUR_MSG "method 3 (the contour integral) applies to a fixed start g0 != 0 in cases DU, DT"
 int dfl_contour(int kind, int n, const double *x, int model, double c, double c0, double g0, int verified, double *out, double *err, int *status, int *nodes, char *errmsg, size_t errlen);
 int dfl_contour_lev(int kind, int n, const double *x, int model, double c, double c0, double g0, int verified, double *out, double *err, int *status, int *nodes, int *level, char *errmsg, size_t errlen);
+/* The rule of one evaluation (verified 0) of the contour integral (ctr_rule of DFExact.jl, November 2026): n nodes per
+ * panel and per ray of evaluation A and the factor hfac of its outer step: c > 1: (32, 1); |c g0| > 20: (64, 1), the
+ * rule of before; otherwise (32, 1.5) for c >= -2.5 and for c >= -10 with c0 <= 0, (64, 1.5) elsewhere.  dfl_contour and
+ * dfl_contour_lev take it; dfl_contour_rule with rule DFL_CTR_PRESENT takes the rule of before (64, 1), and n1 > 0, hfac (a
+ * positive number; NaN: by the rule) override the rule (verified = 1 is unchanged and ignores them). */
+#define DFL_CTR_AUTO 0
+#define DFL_CTR_PRESENT 1
+void dfl_ctr_rule(double c, double c0, double g0, int *n, double *hfac);
+int dfl_contour_rule(int kind, int n, const double *x, int model, double c, double c0, double g0, int verified, int rule, int n1, double hfac,
+                     double *out, double *err, int *status, int *nodes, int *level, char *errmsg, size_t errlen);
 double dfl_single_value_c0(int kind, double x, int model, double c, bool stat, const dfl_single_opts *o);      /* one value at c0 = 0, zero or stationary start */
 double dfl_single_value_gen(int kind, double x, int model, double c, double c0, double g0, bool stat, const dfl_single_opts *o);   /* the general kernel (c0 != 0 or a fixed start g0 != 0) */
 /* the same with the bounds of the engine: 0 and the value in *out, or the bound that a path of the line integral would exceed
@@ -281,6 +291,13 @@ int dfl_moments(int model, double c, double c0, double g0, bool stat, int pmax, 
  * one-evaluation default of method 0 */
 typedef struct { int M, Nv, Nl, maxlev; double plen, otol, stepw, errtol, blo, bhi, bmin, mumin, tdec; int verified; } dfl_double_opts;
 void dfl_double_defaults(dfl_double_opts *o);
+/* Nv, Nl: the nodes of the path of each inner inversion and of the integral over l (the noncentral probability); 0 (the
+ * default): in dfl_double by the rule of one evaluation (dfl_cond_rule) with verified = 0 and 96 with verified = 1, in
+ * dfl_adfmax and dfl_region 96.  The rule of one evaluation of the conditional integral of the t-ratio (cond_rule of
+ * DFExact.jl, November 2026; before, 96 everywhere): 48 nodes with a stationary start for c <= -2 and with a zero start in
+ * cases DU, DT for c >= -5 and in case DK for c <= -13.5, 64 with a stationary start for c > -2, 96 elsewhere, with a fixed
+ * start and above c = 2 (measured against 192 nodes and the outer tolerance 1e-14 on a dense grid of x) */
+int dfl_cond_rule(int model, double c, double c0, double g0, bool stat);
 typedef struct { double err; int status, nbad, nunres, nrefine; } dfl_double_info;
 /* the noncentral probability P[kap_1 Z_1^2 + kap_2 Z_2^2 <= a] (nc: with the squared means m1s, m2s) or its derivative in a
  * (pdfm), by the Nl-point l-rule; and the partial fractions of Q(s,t): Q(0,t) and the squared means mu_1, mu_2 times gg^2
@@ -335,6 +352,18 @@ int dfl_power_envelope(int n, const double *c, int model, double alpha, const df
 #define DFL_INV_CMAX 20.0      /* the largest c at which the single inversion (and the moments from jets) is the default (INV_CMAX) */
 #define DFL_PT_INV_CMAX 4.0    /* the same for the point-optimal statistic of the general engine (PT_INV_CMAX) */
 #define DFL_GP_INV_CMAX 5.0    /* and for its coefficient statistic by Gil-Pelaez (GP_INV_CMAX) */
+
+/* The first p moments of the t-ratio of a classical case (model 1, 2, 3; c0, the fixed start g0, stat) from jets, for the
+ * start of the quantile searches (dfl_icdf, dfl_engine_icdf; mom_start of merged.jl, after Bao and Kan): 1 with m[0..p-1],
+ * or 0 outside their region (c > DFL_INV_CMAX, case DG), where they fail or where an error estimate exceeds 1e-6 relative;
+ * the searches then start from the engines' moments.  DFL_MOM_START = 0 (1 by default) restores the start from the
+ * engines' moments, as before November 2026 (for checking) */
+int dfl_mom_start(int p, int model, bool stat, double c, double c0, double g0, double *m);
+extern int DFL_MOM_START;
+/* whether the router's classical quantile search (dfl_engine_icdf) takes F and f in one evaluation where the rule gives a
+ * Newton step's point to the general engine (route_dist2 of merged.jl: dfl_det_dist_both, the values of dfl_engine_dist bit
+ * for bit, so that the quantiles are unchanged bit for bit); 0: two evaluations, as before November 2026 (for checking) */
+extern int DFL_DIST2;
 
 /* ---- the user-level entry points (dfl_api.c) ---- */
 /* the validation shared by the entry points (and dfl_moments): the model, c (finite, at least DFL_CMIN), c0, g0, the start */
@@ -453,9 +482,32 @@ typedef struct {
     double gls;          /* GLS detrending at abar = 1 + gls/n (gls < 0), NaN: least squares (the default) */
     int verified;        /* 0 (default): one evaluation; 1: the checked computation (two rules, a third where they differ by vtol) */
     double vtol;         /* 1e-9 */
-    double phi, hfac;    /* the outer contour: its asymptotic angle (NaN: the default rule) and the factor of its step (1) */
+    double phi, hfac;    /* the outer contour: its asymptotic angle (NaN: the default rule) and the factor of its step (NaN: by the
+                          * rule of one evaluation of the t-ratio, DFL_RULE_*; 1 for the other statistics) */
     int method;          /* the t-ratio of dfl_det_dist, dfl_det_quantile: DFL_DET_AUTO (the default), DFL_DET_LINE, DFL_DET_PATHS */
+    int rule;            /* the rule of one evaluation of the t-ratio's inversion on paths (DFL_RULE_AUTO, the default; below) */
+    int n, ntail;        /* the Gauss-Legendre nodes per panel of the U-shapes and on the tails of their rays (<= 0: by the rule) */
 } dfl_det_opts;
+/* The rules of one evaluation of the t-ratio's inversion on paths (dfl_det_dist, dfl_det_quantile, and the paths that the
+ * line integral leaves to them; PATH_RULES and path_region of DFDet.jl, November 2026): (hfac, n, ntail, and n, ntail with a
+ * fixed start), hfac the factor of the step of the outer hyperbola, n the nodes per panel of the U-shapes and ntail those of
+ * the tails of their rays.  DFL_RULE_PRESENT the rule until November 2026 (1, 24, 40; 48, 64), also taken by verified = 1;
+ * DFL_RULE_THIN (1.5, 16, 32; 32, 48); DFL_RULE_INNER the thin inner rule on the present hyperbola; DFL_RULE_OUTER the
+ * present inner rule on the thin hyperbola; DFL_RULE_FINE the thin inner rule on the present hyperbola with half its step;
+ * DFL_RULE_FINESTEP (a fixed start without deterministic terms) the present inner rule on the present hyperbola with the step
+ * min(1/2, 2.5/(g0 |c0|)) times its own where it is flatter than 70 degrees.  DFL_RULE_AUTO: by regions of the start, the
+ * deterministic terms, c and c0 (the README, "The rules of one evaluation"); hfac (a number), n and ntail override the rule.
+ * On the vertical line (above the unit root) hfac does not apply and the line keeps its 24 nodes per panel. */
+#define DFL_RULE_AUTO 0
+#define DFL_RULE_PRESENT 1
+#define DFL_RULE_THIN 2
+#define DFL_RULE_INNER 3
+#define DFL_RULE_OUTER 4
+#define DFL_RULE_FINE 5
+#define DFL_RULE_FINESTEP 6
+/* the rule of DFL_RULE_AUTO (path_region): fixed a fixed start g0 != 0, rank1 a design without deterministic terms (a
+ * numerator of rank one, no negative root) */
+int dfl_det_path_region(int fixed, int rank1, double c, double c0);
 /* the method of the t-ratio's distribution function, density and quantiles: DFL_DET_AUTO the line integral with the explicit
  * kernel where it covers the design and the rule takes it (c0 = 0 and c >= -20: dfl_det_line.c), the inversion on paths
  * around the roots otherwise; DFL_DET_LINE the line integral (an error with the reason where it does not cover the design,
@@ -490,6 +542,10 @@ void dfl_det_empty_caches(void);      /* drop the cached prepared designs and ou
  * points of one call share the paths of the inversion (as in Julia, where the values depend on the points evaluated
  * together only through the rules of the paths, far below 1e-10). */
 int dfl_det_dist(int kind, const dfl_design *D, int n, const double *x, double c, const dfl_det_opts *o, double *out, char *err, size_t errlen);
+/* the distribution function F and the density f of the inversion on paths (method paths) at the finite points x from one pass
+ * (dist_both of DFDet.jl): the values of dfl_det_dist (kinds 2 and 1, method paths) bit for bit, one evaluation by the rule
+ * of DFL_RULE_AUTO; o supplies c0, the start, gamma0 and gls only.  F ends with the final check */
+int dfl_det_dist_both(const dfl_design *D, int n, const double *x, double c, const dfl_det_opts *o, double *F, double *f, char *err, size_t errlen);
 /* the p-quantiles (dist_quantile): Newton's method from x0 (-2), the safeguarded search where it does not converge */
 int dfl_det_quantile(const dfl_design *D, int n, const double *p, double c, double x0, double tol, const dfl_det_opts *o, double *q, char *err, size_t errlen);
 /* the coefficient statistic (U - c0 V)/V of n(phi^ - phi0): distribution function (kind 2) and density (kind 1) at y, its

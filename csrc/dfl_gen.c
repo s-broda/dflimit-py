@@ -1449,23 +1449,24 @@ static void ctr_layout(int kind, const ctr_t *d, double q, double c0, double c, 
 /* the asymptotic angle of the outer hyperbola: 45 degrees for c >= -10, rising linearly to 70 degrees at c = -40, 70 below */
 static double ctr_phi(double c) { return (45 + 25 * ctr_clamp((-c - 10) / 30, 0.0, 1.0)) * M_PI / 180; }
 /* the outer contour of (model, c) (variant 1: evaluation A, the angle ctr_phi(c); variant 2: evaluation B, the angle
- * ctr_phi(c) + CTR_DPHI): the nodes u_k = k h, the data along it (branches continued on CTR_SUB points per step) and
- * t'(u_k); cached per (model, c, variant) under a lock (CTR_PMAX entries; beyond, each call builds its own) */
-typedef struct { int model, variant; double c, h; int K1; ctr_t *T; cdouble *dt; } ctr_path_t;
+ * ctr_phi(c) + CTR_DPHI), hfac the factor of its step (1; the rule of one evaluation, dfl_ctr_rule): the nodes u_k = k h,
+ * the data along it (branches continued on CTR_SUB points per step) and t'(u_k); cached per (model, c, variant, hfac) under
+ * a lock (CTR_PMAX entries; beyond, each call builds its own) */
+typedef struct { int model, variant; double c, hfac, h; int K1; ctr_t *T; cdouble *dt; } ctr_path_t;
 #define CTR_PMAX 256
 static ctr_path_t *CTRPATH[CTR_PMAX]; static int nctrpath = 0; static dfl_lock_t ctrlock = DFL_LOCK_INIT;
-static ctr_path_t *ctr_path_new(int model, double c, int variant)
+static ctr_path_t *ctr_path_new(int model, double c, int variant, double hfac)
 {
     double tau = dfl_default_tau(model, c, false), ts = dfl_tstar(model, c, false);
     double phi = ctr_phi(c) + (variant == 2 ? CTR_DPHI : 0.0), y = ctr_min(0.5, 0.9 * (M_PI / 2 - phi));
     double b = 0.9 * ctr_min(tau, ts - tau) / sin(y), a = b / tan(phi);
-    double h = 2 * M_PI * y / (37 + 37 * tan(phi) * y);
+    double h = hfac * 2 * M_PI * y / (37 + 37 * tan(phi) * y);
     int K = (int) ceil(asinh(CTR_RMAX / hypot(a, b)) / h), nd = CTR_SUB * K + 1;
     cdouble *tt = malloc(nd * sizeof(cdouble)), *P = malloc(nd * sizeof(cdouble)), *s1e = malloc(nd * sizeof(cdouble)), *s2e = malloc(nd * sizeof(cdouble)), *M0 = malloc(nd * sizeof(cdouble));
     for (int j = 0; j < nd; j++) { double u = j * h / CTR_SUB; tt[j] = CPX(tau + a * (cosh(u) - 1), b * sinh(u)); }
     dfl_tparts(model, c, nd, tt, false, P, s1e, s2e, M0);            /* (engine labels: s1e the root with Re < 0 at tau) */
     ctr_path_t *C = malloc(sizeof *C);
-    C->model = model; C->variant = variant; C->c = c; C->h = h; C->K1 = K + 1;
+    C->model = model; C->variant = variant; C->c = c; C->hfac = hfac; C->h = h; C->K1 = K + 1;
     C->T = malloc((K + 1) * sizeof(ctr_t)); C->dt = malloc((K + 1) * sizeof(cdouble));
     double ek = (model == 2 ? c * c : pow(c, 4)) * exp(c);
     for (int k = 0; k <= K; k++) {
@@ -1478,14 +1479,14 @@ static ctr_path_t *ctr_path_new(int model, double c, int variant)
     return C;
 }
 static void ctr_path_free(ctr_path_t *C) { if (C) { free(C->T); free(C->dt); free(C); } }
-static ctr_path_t *ctr_path(int model, double c, int variant, bool *owned)
+static ctr_path_t *ctr_path(int model, double c, int variant, double hfac, bool *owned)
 {
     *owned = false;
-#define CTR_HIT(k) (CTRPATH[k]->model == model && CTRPATH[k]->c == c && CTRPATH[k]->variant == variant)
+#define CTR_HIT(k) (CTRPATH[k]->model == model && CTRPATH[k]->c == c && CTRPATH[k]->variant == variant && CTRPATH[k]->hfac == hfac)
     dfl_lock(&ctrlock);
     for (int k = 0; k < nctrpath; k++) if (CTR_HIT(k)) { ctr_path_t *r = CTRPATH[k]; dfl_unlock(&ctrlock); return r; }
     dfl_unlock(&ctrlock);
-    ctr_path_t *C = ctr_path_new(model, c, variant);
+    ctr_path_t *C = ctr_path_new(model, c, variant, hfac);
     dfl_lock(&ctrlock);
     for (int k = 0; k < nctrpath; k++) if (CTR_HIT(k)) { ctr_path_t *r = CTRPATH[k]; dfl_unlock(&ctrlock); ctr_path_free(C); return r; }
 #undef CTR_HIT
@@ -1495,9 +1496,9 @@ static ctr_path_t *ctr_path(int model, double c, int variant, bool *owned)
 }
 /* one evaluation (variant 1: A, 2: B; ctr_eval of DFExact.jl): the path, the pieces, the per-node layouts and values G
  * (outer node k, level l at G[k CTR_NL + l]), the largest terms gm at the first level, the nodes done, the levels and
- * their rules; the outer nodes in chunks of CTR_CHUNK on the workers */
+ * their rules (n1: the nodes of the first level), the outer nodes in chunks of CTR_CHUNK on the workers */
 typedef struct {
-    int kind, variant, lev, k1, done; bool owned; double x, c, c0, g0, pen; ctr_path_t *C; ctr_pcs plus, minus;
+    int kind, variant, lev, k1, done, n1; bool owned; double x, c, c0, g0, pen; ctr_path_t *C; ctr_pcs plus, minus;
     double *G, *gm; ctr_lay *lay; const int *levels; const double *z[CTR_NL], *w[CTR_NL];
 } ctr_eval_t;
 static cdouble ctr_wt(const ctr_eval_t *o, int k) { return o->kind == 1 ? o->C->dt[k] : cdiv(o->C->dt[k], o->C->T[k].t); }
@@ -1507,7 +1508,7 @@ static void ctr_body_first(int j, void *v)
     ctr_active(&o->plus, creal(d->t), &L->pl); ctr_active(&o->minus, creal(d->t), &L->mi);
     ctr_layout(o->kind, d, o->x, o->c0, o->c, o->g0, &L->pl, &L->mi, o->pen, L);
     cdouble wt = ctr_wt(o, k), Iv; double mx;
-    ctr_inner_n(o->kind, d, o->x, o->c0, o->c, o->g0, &L->pl, &L->mi, o->levels[0], o->z[0], o->w[0], L, &Iv, &mx);
+    ctr_inner_n(o->kind, d, o->x, o->c0, o->c, o->g0, &L->pl, &L->mi, o->n1, o->z[0], o->w[0], L, &Iv, &mx);
     o->G[k * CTR_NL] = cimag(cmul(Iv, wt)); o->gm[k] = mx * cabs(wt);
 }
 static void ctr_body_level(int k, void *v)
@@ -1517,17 +1518,19 @@ static void ctr_body_level(int k, void *v)
     ctr_inner_n(o->kind, d, o->x, o->c0, o->c, o->g0, &o->lay[k].pl, &o->lay[k].mi, o->levels[l], o->z[l], o->w[l], &o->lay[k], &Iv, &mx);
     o->G[k * CTR_NL + l] = cimag(cmul(Iv, ctr_wt(o, k)));
 }
-/* the evaluation at its first level, until a chunk whose terms all stay below 1e-18 */
-static void ctr_eval(ctr_eval_t *o, int kind, double x, int model, double c, double c0, double g0, int variant)
+/* the evaluation at its first level (n1 > 0 nodes per panel and ray in place of those of the variant; hfac the factor of
+ * the outer step), until a chunk whose terms all stay below 1e-18 */
+static void ctr_eval(ctr_eval_t *o, int kind, double x, int model, double c, double c0, double g0, int variant, int n1, double hfac)
 {
     memset(o, 0, sizeof *o);
     o->kind = kind; o->variant = variant; o->x = x; o->c = c; o->c0 = c0; o->g0 = g0;
-    o->C = ctr_path(model, c, variant, &o->owned);
+    o->C = ctr_path(model, c, variant, hfac, &o->owned);
     ctr_pieces(x, c0, &o->plus, &o->minus);
     o->pen = variant == 2 ? CTR_PEN_B : CTR_PEN; o->levels = variant == 2 ? CTR_LEVELS_B : CTR_LEVELS;
+    o->n1 = n1 > 0 ? n1 : o->levels[0];
     int K1 = o->C->K1;
     o->G = calloc((size_t) K1 * CTR_NL, sizeof(double)); o->gm = calloc(K1, sizeof(double)); o->lay = malloc(K1 * sizeof(ctr_lay));
-    for (int l = 0; l < CTR_NL; l++) o->z[l] = dfl_rule(o->levels[l], &o->w[l]);
+    for (int l = 0; l < CTR_NL; l++) o->z[l] = dfl_rule(l == 0 ? o->n1 : o->levels[l], &o->w[l]);
     int done = 0;
     while (done < K1) {
         int k1 = done, k2 = done + CTR_CHUNK < K1 ? done + CTR_CHUNK : K1;
@@ -1557,11 +1560,11 @@ static void ctr_eval_free(ctr_eval_t *o) { free(o->G); free(o->gm); free(o->lay)
 /* the value: evaluations A and B, the error estimate |A - B| plus the cancellation, both refined while it exceeds
  * CTR_ERRTOL, the value A at the last level (ctr_value of DFExact.jl); level 1-based (1..CTR_NL), nodes the outer nodes
  * of A and B together */
-static double ctr_value(int kind, double x, int model, double c, double c0, double g0, int verified, double *err, int *status, int *nodes, int *level)
+static double ctr_value(int kind, double x, int model, double c, double c0, double g0, int verified, int n1, double hfac, double *err, int *status, int *nodes, int *level)
 {
     ctr_eval_t A, B;
-    ctr_eval(&A, kind, x, model, c, c0, g0, 1);
-    if (!verified) {                                  /* one evaluation: A at the first level, no estimate */
+    ctr_eval(&A, kind, x, model, c, c0, g0, 1, verified ? 0 : n1, verified ? 1.0 : hfac);
+    if (!verified) {                                  /* one evaluation: A at the first level (by the rule), no estimate */
         double v = ctr_sum(&A, 0);
         if (err) *err = NAN;
         if (status) *status = isfinite(v) ? 0 : 2;
@@ -1570,7 +1573,7 @@ static double ctr_value(int kind, double x, int model, double c, double c0, doub
         ctr_eval_free(&A);
         return v;
     }
-    ctr_eval(&B, kind, x, model, c, c0, g0, 2);
+    ctr_eval(&B, kind, x, model, c, c0, g0, 2, 0, 1.0);
     double canc = 10 * 2.220446049250313e-16 * (ctr_gmsum(&A) + ctr_gmsum(&B));
     int l = 0; double e = fabs(ctr_sum(&A, 0) - ctr_sum(&B, 0)) + canc;
     while (e > CTR_ERRTOL && l < CTR_NL - 1) {
@@ -1586,9 +1589,36 @@ static double ctr_value(int kind, double x, int model, double c, double c0, doub
     return v;
 }
 
-int dfl_contour_lev(int kind, int n, const double *x, int model, double c, double c0, double g0, int verified, double *out, double *err, int *status, int *nodes, int *level, char *errmsg, size_t errlen)
+/* The rule of one evaluation of the contour integral (verified = 0; ctr_rule of DFExact.jl): n Gauss-Legendre nodes per
+ * panel and per ray of the U-shapes and the factor hfac of the outer step, by regions of c, c0 and c g0 measured in November
+ * 2026 against the checked computation on a dense grid of x (cases DU, DT, g0 from 0.5 to 3, c from 2 to -60, c0 in {0, 2,
+ * -2, -5, c}; the README, "The rules of one evaluation").  Before, n = 64 and hfac = 1 everywhere (DFL_CTR_PRESENT).  The
+ * outer step 1.5 times as long holds for |c g0| <= 20 and c <= 1 (above the unit root it lost 1.5e-2 in case DU at c = 2,
+ * g0 = 1.5; at c g0 = -40.5 in case DT 3.9e-8, at -90 2.4e-2); 32 nodes hold near the unit root (with c0 > 0 down to
+ * c = -2.5: in case DU at c = -5, g0 = 1.5, c0 = 2 they lost 2.1e-9 in F) and down to c = -10 (from c = -13.5 on they lost
+ * up to 3e-4 of the peak of the density).  (Case DK, whose automatic method is the line integral, keeps the rule of before
+ * in the Julia engine; here the contour integral has cases DU, DT only.) */
+#define CTR_RULE_CG0 20.0
+void dfl_ctr_rule(double c, double c0, double g0, int *n, double *hfac)
+{
+    if (c > 1) { *n = 32; *hfac = 1.0; return; }
+    if (fabs(c * g0) > CTR_RULE_CG0) { *n = CTR_LEVELS[0]; *hfac = 1.0; return; }
+    *n = (c >= -2.5 || (c >= -10 && c0 <= 0)) ? 32 : CTR_LEVELS[0];
+    *hfac = 1.5;
+}
+int dfl_contour_rule(int kind, int n, const double *x, int model, double c, double c0, double g0, int verified, int rule, int n1, double hfac,
+                     double *out, double *err, int *status, int *nodes, int *level, char *errmsg, size_t errlen)
 {
     if (kind != 1 && kind != 2) { snprintf(errmsg, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
+    if (rule != DFL_CTR_AUTO && rule != DFL_CTR_PRESENT) { snprintf(errmsg, errlen, "rule must be %d (auto) or %d (present) (the rule of one evaluation of the contour integral, dfl_ctr_rule)", DFL_CTR_AUTO, DFL_CTR_PRESENT); return 1; }
+    if (n1 > DFL_RULEMAX || (!isnan(hfac) && !(hfac > 0 && isfinite(hfac)))) { snprintf(errmsg, errlen, "the contour integral: n1 must be at most %d and hfac a positive finite factor (n1 <= 0, hfac NaN: by the rule)", DFL_RULEMAX); return 1; }
+    if (!verified) {                                  /* (the rule of one evaluation, dfl_ctr_rule) */
+        int nr = CTR_LEVELS[0]; double hr = 1.0;
+        if (rule == DFL_CTR_AUTO) dfl_ctr_rule(c, c0, g0, &nr, &hr);
+        if (n1 <= 0) n1 = nr;
+        if (isnan(hfac)) hfac = hr;
+    }
+    if (isnan(hfac)) hfac = 1.0;
     /* the checks of dfl_check_args but the region of a fixed start (dfl_fixed_ok), which the user-level functions check
      * (dfl_dist, dfl_icdf): like tr_contour of DFExact.jl and dfl_double, the engine function computes outside it too */
     if (!isfinite(g0)) { snprintf(errmsg, errlen, "g0 must be a finite real scalar"); return 1; }
@@ -1601,9 +1631,13 @@ int dfl_contour_lev(int kind, int n, const double *x, int model, double c, doubl
             if (err) err[k] = 0; if (status) status[k] = 0; if (nodes) nodes[k] = 0; if (level) level[k] = 0;
             continue;
         }
-        out[k] = ctr_value(kind, x[k], model, c, c0, g0, verified, err ? &err[k] : NULL, status ? &status[k] : NULL, nodes ? &nodes[k] : NULL, level ? &level[k] : NULL);
+        out[k] = ctr_value(kind, x[k], model, c, c0, g0, verified, n1, hfac, err ? &err[k] : NULL, status ? &status[k] : NULL, nodes ? &nodes[k] : NULL, level ? &level[k] : NULL);
     }
     return 0;
+}
+int dfl_contour_lev(int kind, int n, const double *x, int model, double c, double c0, double g0, int verified, double *out, double *err, int *status, int *nodes, int *level, char *errmsg, size_t errlen)
+{
+    return dfl_contour_rule(kind, n, x, model, c, c0, g0, verified, DFL_CTR_AUTO, 0, NAN, out, err, status, nodes, level, errmsg, errlen);
 }
 int dfl_contour(int kind, int n, const double *x, int model, double c, double c0, double g0, int verified, double *out, double *err, int *status, int *nodes, char *errmsg, size_t errlen)
 {

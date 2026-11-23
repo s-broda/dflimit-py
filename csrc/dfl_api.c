@@ -398,8 +398,15 @@ const char *dfl_brittle(int kind, int model, double c, double c0, double g0, boo
     int m = method == 0 ? automethod_one(model, c, c0, g0, stat, -1.0) : method;
     const char *cas = model == 4 ? "DG" : (stat ? (model == 1 ? "SK" : model == 2 ? "SU" : "ST") : (model == 1 ? "DK" : model == 2 ? "DU" : "DT"));
     const char *hint = "; verified = true checks each value";
+    /* (the contour integral with c0 > 0 below c = -15: 6e-6 at c = -27, c0 = 2.3, (c g0)^2/2 = 146; in the density up to 2e-2
+     * at c = -60, g0 = 1.5, c0 = 5 in case DU; and with any c0 below c = -20 where |c g0| > 60: in case DU 3.9e-5 at c = -60,
+     * g0 = 1.5, c0 = -2, and 6.3e-6 at c = -100, g0 = 0.9; brittle_msg of DFExact.jl, November 2026) */
     if (m == 3 && c0 > 0 && c < -15) {
-        snprintf(msg, sizeof msg, "%s, fixed start, c0 > 0 far from the unit root (c < -15): the contour integral by one evaluation may be off by up to about 1e-5%s", cas, hint);
+        snprintf(msg, sizeof msg, "%s, fixed start, c0 > 0 far from the unit root (c < -15): the contour integral by one evaluation may be off by more than 1e-5%s", cas, hint);
+        return msg;
+    }
+    if (m == 3 && c < -20 && fabs(c * g0) > 60) {
+        snprintf(msg, sizeof msg, "%s, fixed start far from the unit root with |c g0| > 60: the contour integral by one evaluation may be off by more than 1e-5%s", cas, hint);
         return msg;
     }
     if (m == 3 && c > 1 && c0 < 0) {
@@ -448,7 +455,9 @@ int dfl_icdf(int n, const double *p, int model, double c, double c0, double g0, 
     double m[2], me[2], mu, sd;
     if (model == 4) { mu = -1.9 + 0.1 * fmin(c, 0.0); sd = 0.8; }   /* (no moments for the GLS-detrended case: a rough start, the search is safeguarded) */
     else {
-        if (dfl_moments(model, c, c0, g0, stat, 2, m, me, err, errlen)) return 1;
+        /* (the start: the moments from jets of Bao and Kan, dfl_mom_start, 0.2 to 1 ms; otherwise this engine's circles, 10 to
+         * 150 ms) */
+        if (!dfl_mom_start(2, model, stat, c, c0, g0, m) && dfl_moments(model, c, c0, g0, stat, 2, m, me, err, errlen)) return 1;
         mu = m[0]; sd = sqrt(fmax(m[1] - m[0] * m[0], 1e-6));
     }
     if (!(tol > 0)) tol = 1e-10;
