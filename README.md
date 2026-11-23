@@ -142,7 +142,12 @@ engine for the classical cases); the LM statistic above c = 10; the point-optima
 grid of their inversion does not resolve the transform (far above the unit root; the message names the grid size `N`
 that serves), the point-optimal statistic also at |q| beyond 0.15 N/asinh(umax) (1000 with the default grid); and a
 design whose roots run off on the vertical line, where the paths around them would need more than a million nodes (such
-as (1 + r, 1{r < 0.4}), which has no proper intercept). The law of V is 0 at b <= 0.
+as (1 + r, 1{r < 0.4}), which has no proper intercept); the classical cases far above the unit root at large |x| (x > 300,
+in case DK with `c0 > c` at x < -20, and where the line integral exceeds its bounds) above c = 14, where the conditional
+integral that computes them up to c = 14 (within 1.3e-8 of an independent computation in case DK, 5e-7 of the large-c law
+in cases DU, DT) is off by up to 7.7e-5 in case DK and gives 1e44 in case DT; and any value of a
+distribution function outside [0, 1] by more than 1e-8, which means a computation that failed. The law of V is 0 at
+b <= 0.
 
 Points of one call share the paths of the inversion, so pass a whole vector in one call. The engine caches up to 64
 prepared designs, paths and refined lines; `empty_caches()` frees them.

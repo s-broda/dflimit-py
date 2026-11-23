@@ -221,7 +221,7 @@ det_path *det_v_path_prep(det_prep *P, int start, double g0, double c, char *err
 #define DET_LM_CMAX 10.0
 /* a line refined for |x| <= max |xs| and the constants amax of the kernels (line_refined); the path itself (with a new
  * reference) where nothing is refined */
-det_path *det_line_refined(det_path *CP, int nx, const double *xs, int na, const double *amax, char *err, size_t errlen);
+det_path *det_line_refined(det_path *CP, int nx, const double *xs, int na, const double *amax, int nc0, const double *c0s, char *err, size_t errlen);
 det_path *det_variant_path(det_path *CP, int level, char *err, size_t errlen);
 det_path *det_v_path(const dfl_design *D, double cbar, int start, double g0, double c, double phi, double hfac, char *err, size_t errlen);
 double det_default_rmax(double c);

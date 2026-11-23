@@ -156,7 +156,9 @@ def test_brittle_warnings():
     assert _nwarn(lambda: ltratio_cdf(-2.0, "DU", -5)) == 0
     assert _nwarn(lambda: ltratio_cdf(-2.0, "DU", -5, g0=1.5)) == 0
     assert _nwarn(lambda: ltratio_cdf(-3.0, "DU", -5, c0=2, method="double", verified=True)) == 0
-    with pytest.warns(RuntimeWarning, match="contour integral by one evaluation fails"):
+    # (the failing contour integral gives 1.2e44 here: since the C engine of dflimit-matlab 9484fb7 the error of its final
+    # check, in place of the value and the warning of the brittle regime, which the wrapper gives after a successful call)
+    with pytest.raises(ValueError, match=r"outside \[0, 1\] by more than 1e-08"):
         ltratio_cdf(-8.4, "DU", 2, c0=5, g0=1.5, method="contour")
     # case DU with a fixed start, c0 > 3 at c > 1.5: the contour integral fails there, "auto" takes the conditional integral
     with warnings.catch_warnings():

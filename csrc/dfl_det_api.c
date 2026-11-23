@@ -105,7 +105,7 @@ typedef struct { int nx; const double *xs; double c0; int which, vpow; } tr_ctx;
 static int tr_eval(det_path *CP, const det_eval_opts *o, void *v, double *out, char *err, size_t errlen)
 {
     tr_ctx *t = v;
-    det_path *CPr = det_line_refined(CP, t->nx, t->xs, 1, &CP->Mo->a, err, errlen);
+    det_path *CPr = det_line_refined(CP, t->nx, t->xs, 1, &CP->Mo->a, 1, &t->c0, err, errlen);
     if (!CPr) return 1;
     double *F = malloc(t->nx * sizeof(double)), *f = malloc(t->nx * sizeof(double));
     int rc = det_contour_eval(CPr, t->nx, t->xs, t->c0, t->vpow, o, F, f, NULL, NULL, err, errlen);
@@ -171,6 +171,15 @@ static int line_values(int kind, const dfl_design *D, dfl_prov *pv, double c, in
     free(fb);
     return rc;
 }
+/* the final check of the general engine's distribution functions (dfl_cdf_range_check; cdf_range_check of DFDet.jl): the
+ * design by its regressors, c, c0 and the start */
+static int range_check(const char *fn, const dfl_design *D, double c, const dfl_det_opts *o, const char *xname, int m, const double *xs, const double *v, char *err, size_t errlen)
+{
+    char args[200];
+    snprintf(args, sizeof args, "the general engine, a design of %d regressors on %d pieces%s, c = %g, c0 = %g, %s start%s", D->K, D->np, D->first ? " (detrended first)" : "",
+             c, o->c0, o->start == 2 ? "stationary" : o->start == 1 ? "fixed" : "zero", isnan(o->gls) ? "" : ", GLS-detrended");
+    return dfl_cdf_range_check(fn, args, xname, m, xs, v, err, errlen);
+}
 int dfl_det_dist(int kind, const dfl_design *D, int n, const double *x, double c, const dfl_det_opts *o0, double *out, char *err, size_t errlen)
 {
     dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
@@ -187,6 +196,7 @@ int dfl_det_dist(int kind, const dfl_design *D, int n, const double *x, double c
         double *v = malloc(m * sizeof(double));
         rc = pv ? line_values(kind, D, pv, c, m, xf, o, v, err, errlen) : paths_values(kind, CP, m, xf, o, o->verified, v, err, errlen);
         if (!rc) for (int j = 0; j < m; j++) out[ix[j]] = v[j];
+        if (!rc && kind == 2) rc = range_check("dist_cdf", D, c, o, "x", m, xf, v, err, errlen);
         free(v);
     }
     free(xf); free(ix); det_path_release(CP); det_line_release(pv);
@@ -218,7 +228,7 @@ static int q_ff(double x, void *v, double *F, double *f, char *err, size_t errle
 {
     q_ctx *q = v;
     double xx = q->vpow == 3 ? 0.0 : x, c0 = q->vpow == 3 ? q->c0 + x : q->c0;
-    det_path *CPr = q->refine ? det_line_refined(q->CP, 1, &xx, 1, &q->CP->Mo->a, err, errlen) : q->CP;
+    det_path *CPr = q->refine ? det_line_refined(q->CP, 1, &xx, 1, &q->CP->Mo->a, 1, &c0, err, errlen) : q->CP;
     if (!CPr) return 1;
     int rc = det_contour_eval(CPr, 1, &xx, c0, q->vpow, NULL, F, f, NULL, NULL, err, errlen);
     if (q->refine) det_path_release(CPr);
@@ -323,6 +333,7 @@ int dfl_det_coef(int kind, const dfl_design *D, int n, const double *y, double c
         coef_ctx t = {m, yf, o->c0, kind == 2 ? 1 : 2, kind == 2 ? 2 : 3};
         rc = run_eval(CP, coef_eval, &t, m, o->verified, o->vtol, v, err, errlen);
         if (!rc) for (int j = 0; j < m; j++) out[ix[j]] = v[j];
+        if (!rc && kind == 2) rc = range_check("coef_cdf", D, c, o, "y", m, yf, v, err, errlen);
         free(v);
     }
     free(yf); free(ix); det_path_release(CP);
@@ -585,11 +596,15 @@ static int spec_eval_one(det_path *CP, const det_eval_opts *o, void *v, double *
 {
     spec_ctx *s = v;
     int ntot = 0; for (int i = 0; i < s->ne; i++) ntot += s->nt[i];
-    double *qm = malloc((s->ne + 1) * sizeof(double)), *am = malloc((ntot + 1) * sizeof(double));
-    int it = 0;
-    for (int i = 0; i < s->ne; i++) { double q = 0; for (int l = 0; l < s->nt[i]; l++, it++) { q = dmax(q, fabs(s->sp[it].q)); am[it] = fabs(s->sp[it].A); } qm[i] = q; }
-    det_path *CPr = det_line_refined(CP, s->ne, qm, ntot, am, err, errlen);
-    free(qm); free(am);
+    double *qm = malloc((s->ne + 1) * sizeof(double)), *am = malloc((ntot + 1) * sizeof(double)), *cz = malloc((ntot + 1) * sizeof(double));
+    int it = 0, ncz = 0;
+    for (int i = 0; i < s->ne; i++) {
+        double q = 0;
+        for (int l = 0; l < s->nt[i]; l++, it++) { q = dmax(q, fabs(s->sp[it].q)); am[it] = fabs(s->sp[it].A); if (s->sp[it].q != 0) cz[ncz++] = s->sp[it].c0; }
+        qm[i] = q;
+    }
+    det_path *CPr = det_line_refined(CP, s->ne, qm, ntot, am, ncz, cz, err, errlen);   /* (the parabolas with a slope: their c0) */
+    free(qm); free(am); free(cz);
     if (!CPr) return 1;
     double *F = malloc(s->ne * sizeof(double)), *f = malloc(s->ne * sizeof(double));
     int rc = det_contour_eval_specs(CPr, s->ne, s->nt, s->sp, o, F, f, NULL, NULL, err, errlen);
@@ -642,11 +657,11 @@ static int lq_ff(double b, void *v, double *F, double *f, char *err, size_t errl
         double vm = b < 0 ? -0.5 / b : INFINITY;
         det_xspec s1 = {0, b, A, vm, 1, 0, 1, 0, 0}, s2 = {0, -b, A - 1, vm, -1, 0, -1, 0, 0};
         sp[0] = s1; sp[1] = s2; nt = 2;
-        CPr = det_line_refined(CP, 1, &b, 1, &A, err, errlen);
+        CPr = det_line_refined(CP, 1, &b, 1, &A, 0, NULL, err, errlen);
     } else {
         det_xspec s = {q->a, 0, A + b, INFINITY, 1, 0, 0, 1, 1}; sp[0] = s; nt = 1;
         double am = fabs(A + b);
-        CPr = det_line_refined(CP, 0, NULL, 1, &am, err, errlen);
+        CPr = det_line_refined(CP, 0, NULL, 1, &am, 0, NULL, err, errlen);
     }
     if (!CPr) return 1;
     int rc = det_contour_eval_specs(CPr, 1, &nt, sp, NULL, F, f, NULL, NULL, err, errlen);

@@ -77,7 +77,7 @@ static void path_ref(det_path *CP) { dfl_lock(&CLOCK_); CP->refs++; dfl_unlock(&
 
 typedef struct { unsigned long long key; int start; double g0, c, phi, hfac; det_path *CP; } path_entry;
 static path_entry PATHC[DET_CACHE_MAX]; static int NPATHC = 0;
-typedef struct { unsigned long long pkey; double xb; int nab; double ab[8]; det_path *CP; } line_entry;
+typedef struct { unsigned long long pkey; double xb; int nab; double ab[8]; int nc0; double c0[8]; det_path *CP; } line_entry;
 static line_entry LINEC[DET_CACHE_MAX]; static int NLINEC = 0;
 
 void dfl_det_empty_caches(void)
@@ -554,8 +554,8 @@ static unsigned long long path_pkey(const det_path *CP)
     return h;
 }
 /* line_refine: the panels of the line cut to the oscillation of the outer integrand at |x| <= xmax (amax: the constants of
- * the kernels, the first the shift a of the model) */
-static det_path *line_refine(det_path *CP, double xmax, int na, const double *amax, char *err, size_t errlen)
+ * the kernels, the first the shift a of the model; c0s: the local null values c0 != 0 of the kernels with a slope x) */
+static det_path *line_refine(det_path *CP, double xmax, int na, const double *amax, int nc0, const double *c0s, char *err, size_t errlen)
 {
     double amx = -INFINITY; for (int i = 0; i < na; i++) amx = dmax(amx, amax[i]);
     if (!(isnan(CP->h) && (xmax > 0 || amx > CP->Mo->a)) || !CP->line || CP->refined) { path_ref(CP); return CP; }
@@ -577,6 +577,32 @@ static det_path *line_refine(det_path *CP, double xmax, int na, const double *am
                 double xu = de > 0 ? dmin(xmax, sqrt(nu / de)) : xmax;
                 Om = dmax(Om, kap * kap * xu * xu / 4 + kap * am);
             }
+            /* a local null value c0 != 0: X(v) = c0 v^2 + x v + a, the exponent -alpha v^2 - s_k x v - s_k a with
+             * alpha = t + c0 s_k has the stationary value phi_s = (s_k x)^2/(4 alpha) - s_k a, which changes with w at the
+             * rate Re dphi_s/dt (s_k' = Im s_k/w the drift of the root along the line, as above).  For c0 near c in case DK,
+             * alpha ~ t (1 - c0/c) and the rate is that of c0 = 0 times 1/|1 - c0/c| (at c = 10, c0 = 9 the panels cut to
+             * the rate of c0 = 0 left the distribution function off by 1.1e-3 at x = 1000 and 3.8e-3 at x = 3000).  The
+             * largest |x| <= xmax at which the term is not negligible from log|M_V| + Re phi_s; the cut is to the larger of
+             * this rate and that of c0 = 0 (line_refine of DFDet.jl).  Only c0 > 0: with c0 < 0, alpha ~ t (1 + |c0|/c) and
+             * the rate is below that of c0 = 0, which the cut above covers (for c0 < 0 the stationary values at the roots of a
+             * fixed start gave rates far above the oscillation: 1e6 nodes in case DU at c = 10, g0 = 1, c0 = -2, x = 132) */
+            for (int ic = 0; ic < nc0; ic++) {
+                double c0 = c0s[ic];
+                if (!(c0 > 0) || !(xmax > 0)) continue;
+                for (int i = 0; i < r; i++) for (int l = 0; l < na; l++) {
+                    cdouble rr = Rj[i]; double am = amax[l], rp = cimag(rr) / wj;
+                    cdouble al = cadd(CP->t[j], cscale(c0, rr));
+                    double L0 = 40 + lmv - creal(rr) * am;
+                    if (!(L0 > 0)) continue;
+                    cdouble r2 = cmul(rr, rr);
+                    double Q = creal(cdiv(r2, cscale(4, al)));
+                    double xu = Q < 0 ? dmin(xmax, sqrt(L0 / -Q)) : xmax;
+                    /* xu^2 (2 r r' alpha - r^2 (1 + c0 r'))/(4 alpha^2) */
+                    cdouble num = csub(cscale(2 * rp, cmul(rr, al)), cscale(1 + c0 * rp, r2));
+                    cdouble d = cdiv(num, cscale(4, cmul(al, al)));
+                    Om = dmax(Om, fabs(xu * xu * creal(d)) + fabs(rp) * am);
+                }
+            }
         }
         int m = imax(1, (int) ceil(dmin((b - a) * Om / 30, 1e6)));
         if (m > 1) changed = 1;
@@ -591,7 +617,7 @@ static det_path *line_refine(det_path *CP, double xmax, int na, const double *am
     return CPr;
 }
 static int cmp_dbl(const void *a, const void *b) { double x = *(const double *) a, y = *(const double *) b; return (x > y) - (x < y); }
-det_path *det_line_refined(det_path *CP, int nx, const double *xs, int na, const double *amax, char *err, size_t errlen)
+det_path *det_line_refined(det_path *CP, int nx, const double *xs, int na, const double *amax, int nc0, const double *c0s, char *err, size_t errlen)
 {
     if (!isnan(CP->h)) { path_ref(CP); return CP; }
     double xm = 0; int any = 0;
@@ -605,19 +631,28 @@ det_path *det_line_refined(det_path *CP, int nx, const double *xs, int na, const
     }
     qsort(ab, nab, sizeof(double), cmp_dbl);
     if (!(xb > 0 || nab > 0)) { path_ref(CP); return CP; }
+    /* the local null values c0 > 0 (at most 8, sorted; they matter only with a slope, xb > 0) */
+    double cz[8]; int ncz = 0;
+    for (int i = 0; xb > 0 && i < nc0; i++) if (c0s[i] > 0 && isfinite(c0s[i])) {
+        int dup = 0;
+        for (int l = 0; l < ncz; l++) if (cz[l] == c0s[i]) dup = 1;
+        if (!dup && ncz < 8) cz[ncz++] = c0s[i];
+    }
+    qsort(cz, ncz, sizeof(double), cmp_dbl);
     unsigned long long pk = path_pkey(CP);
     dfl_lock(&CLOCK_);
     for (int i = 0; i < NLINEC; i++) {
         line_entry *e = &LINEC[i];
-        if (e->pkey == pk && e->xb == xb && e->nab == nab && !memcmp(e->ab, ab, nab * sizeof(double))) { e->CP->refs++; det_path *r = e->CP; dfl_unlock(&CLOCK_); return r; }
+        if (e->pkey == pk && e->xb == xb && e->nab == nab && !memcmp(e->ab, ab, nab * sizeof(double)) &&
+            e->nc0 == ncz && !memcmp(e->c0, cz, ncz * sizeof(double))) { e->CP->refs++; det_path *r = e->CP; dfl_unlock(&CLOCK_); return r; }
     }
     dfl_unlock(&CLOCK_);
     double am[9]; am[0] = CP->Mo->a; for (int l = 0; l < nab; l++) am[l + 1] = ab[l];
-    det_path *CPr = line_refine(CP, xb, nab + 1, am, err, errlen);
+    det_path *CPr = line_refine(CP, xb, nab + 1, am, ncz, cz, err, errlen);
     if (!CPr) return NULL;
     dfl_lock(&CLOCK_);
     if (NLINEC == DET_CACHE_MAX) { if (--LINEC[0].CP->refs == 0) path_free_locked(LINEC[0].CP); memmove(LINEC, LINEC + 1, (NLINEC - 1) * sizeof(line_entry)); NLINEC--; }
-    line_entry e; e.pkey = pk; e.xb = xb; e.nab = nab; memcpy(e.ab, ab, sizeof ab); e.CP = CPr;
+    line_entry e; e.pkey = pk; e.xb = xb; e.nab = nab; memcpy(e.ab, ab, sizeof ab); e.nc0 = ncz; memcpy(e.c0, cz, sizeof cz); e.CP = CPr;
     LINEC[NLINEC++] = e; CPr->refs++;
     dfl_unlock(&CLOCK_);
     return CPr;
