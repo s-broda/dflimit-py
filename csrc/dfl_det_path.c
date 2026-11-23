@@ -583,10 +583,12 @@ static det_path *line_refine(det_path *CP, double xmax, int na, const double *am
              * alpha ~ t (1 - c0/c) and the rate is that of c0 = 0 times 1/|1 - c0/c| (at c = 10, c0 = 9 the panels cut to
              * the rate of c0 = 0 left the distribution function off by 1.1e-3 at x = 1000 and 3.8e-3 at x = 3000).  The
              * largest |x| <= xmax at which the term is not negligible from log|M_V| + Re phi_s; the cut is to the larger of
-             * this rate and that of c0 = 0 (line_refine of DFDet.jl) */
+             * this rate and that of c0 = 0 (line_refine of DFDet.jl).  Only c0 > 0: with c0 < 0, alpha ~ t (1 + |c0|/c) and
+             * the rate is below that of c0 = 0, which the cut above covers (for c0 < 0 the stationary values at the roots of a
+             * fixed start gave rates far above the oscillation: 1e6 nodes in case DU at c = 10, g0 = 1, c0 = -2, x = 132) */
             for (int ic = 0; ic < nc0; ic++) {
                 double c0 = c0s[ic];
-                if (c0 == 0 || !(xmax > 0)) continue;
+                if (!(c0 > 0) || !(xmax > 0)) continue;
                 for (int i = 0; i < r; i++) for (int l = 0; l < na; l++) {
                     cdouble rr = Rj[i]; double am = amax[l], rp = cimag(rr) / wj;
                     cdouble al = cadd(CP->t[j], cscale(c0, rr));
@@ -629,9 +631,9 @@ det_path *det_line_refined(det_path *CP, int nx, const double *xs, int na, const
     }
     qsort(ab, nab, sizeof(double), cmp_dbl);
     if (!(xb > 0 || nab > 0)) { path_ref(CP); return CP; }
-    /* the local null values c0 != 0 (at most 8, sorted; they matter only with a slope, xb > 0) */
+    /* the local null values c0 > 0 (at most 8, sorted; they matter only with a slope, xb > 0) */
     double cz[8]; int ncz = 0;
-    for (int i = 0; xb > 0 && i < nc0; i++) if (c0s[i] != 0 && isfinite(c0s[i])) {
+    for (int i = 0; xb > 0 && i < nc0; i++) if (c0s[i] > 0 && isfinite(c0s[i])) {
         int dup = 0;
         for (int l = 0; l < ncz; l++) if (cz[l] == c0s[i]) dup = 1;
         if (!dup && ncz < 8) cz[ncz++] = c0s[i];

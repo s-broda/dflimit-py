@@ -2,7 +2,7 @@
 
 ## 0.5.0
 
-- The C engine of dflimit-matlab 45159c9: the upper tail above the unit root. Above the unit root the t-ratio with
+- The C engine of dflimit-matlab a3c8e33: the upper tail above the unit root. Above the unit root the t-ratio with
   `c0 != c` has its upper tail at x of the order (c - c0) e^c/(2c), and the default route returned values of the
   distribution function outside [0, 1] there without a warning (case DK at c = 10, c0 = 2: 0.8415 for 0.7436 at
   x = 1e4, -1.3674 for 0.9993 at x = 3e4; at c = 10, c0 = 9: 1.0479 for 0.9936 at x = 3e3; also with `verified=True`
