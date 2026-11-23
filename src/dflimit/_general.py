@@ -59,11 +59,29 @@ def _design(D):
     return D._tuple()
 
 
-def _opts(c0=0.0, start=None, gamma0=0.0, gls=None, verified=False, method=None):
+def _opts(c0=0.0, start=None, gamma0=0.0, gls=None, verified=False, method=None, rule=None):
     g0 = dfl_num(gamma0, "gamma0")
     s = start_code(start, g0, "gamma0")
     o = (dfl_num(c0, "c0"), s, g0 if s == 1 else 0.0, gls_value(gls), dfl_flag(verified, "verified"))
-    return o if method is None else o + (_gmethod(method),)
+    if method is None and rule is None:
+        return o
+    o = o + (0 if method is None else _gmethod(method),)
+    return o if rule is None else o + (_grule(rule),)
+
+
+_GRULES = {"auto": 0, "present": 1, "thin": 2, "inner": 3, "outer": 4, "fine": 5, "finestep": 6}
+_GRULE_MSG = ('rule must be "auto", "present", "thin", "inner", "outer", "fine" or "finestep" (the rules of one evaluation '
+              'of the inversion on paths)')
+
+
+def _grule(rule):
+    """The rule of one evaluation of the general engine's inversion on paths (DFL_RULE_* of the C engine)."""
+    if not isinstance(rule, str):
+        raise TypeError(_GRULE_MSG)
+    try:
+        return _GRULES[rule.lower()]
+    except KeyError:
+        raise ValueError(_GRULE_MSG) from None
 
 
 _GMETHODS = {"auto": 0, "line": 1, "paths": 2}
@@ -92,6 +110,18 @@ METHOD_DOC = """method : {"auto", "line", "paths"}, default "auto"
         ``c >= -20``, where it is 2.2 to 3.5 times faster than the paths per value and 1.8 to 2.7 times per quantile,
         and the paths otherwise; ``"line"`` raises ``ValueError`` with the reason where it does not cover the design,
         the start or the options (GLS detrending, a fixed start, a jump)."""
+
+RULE_DOC = """rule : {"auto", "present", "thin", "inner", "outer", "fine", "finestep"}, default "auto"
+        The rule of one evaluation of the inversion on paths. ``"auto"`` takes by regions the outer hyperbola with 1.5
+        times the step and the paths around the roots with 16 nodes per panel and 32 on the tails of their rays (24 and
+        40 before November 2026; 32 and 48 for 48 and 64 with a fixed start), about half the time, where that holds, and
+        near the unit root with ``c0 < 0`` the rule of before or a finer one (the rules and regions of DFLimit.jl,
+        within 7.6e-10 of the rule of before in the distribution function and 4e-9 of the peak in the density on a
+        dense grid); ``"present"`` is the rule before November 2026 (also taken by ``verified = True``), ``"thin"``,
+        ``"inner"`` (the thin nodes on the present step), ``"outer"`` (the present nodes on the longer step),
+        ``"fine"`` (the thin nodes on half the present step) and ``"finestep"`` (a fixed start without deterministic
+        terms: the present nodes on min(1/2, 2.5/(gamma0 |c0|)) times the present step where the outer hyperbola is
+        flatter than 70 degrees) name a rule. The line integral (see `method`) is not affected."""
 
 
 _NOOPTS = (0.0, 0, 0.0, math.nan, 0)
@@ -126,8 +156,8 @@ def _quantiles(op, D, p, c, opts, *par):
     return dfl_shape(_call(op, D, a.ravel(), c, opts, *par).copy(), a)
 
 
-@fill_doc(opts=OPTS_DOC, verified=VERIFIED_DOC, notes=NOTES_DOC, method=METHOD_DOC)
-def dist_cdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False, method="auto"):
+@fill_doc(opts=OPTS_DOC, verified=VERIFIED_DOC, notes=NOTES_DOC, method=METHOD_DOC, rule=RULE_DOC)
+def dist_cdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False, method="auto", rule="auto"):
     """Distribution function of the limit of the Dickey-Fuller t-ratio for a design, by the general engine.
 
     The limit (U - c0 V)/sqrt(V) of the t-ratio of phi = phi0 = 1 + c0/n in the regression of y_t on d(t/n) and
@@ -142,6 +172,7 @@ def dist_cdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False,
     {opts}
     {verified}
     {method}
+    {rule}
 
     Returns
     -------
@@ -167,11 +198,11 @@ def dist_cdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False,
     >>> dist_cdf(perron("C", [0.3, 0.7]), [-5, -4, -3], -5)
     array([0.030755..., 0.292180..., 0.790536...])
     """
-    return _values(DET_CDF, D, x, c, _opts(c0, start, gamma0, gls, verified, method))
+    return _values(DET_CDF, D, x, c, _opts(c0, start, gamma0, gls, verified, method, rule))
 
 
-@fill_doc(opts=OPTS_DOC, verified=VERIFIED_DOC, notes=NOTES_DOC, method=METHOD_DOC)
-def dist_pdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False, method="auto"):
+@fill_doc(opts=OPTS_DOC, verified=VERIFIED_DOC, notes=NOTES_DOC, method=METHOD_DOC, rule=RULE_DOC)
+def dist_pdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False, method="auto", rule="auto"):
     """Density of the limit of the Dickey-Fuller t-ratio for a design, by the general engine.
 
     For a design whose numerator has rank one (no deterministic terms, GLS detrending) with ``c0 > 0`` the density is
@@ -187,6 +218,7 @@ def dist_pdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False,
     {opts}
     {verified}
     {method}
+    {rule}
 
     Returns
     -------
@@ -212,11 +244,11 @@ def dist_pdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False,
     >>> dist_pdf(trend(2), -3.8)               # the quadratic trend at the unit root
     0.142477...
     """
-    return _values(DET_PDF, D, x, c, _opts(c0, start, gamma0, gls, verified, method))
+    return _values(DET_PDF, D, x, c, _opts(c0, start, gamma0, gls, verified, method, rule))
 
 
-@fill_doc(opts=OPTS_DOC, notes=NOTES_DOC, method=METHOD_DOC)
-def dist_quantile(D, p, c=0, *, x0=-2, tol=1e-9, c0=0, start=None, gamma0=0, gls=None, method="auto"):
+@fill_doc(opts=OPTS_DOC, notes=NOTES_DOC, method=METHOD_DOC, rule=RULE_DOC)
+def dist_quantile(D, p, c=0, *, x0=-2, tol=1e-9, c0=0, start=None, gamma0=0, gls=None, method="auto", rule="auto"):
     """Quantiles of the limit of the Dickey-Fuller t-ratio for a design, by the general engine.
 
     Newton's method from ``x0`` on `dist_cdf` with `dist_pdf` from the same evaluation (the step limited to 1), the
@@ -255,7 +287,7 @@ def dist_quantile(D, p, c=0, *, x0=-2, tol=1e-9, c0=0, start=None, gamma0=0, gls
     >>> dist_quantile(perron("C", 0.3), [0.01, 0.05, 0.10])     # critical values of Perron's model C
     array([-4.625894..., -4.072544..., -3.782146...])
     """
-    return _quantiles(DET_Q, D, p, c, _opts(c0, start, gamma0, gls, method=method), dfl_num(x0, "x0"), dfl_num(tol, "tol"))
+    return _quantiles(DET_Q, D, p, c, _opts(c0, start, gamma0, gls, method=method, rule=rule), dfl_num(x0, "x0"), dfl_num(tol, "tol"))
 
 
 @fill_doc(opts=OPTS_DOC)

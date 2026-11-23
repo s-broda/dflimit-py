@@ -1071,6 +1071,7 @@ int dfl_adfmax(int kind, int n, const double *x, int model, double c, bool stat,
     if (model != 2 && model != 3) { snprintf(err, errlen, "the ADFmax statistic: model must be 2 (constant) or 3 (constant and trend)"); return 1; }
     if (dfl_check_args(model, c, 0, 0, stat, err, errlen)) return 1;
     dfl_double_opts d; if (o == NULL) { dfl_double_defaults(&d); o = &d; }
+    dfl_double_opts o96 = *o; if (o96.Nv <= 0) o96.Nv = 96; if (o96.Nl <= 0) o96.Nl = 96; o = &o96;   /* (no rule of one evaluation here) */
     int nf = 0; double *xf = malloc((n + 1) * sizeof(double)); int *id = malloc((n + 1) * sizeof(int));
     for (int k = 0; k < n; k++) {
         info[k].err = 0; info[k].status = 0; info[k].nbad = 0; info[k].nunres = 0; info[k].nrefine = 0;
@@ -1146,6 +1147,7 @@ int dfl_region(int type, const double *par, double v0, int nbrk, const double *b
     if (dfl_check_args(1, c, 0, 0, false, err, errlen)) return 1;
     if (type == 3 && !(par[0] > 0 && par[1] > 0)) { snprintf(err, errlen, "the weighted-average-power boundary needs k > 0 and omega > 0"); return 1; }
     dfl_double_opts d; if (o == NULL) { dfl_double_defaults(&d); o = &d; }
+    dfl_double_opts o96 = *o; if (o96.Nv <= 0) o96.Nv = 96; if (o96.Nl <= 0) o96.Nl = 96; o = &o96;   /* (no rule of one evaluation here) */
     bnd_t B = {type, par[0], par[1]};
     int M = o->M > 0 ? o->M : 32;
     double EB = EVdk(c), lo = fmin(log(o->bmin), log(EB) - o->blo), hi = log(EB) + o->bhi;
@@ -1188,11 +1190,40 @@ int dfl_region(int type, const double *par, double v0, int nbrk, const double *b
 
 void dfl_double_defaults(dfl_double_opts *o)
 {
-    o->M = 0; o->Nv = 96; o->Nl = 96; o->maxlev = 12; o->plen = 2.0; o->otol = 1e-12; o->stepw = 0.1; o->errtol = 1e-10; o->blo = 8.0; o->bhi = 6.0; o->bmin = 3e-3; o->mumin = 4.5; o->tdec = 41.5;
+    o->M = 0; o->Nv = 0; o->Nl = 0;                  /* (0: the rule of one evaluation, dfl_cond_rule; 96 with verified) */
+    o->maxlev = 12; o->plen = 2.0; o->otol = 1e-12; o->stepw = 0.1; o->errtol = 1e-10; o->blo = 8.0; o->bhi = 6.0; o->bmin = 3e-3; o->mumin = 4.5; o->tdec = 41.5;
     o->verified = 0;
 }
-int dfl_double(int kind, int n, const double *x, int model, double c, double c0, double g0, bool stat, const dfl_double_opts *o, double *out, dfl_double_info *info, char *err, size_t errlen)
+/* The rule of one evaluation of the conditional integral (verified = 0; cond_rule of DFExact.jl): the nodes Nv of the path of
+ * each inner inversion and Nl of the integral over l, by regions measured in November 2026 against the rule with 192 nodes and
+ * the outer tolerance 1e-14 on a dense grid of x (the README, "The rules of one evaluation").  Before, 96 nodes everywhere.
+ * (Warm calls with 48 nodes: 0.60 times the time with a stationary start, 0.81 to 0.87 with a zero start; medians.)  48
+ * nodes hold with a stationary start for c <= -2 and with a zero start in cases DU, DT for c >= -5 and in case DK for
+ * c <= -13.5; 64 with a stationary start for c > -2 (48 lost 7e-8 of the peak of the density in case SK at c = -0.5); 96
+ * elsewhere (with a zero start in cases DU, DT 48 nodes lost 1.8e-8 of the peak at c = -13.5 and up to 1e-3 far from the
+ * unit root), with a fixed start (measured at one configuration only: 48 nodes lost 7e-7 in case DU at c = 2, c0 = -2) and
+ * above c = 2.  The options Nv, Nl (> 0) override it. */
+#define COND_RULE_CMAX 2.0
+int dfl_cond_rule(int model, double c, double c0, double g0, bool stat)
 {
+    (void) c0;
+    int n = stat ? (c <= -2 ? 48 : 64) : g0 != 0 ? 96 : model == 1 ? (c <= -13.5 ? 48 : 96) : (c >= -5 ? 48 : 96);
+    if (c > COND_RULE_CMAX) n = 96;                  /* (beyond the range measured) */
+    return n;
+}
+/* the options with Nv, Nl resolved (0: the rule of one evaluation, or 96 with verified; rule 0: 96) */
+static dfl_double_opts nodes_of(const dfl_double_opts *o, int rule, int model, double c, double c0, double g0, bool stat)
+{
+    dfl_double_opts r = *o;
+    int n = (rule && !o->verified) ? dfl_cond_rule(model, c, c0, g0, stat) : 96;
+    if (r.Nv <= 0) r.Nv = n;
+    if (r.Nl <= 0) r.Nl = n;
+    return r;
+}
+int dfl_double(int kind, int n, const double *x, int model, double c, double c0, double g0, bool stat, const dfl_double_opts *o0, double *out, dfl_double_info *info, char *err, size_t errlen)
+{
+    dfl_double_opts d0; if (o0 == NULL) { dfl_double_defaults(&d0); o0 = &d0; }
+    dfl_double_opts oo = nodes_of(o0, 1, model, c, c0, g0, stat); const dfl_double_opts *o = &oo;
     if (model == 4) { snprintf(err, errlen, "the GLS-detrended case (model 4) has the single integral only"); return 1; }
     if (stat && g0 != 0) { snprintf(err, errlen, "a fixed start g0 applies to the zero-start cases only"); return 1; }
     if (stat && !(c <= DFL_CSTAT)) { snprintf(err, errlen, "%s", DFL_STAT_MSG); return 1; }

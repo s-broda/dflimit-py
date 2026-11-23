@@ -344,7 +344,14 @@ int det_line_select(const dfl_design *D, double c, const dfl_det_opts *o, dfl_pr
     if (method != DFL_DET_AUTO && method != DFL_DET_LINE) { snprintf(err, errlen, "method must be 0 (auto), 1 (the line integral with the explicit kernel) or 2 (the inversion on paths around the roots)"); return 1; }
     char why[512] = "";
     int refused = 0;
-    if (!isnan(o->phi) || o->hfac != 1) { snprintf(why, sizeof why, "the options%s%s belong to the inversion on paths", !isnan(o->phi) ? " phi" : "", o->hfac != 1 ? (!isnan(o->phi) ? ", hfac" : " hfac") : ""); refused = 1; }
+    /* (the options of the paths: n, ntail, phi, hfac other than 1; the rule of one evaluation is not one, as in Julia) */
+    int hf = !isnan(o->hfac) && o->hfac != 1;
+    if (o->n > 0 || o->ntail > 0 || !isnan(o->phi) || hf) {
+        const char *nm[4] = {"n", "ntail", "phi", "hfac"}; int on[4] = {o->n > 0, o->ntail > 0, !isnan(o->phi), hf}, k = snprintf(why, sizeof why, "the options"), first = 1;
+        for (int i = 0; i < 4; i++) if (on[i] && k < (int) sizeof why) { k += snprintf(why + k, sizeof why - k, "%s %s", first ? "" : ",", nm[i]); first = 0; }
+        if (k < (int) sizeof why) snprintf(why + k, sizeof why - k, " belong to the inversion on paths");
+        refused = 1;
+    }
     if (!refused && method == DFL_DET_AUTO && !det_line_auto(c, o->c0)) return 0;     /* (before the provider is built) */
     if (!refused) refused = line_refusal(D, c, o, why, sizeof why);
     if (!refused) {

@@ -122,7 +122,20 @@ int dfl_autoengine(int f, int model, int stat, double g0, double gls, double c, 
             return DFL_ENGINE_GENERAL;
         }
         if (!fixed && !stat && c0 != 0 && c < -100) return DFL_ENGINE_GENERAL;
-        if (fixed && DK && c <= 1 && ((c * g0) * (c * g0) / 2 <= 400 || (g0 <= 0.5 && c >= -100))) return DFL_ENGINE_GENERAL;
+        /* (the fixed start of case DK, except with c0 < 0 near the unit root (c > -1): there the outer hyperbola of the
+         * general engine does not resolve the upper tail, and its one evaluation was off by 2.7e-6 at the 99.99% point (c =
+         * 0.5, c0 = -5, g0 = 1), 6.7e-6 at c = 0 with g0 = 1.5 and 2.9e-2 beyond (c0 = -10, where at mean + 4 sd it gave 1.23
+         * and the final check of the distribution function refused); the classical line integral, its checked computation
+         * and the conditional integral agree to 1e-12 there; autoengine of merged.jl, November 2026) */
+        if (fixed && DK && c <= 1 && !(c0 < 0 && c > -1) && ((c * g0) * (c * g0) / 2 <= 400 || (g0 <= 0.5 && c >= -100))) return DFL_ENGINE_GENERAL;
+        /* (the fixed start of cases DU, DT far from the unit root: with c0 > 0 below c = -20 (and below c = -10 where |c g0| >
+         * 20), and with any c0 below c = -20 where |c g0| > 60, the classical contour integral's one evaluation was off, in
+         * the density by up to 5e-6 of its peak (case DU at c = -30, g0 = 0.5, c0 = 2), 4.2e-3 (c = -75, c0 = 5) and 2.2e-2
+         * (g0 = 1.5, c = -60, c0 = 5), in the distribution function by 3.9e-5 (case DU, g0 = 1.5, c = -60, c0 = -2) and
+         * 6.3e-6 (g0 = 0.9, c = -100), and its checked computation in the density by up to 8.4e-6 of the peak; the general
+         * engine's density there is the derivative of the distribution function on which the two engines agree (to 1e-10 of
+         * the peak), its F within 1e-10 of the classical checked one; autoengine of merged.jl, November 2026) */
+        if (fixed && (DU || DT) && c < -10 && ((c0 > 0 && (c < -20 || fabs(c * g0) > 20)) || (c < -20 && fabs(c * g0) > 60))) return DFL_ENGINE_GENERAL;
         /* (at c0 = 0 with a zero or stationary start the classical line integral, as in the Julia rule: with its fixed node
          * layouts (dfl_batch.c, November 2026) it is 1.1 to 1.7 times faster than the general engine at c = -30 to -100 in
          * cases DU, DT, SK, SU, ST and 8 to 11 times in case DK, equal at c = -300 in cases DU, DT (c/test/engine_table_c.txt);
@@ -259,11 +272,15 @@ static double erfinv_(double y)
     for (int it = 0; it < 3; it++) x -= (erf(x) - y) / (2 / sqrt(M_PI) * exp(-x * x));
     return x;
 }
-/* the general engine's quantiles, started at the normal approximation from the moments (gen_icdf) */
+/* the general engine's quantiles, started at the normal approximation from the moments (gen_icdf): from jets in the six
+ * classical cases (dfl_mom_start), otherwise from the engines' moments where they have them */
 static int gen_icdf(int n, const double *p, const spec_t *R, double c, double c0, double tol, int gm, double *q, char *err, size_t errlen)
 {
     double x0 = -2.0, sd = 1.0, m[2], me[2]; int have = 0;
-    if (R->model != 0 && R->model != 4 && classical_valid(R, c, c0, 0) && dfl_autoengine(DFL_F_MOM, R->model, R->stat, R->g0, R->gls, c, c0, 0.0) == DFL_ENGINE_CLASSICAL) {
+    int cv = R->model != 0 && R->model != 4 && classical_valid(R, c, c0, 0);
+    if (cv) have = dfl_mom_start(2, R->model, R->stat, c, c0, R->start == 1 ? R->g0 : 0.0, m);
+    if (have) {
+    } else if (cv && dfl_autoengine(DFL_F_MOM, R->model, R->stat, R->g0, R->gls, c, c0, 0.0) == DFL_ENGINE_CLASSICAL) {
         have = dfl_moments(R->model, c, c0, R->g0, R->stat, 2, m, me, err, errlen) == 0;
     } else if (!R->D->first) {
         dfl_det_opts o; det_opts_of(R, c0, 0, &o);
@@ -279,6 +296,24 @@ static int gen_icdf(int n, const double *p, const spec_t *R, double c, double c0
     det_warn_hold(0);
     return 0;
 }
+/* F and f at a point x of the Newton steps of the classical search in one evaluation (route_dist2 of merged.jl): where the
+ * rule gives the point to the general engine (method 0), its paths return both from one pass (dfl_det_dist_both), the
+ * values of dfl_engine_dist bit for bit; 0 elsewhere (the classical engine, the tails that go back to it, other methods),
+ * and the search takes the two evaluations; 1 with F, f; -1 with an error */
+int DFL_DIST2 = 1;
+static int route_dist2(double x, const spec_t *R, double c, double c0, int method, double *F, double *f, char *err, size_t errlen)
+{
+    if (!(DFL_DIST2 && method == 0 && isfinite(x))) return 0;
+    if (dfl_autoengine(DFL_F_DIST, R->model, R->stat, R->g0, R->gls, c, c0, x) != DFL_ENGINE_GENERAL) return 0;
+    dfl_det_opts o; det_opts_of(R, c0, 0, &o);
+    double Fv, fv;
+    if (dfl_det_dist_both(R->D, 1, &x, c, &o, &Fv, &fv, err, errlen)) return -1;
+    /* (the tails below 1e-3 where the classical engine would take its conditional integral go back to it, as in
+     * merged_dist, for F and f each: the search then takes the two evaluations) */
+    if ((Fv < 1e-3 || fv < 1e-3) && dfl_automethod(R->model, c, c0, R->g0, R->stat, x) == 2) return 0;
+    *F = Fv; *f = fv < 0 ? 0.0 : fv;
+    return 1;
+}
 /* the classical search with each evaluation routed (ltratio_icdf_ with engine = auto); the warnings of the evaluations
  * collected (the general engine's under the hold, the classical engine's in cw), the hold released on every return */
 static int routed_icdf(int n, const double *p, const spec_t *R, double c, double c0, int method, double tol, double *q, char *err, size_t errlen)
@@ -286,7 +321,11 @@ static int routed_icdf(int n, const double *p, const spec_t *R, double c, double
     double mu, sd, m[2], me[2];
     for (int k = 0; k < n; k++) if (!(p[k] > 0 && p[k] < 1)) { snprintf(err, errlen, "p must lie in (0, 1)"); return 1; }
     if (R->model == 4) { mu = -1.9 + 0.1 * dmin(c, 0.0); sd = 0.8; }
-    else { if (dfl_moments(R->model, c, c0, R->g0, R->stat, 2, m, me, err, errlen)) return 1; mu = m[0]; sd = sqrt(dmax(m[1] - m[0] * m[0], 1e-6)); }
+    else {
+        /* (the start: the moments from jets, dfl_mom_start, where they hold; otherwise the classical engine's circles) */
+        if (!dfl_mom_start(2, R->model, R->stat, c, c0, R->start == 1 ? R->g0 : 0.0, m) && dfl_moments(R->model, c, c0, R->g0, R->stat, 2, m, me, err, errlen)) return 1;
+        mu = m[0]; sd = sqrt(dmax(m[1] - m[0] * m[0], 1e-6));
+    }
     dfl_spec S = {NULL, R->model, R->start, R->g0, R->gls};
     cwarn_t cw = {""};
     int rc = 0;
@@ -300,7 +339,10 @@ static int routed_icdf(int n, const double *p, const spec_t *R, double c, double
         for (;;) { CDF(hi, F); if (!(F < pk)) break; hi += 2 * (hi - x); }
         int conv = 0;
         for (int it = 0; it < 60; it++) {
-            CDF(x, F); PDF(x, f);
+            /* (F and f from one evaluation where the rule gives the point to the general engine's paths, route_dist2) */
+            int r2 = route_dist2(x, R, c, c0, method, &F, &f, err, errlen);
+            if (r2 < 0) { rc = 1; goto done; }
+            if (r2 == 0) { CDF(x, F); PDF(x, f); }
             if (F > pk) hi = x; else lo = x;
             double xn = x - (F - pk) / f;
             if (!(lo <= xn && xn <= hi && isfinite(xn))) xn = (lo + hi) / 2;   /* (a step below half an ulp lands on the end of the bracket: converged) */

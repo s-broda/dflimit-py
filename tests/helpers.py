@@ -165,14 +165,16 @@ def det_value(r, D):
     G = D[r["id"]]
     fn, x, c, c0, par = r["fn"], r["x"], r["c"], r["c0"], r["par"]
     kw = dict(start=STARTS[r["st"]], gamma0=r["g0"] if r["st"] == 1 else 0.0, gls=None if math.isnan(r["cb"]) else r["cb"])
+    fn, _, ru = fn.partition("#")                     # ('cdf#thin': the rule of one evaluation of the paths)
+    ru = ru or "auto"
     fn, _, me = fn.partition("@")                     # ('cdf@line', 'pdf@paths', 'quant@auto': the method of the t-ratio)
     me = me or "auto"
     if fn == "cdf":
-        return d.dist_cdf(G, x, c, c0=c0, verified=r["ver"], method=me, **kw)
+        return d.dist_cdf(G, x, c, c0=c0, verified=r["ver"], method=me, rule=ru, **kw)
     if fn == "pdf":
-        return d.dist_pdf(G, x, c, c0=c0, verified=r["ver"], method=me, **kw)
+        return d.dist_pdf(G, x, c, c0=c0, verified=r["ver"], method=me, rule=ru, **kw)
     if fn == "quant":
-        return d.dist_quantile(G, x, c, x0=par, tol=1e-9, c0=c0, method=me, **kw)
+        return d.dist_quantile(G, x, c, x0=par, tol=1e-9, c0=c0, method=me, rule=ru, **kw)
     if fn == "coefcdf":
         return d.coef_cdf(x, G, c, c0=c0, g0=kw["gamma0"], start=kw["start"], gls=kw["gls"], engine="general",
                           verified=r["ver"])
@@ -243,9 +245,11 @@ def det_route(r, D):
     else:
         cas = D[r["a"]]
         kw = dict(g0=r["g0"], start=STARTS[r["st"]], gls=None if math.isnan(r["gl"]) else r["gl"])
+    fn, _, mc = fn.partition("@")                     # ('cdf@3': the method of the t-ratio, the codes of the C router)
+    me = ("auto", "line", "conditional", "contour", "paths")[int(mc)] if mc else "auto"
     if fn in ("cdf", "pdf"):
         f = d.ltratio_cdf if fn == "cdf" else d.ltratio_pdf
-        return f(x, cas, c, c0=c0, engine=eng, **kw)
+        return f(x, cas, c, c0=c0, method=me, engine=eng, **kw)
     if fn == "icdf":
         return d.ltratio_icdf(x, cas, c, c0=c0, engine=eng, **kw)
     if fn == "mom":

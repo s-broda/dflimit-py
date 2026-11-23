@@ -579,6 +579,26 @@ int dfl_kan_lin_ok(int model, int stat, double c, double g0, double a) { return 
  * move towards these values under refinement; with a fixed start above the unit root and at c = 10, 20 with c0 = c the
  * engines' one evaluation was off by up to 0.65 relative) */
 int dfl_kan_mom_ok(double c) { return c <= DFL_INV_CMAX; }
+/* The first p moments of the t-ratio of a classical case for the start of a quantile search (mom_start of merged.jl,
+ * November 2026): from one jet per node, the moments from jets of Bao and Kan (tratio_mom1: 0.2 to 1 ms for two moments,
+ * where the circles of the engines, dfl_moments, take 10 to 150 ms), or 0 outside their region (dfl_kan_mom_ok; case DG),
+ * where they fail or where an error estimate exceeds 1e-6 relative (to max(|m_j|, m_2^{j/2})); the search then starts from
+ * the engines' circles.  The start only places the first step and the bracket of the search: the quantile is the root of
+ * F(x) - p to the tolerance of the search either way.  DFL_MOM_START = 0 restores the start of before. */
+int DFL_MOM_START = 1;
+int dfl_mom_start(int p, int model, bool stat, double c, double c0, double g0, double *m)
+{
+    if (!DFL_MOM_START || p < 1 || p > DFL_KAN_JMAX - 1 || model < 1 || model > 3 || !dfl_kan_mom_ok(c)) return 0;
+    dfl_limcf F; char e[256]; int k = p < 2 ? 2 : p;
+    double mm[DFL_KAN_JMAX], ee[DFL_KAN_JMAX];
+    if (dfl_limcf_init(&F, model, stat, c, stat ? 0.0 : g0, e, sizeof e) || dfl_kan_ratio_mom(&F, k, c0 - c, 0.5, 1e-10, mm, ee, e, sizeof e)) return 0;
+    for (int j = 0; j < p; j++) {
+        double sc = fmax(fabs(mm[j]), pow(fabs(mm[1]), (j + 1) / 2.0));
+        if (!(isfinite(mm[j]) && ee[j] <= 1e-6 * sc)) return 0;
+    }
+    for (int j = 0; j < p; j++) m[j] = mm[j];
+    return 1;
+}
 /* the single inversion is the default for the power envelope at c <= -1e-4 (within 2.7e-12 of the general engine's
  * envelope from c = -1e-4 to -500, November 2026; closer to zero the weight a = c/2 puts the critical value at the edge of
  * the support of U - aV), and at c >= 0 or NaN (the level, NaN) (envelope_ok of DFKan) */

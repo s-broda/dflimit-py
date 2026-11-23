@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- The rules of one evaluation (the C engine of dflimit-matlab, branch faster-rules, a port of DFLimit.jl fde1632 to
+  9c71860): one evaluation of the general engine's inversion on paths (`dist_cdf`, `dist_pdf`, `dist_quantile`, and
+  `ltratio_cdf`, `ltratio_pdf`, `ltratio_icdf` where the rule of the engines takes the general engine) takes the outer
+  hyperbola with 1.5 times the step and the paths around the roots with 16 nodes per panel and 32 on the tails of their
+  rays (24 and 40 before; 32 and 48 for 48 and 64 with a fixed start) where that holds, about half the time, and by
+  regions of the start, the deterministic terms, `c` and `c0` the rule of before or a finer one; the new keyword `rule`
+  (`"auto"`, the default; `"present"` the rule of before, which `verified=True` takes; `"thin"`, `"inner"`, `"outer"`,
+  `"fine"`, `"finestep"`) names a rule. The values move by up to 7.6e-10 in the distribution function and 4e-9 of the
+  peak in the density. The classical engine's contour integral (a fixed start in cases DU, DT) takes 32 nodes for 64 and
+  the outer step 1.5 times as long, its conditional integral 48 or 64 nodes for 96, where they hold (within 6.2e-11 of
+  the checked computation). A fixed start: the paths of the general engine count the growth of the v-kernels of the
+  upper tail at every `c` (`dist_cdf(trend(-1), [9.732, 12, 20], 0, start="fixed", gamma0=1)` gave 1 - 2e-7, 1.013 and
+  9.5e38 and was refused by the final check; now 1); case DK with `c0 < 0` near the unit root takes the classical engine
+  (`ltratio_cdf(45.11, "DK", 0.5, c0=-10, g0=1)` was refused, now 0.99981515720); cases DU, DT far from the unit root
+  (`c0 > 0` below c = -20, below -10 where |c g0| > 20, any `c0` below c = -20 where |c g0| > 60) take the general
+  engine, where the contour integral's one evaluation was off by up to 2.2e-2 of the peak of the density, and the
+  classical engine warns there ("may be off by more than 1e-5"). The quantile searches start from the moments from jets
+  of Bao and Kan and take F and f from one pass of the general engine's paths where it computes (the quantiles bit for
+  bit those of the two evaluations). Warm time against the rules of before: the general engine's paths 0.47 to 0.71 (1.4
+  to 1.7 in the cells of the finer steps near the unit root), the contour integral 0.39 to 0.69, the conditional integral
+  0.55 to 0.84, the quantiles with `c0 != 0` 0.26 to 0.31.
+
 - The devices of Bao and Kan (the C engine of dflimit-matlab, branch kan-devices, a port of the module DFKan of
   DFLimit.jl): the numerical devices of Yong Bao and Raymond Kan, "Exact Finite-Sample Distribution and Moments of the
   Least Squares Estimator in First-Order Autoregressions: O(1) Algorithms". By default the coefficient statistic

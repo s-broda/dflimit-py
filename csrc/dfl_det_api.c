@@ -7,8 +7,8 @@
 
 void dfl_det_defaults(dfl_det_opts *o)
 {
-    o->c0 = 0; o->start = DFL_START_ZERO; o->gamma0 = 0; o->gls = NAN; o->verified = 0; o->vtol = 1e-9; o->phi = NAN; o->hfac = 1;
-    o->method = DFL_DET_AUTO;
+    o->c0 = 0; o->start = DFL_START_ZERO; o->gamma0 = 0; o->gls = NAN; o->verified = 0; o->vtol = 1e-9; o->phi = NAN; o->hfac = NAN;
+    o->method = DFL_DET_AUTO; o->rule = DFL_RULE_AUTO; o->n = 0; o->ntail = 0;
 }
 static const dfl_det_opts *opts_or_default(const dfl_det_opts *o, dfl_det_opts *d) { if (o) return o; dfl_det_defaults(d); return d; }
 /* the largest c at which the general engine computes (gen_cmax of DFDet.jl): DFL_DET_CMAX0 without deterministic terms,
@@ -54,11 +54,19 @@ static int split_finite(int n, const double *x, int cdf, double *out, double *xf
 
 /* ---------- the checked computation (verify_eval) ---------- */
 typedef int (*evalf_t)(det_path *CP, const det_eval_opts *o, void *ctx, double *v, char *err, size_t errlen);
-static int one_eval(det_path *CP, evalf_t ev, void *ctx, int nv, double *v, char *err, size_t errlen)
+/* one evaluation; n, ntail > 0 the inner nodes of the rule of one evaluation (dfl_det_dist), otherwise those of the present
+ * rule */
+static int one_eval_n(det_path *CP, evalf_t ev, void *ctx, int n, int ntail, double *v, char *err, size_t errlen)
 {
     det_eval_opts o; det_eval_defaults(CP, &o);
-    (void) nv;
+    if (n > 0) o.n = n;
+    if (ntail > 0) o.ntail = ntail;
     return ev(CP, &o, ctx, v, err, errlen);
+}
+static int one_eval(det_path *CP, evalf_t ev, void *ctx, int nv, double *v, char *err, size_t errlen)
+{
+    (void) nv;
+    return one_eval_n(CP, ev, ctx, 0, 0, v, err, errlen);
 }
 static int verify_eval(det_path *CP, evalf_t ev, void *ctx, int nv, double vtol, double *v, char *err, size_t errlen)
 {
@@ -113,27 +121,119 @@ static int tr_eval(det_path *CP, const det_eval_opts *o, void *v, double *out, c
     free(F); free(f); det_path_release(CPr);
     return rc;
 }
+/* the outer path of the statistics other than the t-ratio (hfac NaN: 1) */
 static det_path *user_path(const dfl_design *D, double c, const dfl_det_opts *o, char *err, size_t errlen)
 {
-    return det_path_cached(D, o->gls, o->start, o->gamma0, c, o->phi, o->hfac, err, errlen);
+    return det_path_cached(D, o->gls, o->start, o->gamma0, c, o->phi, isnan(o->hfac) ? 1.0 : o->hfac, err, errlen);
 }
-/* the values at the finite points xf by the inversion on paths (one evaluation, or the checked computation), with the
- * infinite density at the tangency of a rank-one design with c0 > 0 (tangency!) */
-static int paths_values(int kind, det_path *CP, int m, const double *xf, const dfl_det_opts *o, int verified, double *v, char *err, size_t errlen)
+
+/* ---------- the rules of one evaluation of the t-ratio's inversion on paths (dist_cdf, dist_pdf, dist_quantile) ----------
+ * PATH_RULES of DFDet.jl: (hfac, n, ntail, n with a fixed start, ntail with a fixed start), indexed by DFL_RULE_* (the
+ * README, "The rules of one evaluation"; dflimit.h) */
+typedef struct { double hfac; int n, ntail, nf, ntf; } det_rule_t;
+static const det_rule_t DET_PATH_RULES[7] = {
+    {1.0, 24, 40, 48, 64},      /* (DFL_RULE_AUTO: resolved by path_region) */
+    {1.0, 24, 40, 48, 64},      /* DFL_RULE_PRESENT */
+    {1.5, 16, 32, 32, 48},      /* DFL_RULE_THIN */
+    {1.0, 16, 32, 32, 48},      /* DFL_RULE_INNER */
+    {1.5, 24, 40, 48, 64},      /* DFL_RULE_OUTER */
+    {0.5, 16, 32, 32, 48},      /* DFL_RULE_FINE */
+    {1.0, 24, 40, 48, 64}};     /* DFL_RULE_FINESTEP */
+#define DET_RULE_GIVEN (-1)     /* (hfac given: the rule's inner nodes on the hyperbola of that step) */
+/* the borders of the regions of path_region in c (PATH_UNITROOT_CMIN, PATH_THIN_CMAX_FIXED, PATH_THIN_CMAX of DFDet.jl) */
+#define DET_PATH_UNITROOT_CMIN (-1.0)
+#define DET_PATH_THIN_CMAX_FIXED 2.0
+#define DET_PATH_THIN_CMAX 5.0
+/* the angle below which the step of DFL_RULE_FINESTEP shrinks (FINESTEP_PHI) */
+#define DET_FINESTEP_PHI (70 * M_PI / 180)
+#define DET_RULE_MSG "rule must be 0 (auto), 1 (present), 2 (thin), 3 (inner), 4 (outer), 5 (fine) or 6 (finestep) (the rules of one evaluation of the inversion on paths, DFL_RULE_*)"
+/* The rule of one evaluation for a design (rank1: without deterministic terms) with its start at c and the local null value
+ * c0, by regions measured in November 2026 against a reference with half the outer step and twice the inner nodes (the
+ * criterion: within max(1e-9, twice the present rule's own error) in F and max(1e-8, twice its own) of the largest density
+ * in f; path_region of DFDet.jl).  Near and above the unit root (c > -1) the outer integrand of the upper tail needs the
+ * outer step of the present rule or a finer one: with c0 < 0, where the parabola X(v) has its root b ~ x/|c0| far out, the
+ * thinner outer step lost up to 1e-4 with a fixed start (case DK at c = 0, c0 = -5 by 3.9e-5, case DU at c = 2, c0 = -5 by
+ * 3.1e-6) and 1.3e-8 of the density's peak with a zero start (case DK at c = 0, c0 = -5); without deterministic terms and
+ * with a fixed start the present step itself was off by up to 0.86 in the upper tail (case DK at c = 0.5, g0 = 1, c0 =
+ * -20; 1.8e-3 at c0 = -5), where the steps of DFL_RULE_FINESTEP are within 1e-11 of the classical engine, and with
+ * deterministic terms DFL_RULE_FINE within 1e-12; there at c0 = 0 too the thinner step lost 1.4e-8 of the peak at mean +
+ * 5.75 sd (c = 0.5).  Beyond the range of the sweep (a fixed start above c = 2, any start above c = 5; at c = 5 with a
+ * fixed start the thin rule differed from the present one by up to 5.6e-6 of the peak of the density, Perron's model C with
+ * two breaks) and far from the unit root with c0 other than 0 and c (below DET_FAR_CMIN; in case DK at c = -480, c0 = 2 the
+ * thin rule differed from the present one by 7.7e-9) the present rule; the thin rule elsewhere. */
+int dfl_det_path_region(int fixed, int rank1, double c, double c0)
+{
+    if (c > DET_PATH_UNITROOT_CMIN) {
+        if ((c > DET_PATH_THIN_CMAX_FIXED && fixed) || c > DET_PATH_THIN_CMAX) return DFL_RULE_PRESENT;
+        if (c0 < 0) return !fixed ? DFL_RULE_INNER : rank1 ? DFL_RULE_FINESTEP : DFL_RULE_FINE;
+        if (c0 == 0 && fixed && rank1) return DFL_RULE_INNER;
+    }
+    if (c < DET_FAR_CMIN && c0 != 0 && c0 != c) return DFL_RULE_PRESENT;
+    return DFL_RULE_THIN;
+}
+/* The outer path and the inner nodes of the rule of one evaluation (path_rule and rule_path of DFDet.jl): the rule of o->rule
+ * (DFL_RULE_AUTO: dfl_det_path_region; DFL_RULE_PRESENT with verified), with o->hfac (a number), o->n, o->ntail (> 0) in
+ * its place where given.  The rules with a finer step keep the angle of the present rule's hyperbola (where fixed_phi
+ * chooses it, its criterion on the largest term weighs the step, and a finer step took a flatter hyperbola with larger
+ * terms: case DK at c = -0.5, g0 = 2, c0 = -20 was off by 1.7e-4 on it, against 4.5e-12 on the present one): DFL_RULE_FINE
+ * half the present step, DFL_RULE_FINESTEP the step min(1/2, 2.5/(g0 |c0|)) times the present one where the present
+ * hyperbola is flatter than 70 degrees (at c = 0.5, g0 = 1, c0 = -20 the present step was off by 0.86, half of it by 0.31,
+ * this one by 7e-12; on the steep hyperbolas of g0 = 2, 88 degrees, the present step is within 1e-12 and the thin inner rule
+ * is not); on the vertical line the line itself.  *rl the rule taken (DET_RULE_GIVEN where hfac is given) */
+static det_path *rule_path(const dfl_design *D, double c, const dfl_det_opts *o, int verified, int *n, int *ntail, int *rl, char *err, size_t errlen)
+{
+    if (o->rule < DFL_RULE_AUTO || o->rule > DFL_RULE_FINESTEP) { snprintf(err, errlen, "%s", DET_RULE_MSG); return NULL; }
+    int fixed = o->start == DFL_START_FIXED && o->gamma0 != 0, r = o->rule;
+    if (verified) r = DFL_RULE_PRESENT;
+    else if (r == DFL_RULE_AUTO) {
+        int rank1 = 0;
+        if (fixed) {
+            /* (the rank of the numerator and the negative roots: those of the prepared design with a fixed start) */
+            det_prep *P = det_prep_cached(D, o->gls, err, errlen);
+            if (!P) return NULL;
+            rank1 = P->r == 1 && P->rm == 0;
+            det_prep_release(P);
+        }
+        r = dfl_det_path_region(fixed, rank1, c, o->c0);
+    }
+    const det_rule_t *R = &DET_PATH_RULES[r];
+    double hf = R->hfac, phi = o->phi;
+    if (!isnan(o->hfac)) { hf = o->hfac; r = DET_RULE_GIVEN; }
+    *n = o->n > 0 ? o->n : fixed ? R->nf : R->n;
+    *ntail = o->ntail > 0 ? o->ntail : fixed ? R->ntf : R->ntail;
+    if (rl) *rl = r;
+    if (isnan(phi) && (r == DFL_RULE_FINE || r == DFL_RULE_FINESTEP)) {
+        det_path *CP1 = det_path_cached(D, o->gls, o->start, o->gamma0, c, NAN, 1.0, err, errlen);
+        if (!CP1) return NULL;
+        if (isnan(CP1->h)) return CP1;
+        phi = CP1->phi;
+        if (r == DFL_RULE_FINESTEP) hf = CP1->phi < DET_FINESTEP_PHI ? dmin(0.5, 2.5 / (fabs(CP1->Mo->g0) * fabs(o->c0))) : 1.0;
+        det_path_release(CP1);
+    }
+    return det_path_cached(D, o->gls, o->start, o->gamma0, c, phi, hf, err, errlen);
+}
+
+/* the values at the finite points xf by the inversion on paths (one evaluation with the inner nodes n, ntail, or the checked
+ * computation), with the infinite density at the tangency of a rank-one design with c0 > 0 (tangency!) */
+static int paths_values(int kind, det_path *CP, int m, const double *xf, const dfl_det_opts *o, int verified, int n, int ntail, double *v, char *err, size_t errlen)
 {
     tr_ctx t = {m, xf, o->c0, kind == 2 ? 1 : 2, 2};
-    int rc = run_eval(CP, tr_eval, &t, m, verified, o->vtol, v, err, errlen);
+    int rc = verified ? run_eval(CP, tr_eval, &t, m, 1, o->vtol, v, err, errlen) : one_eval_n(CP, tr_eval, &t, n, ntail, v, err, errlen);
     if (!rc && kind == 1 && o->c0 > 0 && CP->Mo->r == 1 && CP->Mo->rm == 0) {
         double xs_ = -sqrt(4 * o->c0 * CP->Mo->a);
         for (int j = 0; j < m; j++) if (fabs(xf[j] - xs_) <= 1e-12 * dmax(1.0, fabs(xf[j]))) v[j] = INFINITY;
     }
     return rc;
 }
+/* the values by the paths at the points the line integral leaves to them, by the rule of one evaluation (with o->verified:
+ * the present rule, as the check of line_values); verified 1 the checked computation on the present rule's hyperbola (or
+ * that of a given hfac) */
 static int paths_subset(int kind, const dfl_design *D, double c, int m, const double *xf, const dfl_det_opts *o, int verified, double *v, char *err, size_t errlen)
 {
-    det_path *CP = user_path(D, c, o, err, errlen);
+    int n = 0, nt = 0;
+    det_path *CP = verified ? user_path(D, c, o, err, errlen) : rule_path(D, c, o, o->verified, &n, &nt, NULL, err, errlen);
     if (!CP) return 1;
-    int rc = paths_values(kind, CP, m, xf, o, verified, v, err, errlen);
+    int rc = paths_values(kind, CP, m, xf, o, verified, n, nt, v, err, errlen);
     det_path_release(CP);
     return rc;
 }
@@ -186,20 +286,52 @@ int dfl_det_dist(int kind, const dfl_design *D, int n, const double *x, double c
     det_warn_clear();
     if (kind != 1 && kind != 2) { snprintf(err, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
     if (check_common(D, c, o, kind == 2 ? "the t-ratio (dist_cdf)" : "the t-ratio (dist_pdf)", err, errlen)) return 1;
+    if (o->rule < DFL_RULE_AUTO || o->rule > DFL_RULE_FINESTEP) { snprintf(err, errlen, "%s", DET_RULE_MSG); return 1; }
     dfl_prov *pv;
     if (det_line_select(D, c, o, &pv, err, errlen)) return 1;
-    det_path *CP = NULL;
-    if (!pv) { CP = user_path(D, c, o, err, errlen); if (!CP) return 1; }
+    det_path *CP = NULL; int nr = 0, ntr = 0;
+    if (!pv) { CP = rule_path(D, c, o, o->verified, &nr, &ntr, NULL, err, errlen); if (!CP) return 1; }
     double *xf = malloc((n + 1) * sizeof(double)); int *ix = malloc((n + 1) * sizeof(int));
     int m = split_finite(n, x, kind == 2, out, xf, ix), rc = 0;
     if (m > 0) {
         double *v = malloc(m * sizeof(double));
-        rc = pv ? line_values(kind, D, pv, c, m, xf, o, v, err, errlen) : paths_values(kind, CP, m, xf, o, o->verified, v, err, errlen);
+        rc = pv ? line_values(kind, D, pv, c, m, xf, o, v, err, errlen) : paths_values(kind, CP, m, xf, o, o->verified, nr, ntr, v, err, errlen);
         if (!rc) for (int j = 0; j < m; j++) out[ix[j]] = v[j];
         if (!rc && kind == 2) rc = range_check("dist_cdf", D, c, o, "x", m, xf, v, err, errlen);
         free(v);
     }
     free(xf); free(ix); det_path_release(CP); det_line_release(pv);
+    return rc;
+}
+/* F and f of the inversion on paths from one pass (dist_both of DFDet.jl): the values of dfl_det_dist with method paths bit
+ * for bit (the same path, rule and points; det_contour_eval returns both), for the Newton steps of the router's quantile
+ * search (route_dist2 in dfl_det_route.c) */
+int dfl_det_dist_both(const dfl_design *D, int n, const double *x, double c, const dfl_det_opts *o0, double *F, double *f, char *err, size_t errlen)
+{
+    dfl_det_opts o; dfl_det_defaults(&o);
+    if (o0) { o.c0 = o0->c0; o.start = o0->start; o.gamma0 = o0->gamma0; o.gls = o0->gls; }
+    det_warn_clear();
+    if (check_common(D, c, &o, "the t-ratio (dist_cdf)", err, errlen)) return 1;
+    for (int k = 0; k < n; k++) if (!isfinite(x[k])) { snprintf(err, errlen, "dist_both: finite points only"); return 1; }
+    int nr = 0, ntr = 0;
+    det_path *CP = rule_path(D, c, &o, 0, &nr, &ntr, NULL, err, errlen);
+    if (!CP) return 1;
+    int rc = 0;
+    if (n > 0) {
+        det_path *CPr = det_line_refined(CP, n, x, 1, &CP->Mo->a, 1, &o.c0, err, errlen);
+        if (!CPr) rc = 1;
+        else {
+            det_eval_opts eo; det_eval_defaults(CPr, &eo); eo.n = nr; eo.ntail = ntr;
+            rc = det_contour_eval(CPr, n, x, o.c0, 2, &eo, F, f, NULL, NULL, err, errlen);
+            det_path_release(CPr);
+        }
+        if (!rc && o.c0 > 0 && CP->Mo->r == 1 && CP->Mo->rm == 0) {
+            double xs_ = -sqrt(4 * o.c0 * CP->Mo->a);
+            for (int j = 0; j < n; j++) if (fabs(x[j] - xs_) <= 1e-12 * dmax(1.0, fabs(x[j]))) f[j] = INFINITY;
+        }
+        if (!rc) rc = range_check("dist_cdf", D, c, &o, "x", n, x, F, err, errlen);
+    }
+    det_path_release(CP);
     return rc;
 }
 
@@ -223,14 +355,18 @@ static int newton_safe(ff_t ff, void *ctx, double p, double x0, double step, dou
     *xout = x;
     return 0;
 }
-typedef struct { det_path *CP; double c0; int vpow; int refine; } q_ctx;
+/* (n, ntail > 0: the inner nodes of the rule of one evaluation of the t-ratio; 0: the present rule) */
+typedef struct { det_path *CP; double c0; int vpow; int refine; int n, ntail; } q_ctx;
 static int q_ff(double x, void *v, double *F, double *f, char *err, size_t errlen)
 {
     q_ctx *q = v;
     double xx = q->vpow == 3 ? 0.0 : x, c0 = q->vpow == 3 ? q->c0 + x : q->c0;
     det_path *CPr = q->refine ? det_line_refined(q->CP, 1, &xx, 1, &q->CP->Mo->a, 1, &c0, err, errlen) : q->CP;
     if (!CPr) return 1;
-    int rc = det_contour_eval(CPr, 1, &xx, c0, q->vpow, NULL, F, f, NULL, NULL, err, errlen);
+    det_eval_opts eo; det_eval_defaults(CPr, &eo);
+    if (q->n > 0) eo.n = q->n;
+    if (q->ntail > 0) eo.ntail = q->ntail;
+    int rc = det_contour_eval(CPr, 1, &xx, c0, q->vpow, &eo, F, f, NULL, NULL, err, errlen);
     if (q->refine) det_path_release(CPr);
     return rc;
 }
@@ -284,6 +420,7 @@ int dfl_det_quantile(const dfl_design *D, int n, const double *p, double c, doub
     if (isnan(x0)) x0 = -2.0;
     if (start_tol_check("dist_quantile", "x0", x0, tol, err, errlen)) return 1;
     if (!(tol > 0)) tol = 1e-9;
+    if (o->rule < DFL_RULE_AUTO || o->rule > DFL_RULE_FINESTEP) { snprintf(err, errlen, "%s", DET_RULE_MSG); return 1; }
     dfl_prov *pv;
     if (det_line_select(D, c, o, &pv, err, errlen)) return 1;
     int rc = 0, *todo = malloc((n + 1) * sizeof(int)), nt = 0;
@@ -297,9 +434,11 @@ int dfl_det_quantile(const dfl_design *D, int n, const double *p, double c, doub
     }
     det_line_release(pv);
     if (!rc && nt > 0) {
-        det_path *CP = user_path(D, c, o, err, errlen);
+        /* (the paths by the rule of one evaluation, dist_quantile of DFDet.jl) */
+        int nr = 0, ntr = 0;
+        det_path *CP = rule_path(D, c, o, 0, &nr, &ntr, NULL, err, errlen);
         if (!CP) { free(todo); return 1; }
-        q_ctx qc = {CP, o->c0, 2, 1};
+        q_ctx qc = {CP, o->c0, 2, 1, nr, ntr};
         for (int i = 0; i < nt && !rc; i++) rc = quantile_search(&qc, p[todo[i]], x0, tol, 30, 1.0, &q[todo[i]], err, errlen);
         det_path_release(CP);
     }
@@ -350,7 +489,7 @@ int dfl_det_coef_quantile(const dfl_design *D, int n, const double *p, double c,
     if (!(tol > 0)) tol = 1e-9;
     det_path *CP = user_path(D, c, o, err, errlen);
     if (!CP) return 1;
-    q_ctx qc = {CP, o->c0, 3, 0};
+    q_ctx qc = {CP, o->c0, 3, 0, 0, 0};
     int rc = 0;
     for (int k = 0; k < n && !rc; k++) rc = quantile_search(&qc, p[k], y0, tol, 40, 5.0, &q[k], err, errlen);
     det_path_release(CP);
@@ -662,7 +801,7 @@ static int spec_eval_one(det_path *CP, const det_eval_opts *o, void *v, double *
  * (at y < 0 the factor e^{-t y} grows along the path, and the sum gave NaN) */
 static int vlaw(int kind, const dfl_design *D, int n, const double *ys, double c, const dfl_det_opts *o, double *out, char *err, size_t errlen)
 {
-    det_path *CP = det_v_path(D, o->gls, o->start, o->gamma0, c, o->phi, o->hfac, err, errlen);
+    det_path *CP = det_v_path(D, o->gls, o->start, o->gamma0, c, o->phi, isnan(o->hfac) ? 1.0 : o->hfac, err, errlen);
     if (!CP) return 1;
     for (int k = 0; k < n; k++) {
         double y = ys[k];
