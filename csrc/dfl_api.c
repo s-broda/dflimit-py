@@ -258,6 +258,10 @@ static int dist_impl(int kind, int n, const double *x, int model, double c, doub
     dfl_single_opts sd; if (so == NULL) { dfl_single_defaults(&sd); so = &sd; }
     dfl_double_opts dd; if (dopt == NULL) { dfl_double_defaults(&dd); dopt = &dd; }
     if (nstatus) *nstatus = 0;
+    /* (case DK far above the unit root above c = 14: refused before anything is computed, whichever representation the rule
+     * names, with verified too; dk_far_check) */
+    if (method == 0 && c > DFL_DKFAR_CMAX)
+        for (int k = 0; k < n; k++) if (isfinite(x[k]) && dk_far(model, stat, g0, c, c0, x[k]) && dk_far_check(kind, c, c0, x[k], err, errlen)) return 1;
     if (!dopt->verified) {
         /* the default: one evaluation by one method at each point (no second evaluation, no refinement driven by an
          * estimate, no fallback, no recomputation of the tails); no status (ltratio_dist of DFExact.jl).  A point that the
