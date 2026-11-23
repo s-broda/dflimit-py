@@ -43,3 +43,19 @@ def test_fixed_start_with_c0_near_zero():
     assert abs(ltratio_cdf(1.5, "DK", 0, c0=-0.01, g0=1) - 0.960991862318) < 1e-10
     assert abs(ltratio_pdf(1.5, "DK", 0, c0=-0.01, g0=1) - 0.079242719297) < 1e-10
     assert abs(ltratio_cdf(1.5, "DK", 2, c0=-0.01, g0=1) - 0.086764388544) < 1e-10
+
+
+def test_the_upper_tail_above_the_unit_root():
+    # case DK with c0 != c beyond the line integral's bound, for c > 4 at x > 300 and with c0 > c at x < -20: the
+    # conditional integral with its checks (before, its one evaluation where the checked value was flagged: 0.8415,
+    # -1.3674, 1.0479 here); above c = 14 an error; the general engine's line cut to the rate with c0 (the C engine of
+    # dflimit-matlab, November 23, 2026).  The values: an independent computation (the law of V given J(1) by Girsanov's
+    # theorem, inverted and integrated over J(1), DFLimit.jl).
+    assert abs(ltratio_cdf(1e4, "DK", 10, c0=2) - 0.743623945123) < 1e-10
+    assert abs(ltratio_cdf(3e4, "DK", 10, c0=2) - 0.999338346257) < 1e-10
+    assert abs(ltratio_cdf(3e3, "DK", 10, c0=9) - 0.993550212928) < 1e-10
+    assert abs(ltratio_cdf(-200, "DK", 10, c0=10.5) - 0.716459029660) < 1e-10
+    np.testing.assert_allclose(ltratio_cdf([1e3, 3e3], "DK", 10, c0=9, engine="general"), [0.636120922790, 0.993550212928],
+                               rtol=0, atol=1e-10)
+    with pytest.raises(ValueError, match="is computed for c <= 14 only"):
+        ltratio_cdf(1e7, "DK", 16, c0=2)
