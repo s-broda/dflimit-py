@@ -311,86 +311,149 @@ double dfl_tstar(int model, double c, bool stat)
     return ts;
 }
 
-/* ---- P(t), s1, s2, M0 along the nodes t (t[0] the real point), branches by continuity ---- */
-static void unwrap(double *ph, int n) { for (int j = 1; j < n; j++) ph[j] -= 2 * M_PI * round((ph[j] - ph[j - 1]) / (2 * M_PI)); }
-void dfl_tparts(int model, double c, int nt, const cdouble *t, bool stat, cdouble *P, cdouble *s1, cdouble *s2, cdouble *M0)
+/* ---- P(t), the roots and M0 at each point: the branch after Bao and Kan ----
+ * The branch of P(t) = (-a_2(t))^{-1/2}, of M_0(t) = (-s_1 s_2)^{-1/2} and the labels of the roots s_1(t), s_2(t) of D(., t)
+ * were fixed by continuity along a grid from the real point until November 2026 (an unwrapping of the phases).  They are
+ * determined at each point, after Yong Bao and Raymond Kan ("Exact Finite-Sample Distribution and Moments of the Least
+ * Squares Estimator in First-Order Autoregressions: O(1) Algorithms"), who write each argument under a root as a product of
+ * factors whose arguments are known (tparts_point of DFExact.jl).  For Im t > 0 (the conjugate for Im t < 0), with
+ * mu = (c^2 - 2t)^{1/2} the principal root:
+ *  (a) the roots: the reciprocal roots are the eigenvalues nu of K Sigma_t, K the real symmetric matrix of the numerator and
+ *      Sigma_t the covariance of its Gaussian functionals under the tilt e^{tV}; nu = y*Ky / y*Sigma_t^{-1}y has a positive
+ *      denominator's real part for Re t < t_* (the lemma on accretive matrices of Bao and Kan) and a negative imaginary part
+ *      for Im t > 0, so that s_1 (negative type) lies in the open left half-plane on the line and in the open upper
+ *      half-plane for every Im t > 0, s_2 (positive type) in the right and the lower one: the labels are read off the signs;
+ *  (b) M_0 = (-s_1)^{-1/2} s_2^{-1/2} with principal roots on the line, where -s_1 and s_2 lie in the right half-plane;
+ *  (c) D(0, t) = a_0 = (-a_2)(-s_1) s_2 is a canonical product over the positive zeros of the moment generating function of V
+ *      with the continuous argument sum_j Arg(1 - t/t_j); without deterministic terms it is e^c cosh(mu) G, G = 1 - c
+ *      tanh(mu)/mu, with the continuous argument Im mu + Arg(1 + e^{-2 mu}) of cosh(mu) and G in the upper (c < 0) or lower
+ *      (c > 0) half-plane; a regressor projected out, or a start integrated out, changes V by a quadratic form of rank one of
+ *      one sign, and the principal argument of the ratio of the two determinants, in (0, pi) for a projection and in
+ *      (-pi, 0) for the stationary start, is the continuous one (two projections: (0, 2 pi); GLS detrending, one update of
+ *      each sign: the principal argument).
+ * Then arg(-a_2) = arg D(0, t) - Arg(-s_1) - Arg(s_2), all at the point. */
+/* an argument known to lie in (0, pi) (one projection) or (0, 2 pi) (two) from its principal value; one in (-pi, 0) */
+static inline double argpos(double a, int two) { return two ? (a < -1e-6 ? a + 2 * M_PI : a) : (a < -M_PI / 2 ? a + 2 * M_PI : a); }
+static inline double argneg(double a) { return a > M_PI / 2 ? a - 2 * M_PI : a; }
+/* the continuous argument (zero at real t below t_*) of cosh(mu) - c sinh(mu)/mu = cosh(mu) G at Im t > 0: Im mu + Arg(1 +
+ * e^{-2 mu}) + Arg G, with mu, e2 = e^{-2 mu} and G = 1 - c tanh(mu)/mu formed without cancellation (argK) */
+static double argK(double c, cdouble t, cdouble *mu_, cdouble *e2_, cdouble *G_)
 {
-    if (model == DFL_MODEL_PROV) { dfl_prov_tparts(nt, t, P, s1, s2, M0); return; }   /* (a provider of the general engine, dfl_det_line.c) */
-    double *ph = malloc(nt * sizeof(double));
+    cdouble z = zof(c, t), mu = csqrt(z), e2 = cexp(cscale(-2, mu)), G;
+    if (cabs(mu) < 1e-3) G = csub(ONE, cscale(c, cadd(csub(ONE, cscale(1.0 / 3, z)), cscale(2.0 / 15, cmul(z, z)))));
+    else {
+        cdouble del = c > 0 ? cdiv(cscale(-2, t), cadd(mu, CPX(c, 0))) : csub(mu, CPX(c, 0));
+        G = cdiv(cadd(del, cmul(cadd(mu, CPX(c, 0)), e2)), cmul(mu, cadd(ONE, e2)));
+    }
+    *mu_ = mu; *e2_ = e2; *G_ = G;
+    return cimag(mu) + carg(cadd(ONE, e2)) + carg(G);
+}
+/* the two roots labelled by their signs: s_1 in the left half-plane and s_2 in the right one; where both real parts have the
+ * same sign (beyond t_*), s_1 the root in the upper half-plane */
+static inline void label(cdouble ra, cdouble rb, cdouble *s1, cdouble *s2)
+{
+    int sa = creal(ra) < 0, sb = creal(rb) < 0;
+    if (sa != sb) { if (creal(ra) < creal(rb)) { *s1 = ra; *s2 = rb; } else { *s1 = rb; *s2 = ra; } return; }
+    if (cimag(ra) > cimag(rb)) { *s1 = ra; *s2 = rb; } else { *s1 = rb; *s2 = ra; }
+}
+static inline cdouble cis_(double x) { return CPX(cos(x), sin(x)); }
+/* P(t), s_1(t), s_2(t) and M_0(t) at the single point t, Re t < t_*, with no reference to neighbouring points (tparts_point) */
+static void tparts_point(int model, double c, cdouble t, bool stat, cdouble *P, cdouble *s1, cdouble *s2, cdouble *M0)
+{
+    if (cimag(t) < 0) {
+        tparts_point(model, c, conj(t), stat, P, s1, s2, M0);
+        *P = conj(*P); *s1 = conj(*s1); *s2 = conj(*s2); *M0 = conj(*M0);
+        return;
+    }
+    int re = cimag(t) == 0;
+    *s2 = ZERO; *M0 = ZERO;
     if (model == 1 && !stat) {
-        for (int j = 0; j < nt; j++) {
-            dfl_pieces_t p = dfl_pieces(zof(c, t[j]));
-            s1[j] = c > 0 ? dfl_eta1(c, t[j]) : cdiv(csub(p.C, cscale(c, p.S)), p.S);
-            ph[j] = carg(p.S); M0[j] = p.S;                 /* (M0 holds S for the moment) */
+        cdouble z = zof(c, t);
+        if (cabs(z) < 1e-3) {                                 /* (the series of dfl_pieces; S near 1, its principal argument) */
+            dfl_pieces_t p = dfl_pieces(z);
+            *s1 = c > 0 ? dfl_eta1(c, t) : cdiv(csub(p.C, cscale(c, p.S)), p.S);
+            *P = cscale(exp(-c / 2) * pow(cabs(p.S), -0.5), cis_(-carg(p.S) / 2));
+            return;
         }
-        unwrap(ph, nt);
-        for (int j = 0; j < nt; j++) { P[j] = cscale(exp(-c / 2) * pow(cabs(M0[j]), -0.5), cexp(CPX(0, -ph[j] / 2))); M0[j] = ZERO; s2[j] = ZERO; }
-        free(ph); return;
+        /* sinh(mu)/mu = e^mu (1 - e^{-2 mu})/(2 mu): its modulus and its continuous argument Im mu + Arg(1 - e^{-2 mu}) -
+         * Arg mu, and s1 = mu coth mu - c, from e^{-2 mu} alone */
+        cdouble mu = csqrt(z), e2 = cexp(cscale(-2, mu)), om = csub(ONE, e2);
+        *s1 = c > 0 ? dfl_eta1(c, t) : csub(cdiv(cmul(mu, cadd(ONE, e2)), om), CPX(c, 0));
+        double lS = creal(mu) + log(cabs(om)) - log(2 * cabs(mu));
+        double ph = re ? 0.0 : cimag(mu) + carg(om) - carg(mu);
+        *P = cscale(exp(-c / 2 - lS / 2), cis_(-ph / 2));
+        return;
     }
     if (model == 4 && !stat) {
         /* the GLS-detrended trend case: M(s,t) = e^{-s/2} P(t) (s_1 - s)^{-1/2} as in case DK, with M_{V_g}(t) = e^{-c/2} (cosh th
          * |I - Q Sig|)^{-1/2} and s_1 = 1/(2 kap_1), 2 kap_1 = (1 - lam)^2 v' Sig (I - Q Sig)^{-1} v, v = (1, 0, -3): the variance of the
-         * detrended end point under the tilt; the branches of D and s_1 continued along the nodes */
+         * detrended end point under the tilt */
         double lam = dfl_lam_gls(DFL_CBAR_GLS), f = (1 - lam) * (1 - lam);
-        double *ps = malloc(nt * sizeof(double)); cdouble *lch = malloc(nt * sizeof(cdouble)), *lD = malloc(nt * sizeof(cdouble));
-        for (int j = 0; j < nt; j++) {
-            dfl_girs_t G; dfl_girsanov(4, c, t[j], &G);
-            cdouble aN[9], D; det_adj3(G.N, aN, &D);
-            /* x = N^{-1} v = adj(N) v / D, then v' Sig x */
-            cdouble x[3], y[3], v[3] = {ONE, ZERO, CPX(-3, 0)};
-            for (int i = 0; i < 3; i++) { x[i] = ZERO; for (int k = 0; k < 3; k++) x[i] = cadd(x[i], cmul(aN[3 * i + k], v[k])); x[i] = cdiv(x[i], D); }
-            for (int i = 0; i < 3; i++) { y[i] = ZERO; for (int k = 0; k < 3; k++) y[i] = cadd(y[i], cmul(G.Sg[3 * i + k], x[k])); }
-            cdouble q = cadd(cadd(cmul(v[0], y[0]), cmul(v[1], y[1])), cmul(v[2], y[2]));
-            s1[j] = cdiv(ONE, cscale(f, q)); s2[j] = ZERO; M0[j] = ZERO;
-            lD[j] = clog(G.D); lch[j] = G.lch; ph[j] = cimag(lD[j]); ps[j] = carg(s1[j]);
+        dfl_girs_t G; dfl_girsanov(4, c, t, &G);
+        cdouble aN[9], D; det_adj3(G.N, aN, &D);
+        cdouble x[3], y[3], v[3] = {ONE, ZERO, CPX(-3, 0)};
+        for (int i = 0; i < 3; i++) { x[i] = ZERO; for (int k = 0; k < 3; k++) x[i] = cadd(x[i], cmul(aN[3 * i + k], v[k])); x[i] = cdiv(x[i], D); }
+        for (int i = 0; i < 3; i++) { y[i] = ZERO; for (int k = 0; k < 3; k++) y[i] = cadd(y[i], cmul(G.Sg[3 * i + k], x[k])); }
+        cdouble q = cadd(cadd(cmul(v[0], y[0]), cmul(v[1], y[1])), cmul(v[2], y[2]));
+        *s1 = cdiv(ONE, cscale(f, q));
+        double ph = 0;
+        if (!re) {
+            cdouble th = G.th, GK;                              /* GK = 1 - c tanh(th)/th, as the Girsanov forms form it */
+            if (cabs(th) < 1) GK = csub(ONE, cscale(c, polyq(GT, 45, 0, cmul(th, th))));
+            else { cdouble e2 = cexp(cscale(-2, th)); GK = cdiv(cadd(G.del, cscale(c, cdiv(cscale(2, e2), cadd(ONE, e2)))), th); }
+            ph = carg(GK) + carg(cdiv(G.D, GK));                /* one update of each sign: the principal argument */
         }
-        unwrap(ph, nt); unwrap(ps, nt);
-        for (int j = 0; j < nt; j++)
-            P[j] = cexp(cadd(CPX(-c / 2, 0), cadd(cscale(-0.5, cadd(lch[j], CPX(creal(lD[j]), ph[j]))), cscale(0.5, CPX(log(cabs(s1[j])), ps[j])))));
-        free(ps); free(lch); free(lD); free(ph); return;
+        cdouble L = cadd(CPX(-c / 2, 0), cadd(cscale(-0.5, cadd(G.lch, CPX(log(cabs(G.D)), ph))), cscale(0.5, CPX(log(cabs(*s1)), carg(*s1)))));
+        *P = cexp(L);
+        return;
     }
-    cdouble *sa = malloc(nt * sizeof(cdouble)), *sb = malloc(nt * sizeof(cdouble)), *ma2 = malloc(nt * sizeof(cdouble)), *M0lch = malloc(nt * sizeof(cdouble));
-    double *ph2 = malloc(nt * sizeof(double));
-    bool girs = !stat && c > DFL_CGIRS;
-    for (int j = 0; j < nt; j++) {
-        if (girs) {
-            dfl_girs_t G; dfl_girsanov(model, c, t[j], &G);
-            cdouble disc = dfl_csqrt(csub(cmul(G.A1, G.A1), cscale(4, cmul(G.A0, G.A2))));
-            double sw = creal(cmul(conj(G.A1), disc)) < 0 ? -1 : 1;
-            cdouble rb = cdiv(cadd(G.A1, cscale(sw, disc)), cscale(2, G.A0)), rs = cdiv(G.A2, cmul(G.A0, rb));
-            sa[j] = rb; sb[j] = rs;
-            ma2[j] = G.D; ph[j] = carg(G.D); M0lch[j] = G.lch;           /* (ma2 holds D, ph its argument) */
-        } else {
-            cdouble s0 = ZERO, sp = CPX(-1, 0), sm = CPX(1, 0);
-            cdouble d0 = dfl_Dfun(model, c, s0, t[j], stat), dp = dfl_Dfun(model, c, sp, t[j], stat), dm = dfl_Dfun(model, c, sm, t[j], stat);
-            cdouble a2 = csub(cscale(0.5, cadd(dp, dm)), d0), a1 = cscale(0.5, csub(dp, dm)), a0 = d0;
-            cdouble disc = dfl_csqrt(csub(cmul(a1, a1), cscale(4, cmul(a2, a0))));   /* (dfl_csqrt: the libm csqrt fails near |z| = 1e154 on macOS) */
-            double sw = creal(cmul(conj(a1), disc)) < 0 ? -1 : 1;
-            cdouble rb = cdiv(csub(cneg(a1), cscale(sw, disc)), cscale(2, a2)), rs = cdiv(a0, cmul(a2, rb));
-            sa[j] = cneg(rb); sb[j] = cneg(rs); ma2[j] = cneg(a2);
-        }
+    if (!stat && c > DFL_CGIRS) {
+        /* cases DU, DT at large c: the roots s_k = 1/nu_k of A2 nu^2 - A1 nu + A0 = 0 and M_V(t) = e^{-c/2} (cosh th det(I - Q
+         * Sig))^{-1/2} from the Girsanov forms, free of the cancellation of D */
+        dfl_girs_t G; dfl_girsanov(model, c, t, &G);
+        cdouble disc = dfl_csqrt(csub(cmul(G.A1, G.A1), cscale(4, cmul(G.A0, G.A2))));
+        double sw = creal(cmul(conj(G.A1), disc)) < 0 ? -1 : 1;
+        cdouble rb = cdiv(cadd(G.A1, cscale(sw, disc)), cscale(2, G.A0)), rs = cdiv(G.A2, cmul(G.A0, rb));
+        label(rb, rs, s1, s2);
+        double ph = re ? 0.0 : carg(G.N[0]) + argpos(carg(cdiv(G.D, G.N[0])), model == 3);
+        cdouble lm = CPX(log(cabs(cmul(*s1, *s2))), carg(cneg(*s1)) + carg(*s2));
+        *P = cexp(cadd(CPX(-c / 2, 0), cadd(cscale(-0.5, cadd(G.lch, CPX(log(cabs(G.D)), ph))), cscale(0.5, lm))));
+        *M0 = cexp(cscale(-0.5, lm));
+        return;
     }
-    if (creal(sa[0]) < creal(sb[0])) { s1[0] = sa[0]; s2[0] = sb[0]; } else { s1[0] = sb[0]; s2[0] = sa[0]; }
-    for (int j = 1; j < nt; j++) {
-        if (cabs(csub(sa[j], s1[j - 1])) + cabs(csub(sb[j], s2[j - 1])) <= cabs(csub(sb[j], s1[j - 1])) + cabs(csub(sa[j], s2[j - 1]))) { s1[j] = sa[j]; s2[j] = sb[j]; }
-        else { s1[j] = sb[j]; s2[j] = sa[j]; }
+    /* the quadratic D(s, t) = a2 lam^2 + a1 lam + a0, lam = -s, from its values at s = 0, -1, 1 */
+    cdouble s0 = ZERO, sp = CPX(-1, 0), sm = CPX(1, 0), d0, dp, dm, d0z;
+    if (model == 1) { d0 = dfl_Dfun(1, c, s0, t, true); dp = dfl_Dfun(1, c, sp, t, true); dm = dfl_Dfun(1, c, sm, t, true); d0z = d0; }
+    else {
+        d0z = dfl_Dfun(model, c, s0, t, false);
+        d0 = stat ? cadd(d0z, dstat_add(model, c, s0, t)) : d0z;
+        dp = dfl_Dfun(model, c, sp, t, stat); dm = dfl_Dfun(model, c, sm, t, stat);
     }
-    if (girs) {
-        unwrap(ph, nt);                                              /* arg D continued along the nodes */
-        for (int j = 0; j < nt; j++) ph2[j] = carg(cneg(cmul(s1[j], s2[j])));
-        unwrap(ph2, nt);
-        for (int j = 0; j < nt; j++) {
-            cdouble lm = CPX(log(cabs(cmul(s1[j], s2[j]))), ph2[j]), lD = CPX(log(cabs(ma2[j])), ph[j]);
-            M0[j] = cexp(cscale(-0.5, lm));                          /* (-s1 s2)^{-1/2} */
-            P[j] = cexp(cadd(CPX(-c / 2, 0), cadd(cscale(-0.5, cadd(M0lch[j], lD)), cscale(0.5, lm))));
-        }
-    } else {
-        for (int j = 0; j < nt; j++) ph[j] = carg(ma2[j]);
-        unwrap(ph, nt);
-        for (int j = 0; j < nt; j++) P[j] = cscale(pow(cabs(ma2[j]), -0.5), cexp(CPX(0, -ph[j] / 2)));
-        for (int j = 0; j < nt; j++) ph2[j] = carg(cneg(cmul(s1[j], s2[j])));
-        unwrap(ph2, nt);
-        for (int j = 0; j < nt; j++) M0[j] = cscale(pow(cabs(cmul(s1[j], s2[j])), -0.5), cexp(CPX(0, -ph2[j] / 2)));
+    cdouble a2 = csub(cscale(0.5, cadd(dp, dm)), d0), a1 = cscale(0.5, csub(dp, dm)), a0 = d0;
+    cdouble disc = dfl_csqrt(csub(cmul(a1, a1), cscale(4, cmul(a2, a0))));   /* (dfl_csqrt: the libm csqrt fails near |z| = 1e154 on macOS) */
+    double sw = creal(cmul(conj(a1), disc)) < 0 ? -1 : 1;
+    cdouble rb = cdiv(csub(cneg(a1), cscale(sw, disc)), cscale(2, a2)), rs = cdiv(a0, cmul(a2, rb));
+    label(cneg(rb), cneg(rs), s1, s2);
+    *M0 = cdiv(ONE, cmul(csqrt(cneg(*s1)), csqrt(*s2)));
+    double ph0 = 0;
+    if (!re) {
+        cdouble mu, e2, GG;
+        double aK = argK(c, t, &mu, &e2, &GG);
+        cdouble DK = cmul(cscale(0.5, cmul(cexp(cadd(CPX(c, 0), mu)), cadd(ONE, e2))), GG);   /* e^c (cosh mu - c sinh(mu)/mu) */
+        ph0 = aK;
+        if (model != 1) ph0 += argpos(carg(cdiv(d0z, DK)), model == 3);
+        if (stat) ph0 += argneg(carg(cdiv(d0, model == 1 ? DK : d0z)));
     }
-    free(sa); free(sb); free(ma2); free(M0lch); free(ph); free(ph2);
+    *P = cscale(pow(cabs(a2), -0.5), cis_(-(ph0 - carg(cneg(*s1)) - carg(*s2)) / 2));
+}
+/* P(t), s1(t), s2(t) (s2 unused for model 1) and M0(t) = (-s1 s2)^{-1/2} (unused for models 1 and 4) at the points t of a grid
+ * of the line or of the contour integral's hyperbola, in any order: each point by tparts_point, the branches of the square
+ * roots and the labels of the roots fixed at the point (after Bao and Kan) with no reference to its neighbours.  For c >
+ * CGIRS with a zero start the roots and P(t) come from the Girsanov forms, which are free of the cancellation of D.
+ * (Against the continuation along the grid that this replaced, within 5.7e-14 relative on the engine's grids, November
+ * 2026, as in DFExact.jl) */
+void dfl_tparts(int model, double c, int nt, const cdouble *t, bool stat, cdouble *P, cdouble *s1, cdouble *s2, cdouble *M0)
+{
+    if (model == DFL_MODEL_PROV) { dfl_prov_tparts(nt, t, P, s1, s2, M0); return; }   /* (a provider of the general engine, dfl_det_line.c) */
+    for (int j = 0; j < nt; j++) tparts_point(model, c, t[j], stat, &P[j], &s1[j], &s2[j], &M0[j]);
 }

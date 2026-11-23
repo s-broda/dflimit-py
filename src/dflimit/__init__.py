@@ -8,7 +8,8 @@ Julia).
 
 - `ltratio_cdf`, `ltratio_pdf`, `ltratio_icdf`, `ltratio_mom`: the t-ratio, cases DK, DU, DT (zero or fixed start),
   SK, SU, ST (stationary start) and DG (GLS-detrended trend case);
-- `coef_cdf`, `coef_icdf`: the coefficient statistic n(phi^ - phi0);
+- `coef_cdf`, `coef_icdf`, `coef_mom`: the coefficient statistic n(phi^ - phi0) (its density `coef_pdf` also takes a
+  case code);
 - `adfmax_cdf`, `adfmax_pdf`, `adfmax_icdf`: the ADFmax test of Leybourne (1995);
 - `ltratio_region`: the probability of a region {U <= g(V)}, case DK;
 - `ltratio_lincdf`: the linear form U - aV, cases DK and DG;
@@ -34,7 +35,7 @@ Not in the package, because the C engine does not have it: the boundary type ``"
 function in a module like _lincdf.py, exported here.)
 """
 from ._adfmax import adfmax_cdf, adfmax_icdf, adfmax_pdf
-from ._coef import coef_cdf, coef_icdf
+from ._coef import coef_cdf, coef_icdf, coef_mom
 from ._design import Design, design_from_matrix, detrend_first, fdesign, ltrend, perron, trend
 from ._general import (adfmax_quantile, coef_cdf_gp, coef_pdf, coef_quantile, dist_cdf, dist_moments, dist_pdf,
                        dist_quantile, empty_caches, lin_cdf, lin_pdf, lin_quantile, lm_cdf, lm_power, lm_quantile,
@@ -51,7 +52,7 @@ __version__ = "0.5.0"
 
 __all__ = [
     "ltratio_cdf", "ltratio_pdf", "ltratio_icdf", "ltratio_mom",
-    "coef_cdf", "coef_icdf",
+    "coef_cdf", "coef_icdf", "coef_mom",
     "adfmax_cdf", "adfmax_pdf", "adfmax_icdf",
     "ltratio_region",
     "ltratio_lincdf", "power_envelope",

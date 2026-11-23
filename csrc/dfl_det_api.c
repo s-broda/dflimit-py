@@ -413,10 +413,8 @@ static double gp_edge(const det_model *Mo, double a, double c)
  * on); above the unit root d shrinks like 2c e^{-c}, so that with the default grid the 30% point of case DK has d/h = 3.1
  * at c = 10 and 0.5 at c = 12 (off by 1.1e-2) */
 #define GP_EDGE 3.3
-int dfl_det_coef_cdf_gp(const dfl_design *D, int n, const double *y, double c, const dfl_det_opts *o0, int N, double umax, double *out, char *err, size_t errlen)
+static int coef_cdf_grid(const dfl_design *D, int n, const double *y, double c, const dfl_det_opts *o, int N, double umax, double *out, char *err, size_t errlen)
 {
-    dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
-    det_warn_clear();
     if (check_common(D, c, o, "the coefficient statistic (coef_cdf_gp)", err, errlen)) return 1;
     if (N <= 0) N = 60000;
     if (!(umax > 0)) umax = 4000;
@@ -452,6 +450,54 @@ int dfl_det_coef_cdf_gp(const dfl_design *D, int n, const double *y, double c, c
     }
     free(u); free(w); free(L0); free(LD); det_model_free(&Mo); det_prep_release(P);
     return rc;
+}
+
+/* coef_cdf_gp: by default (a zero or stationary start, any detrending, c up to DFL_GP_INV_CMAX) the single inversion of Bao
+ * and Kan with the branch of the square root of the determinant from the pivots at each point (det_gcoef_cdf1 of
+ * dfl_det_kan.c), tol (1e-12) its absolute tolerance; DFL_METHOD_GRID (or N, umax given (> 0), and a fixed start gamma0 !=
+ * 0) the trapezoidal rule of before on the fixed grid in u = sinh(v) with its refusal (coef_cdf_grid).  (GP_INV_CMAX:
+ * compared in November 2026 with the contour integral for an intercept, linear and quadratic trends, Perron's model C with
+ * one and two breaks, a stationary start and GLS detrending, c from -30 to 5: within 9.6e-13, 2.5e-11 with GLS detrending;
+ * at c = 10 one value takes seconds, and the grid with its refusal stays the default above c = 5) */
+int dfl_det_coef_cdf_gp_x(const dfl_design *D, int n, const double *y, double c, const dfl_det_opts *o0, int method, int N, double umax, double tol, double *out, double *errest, char *err, size_t errlen)
+{
+    dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
+    det_warn_clear();
+    if (!(method == 0 || method == DFL_METHOD_INVERSION || method == DFL_METHOD_GRID)) {
+        snprintf(err, errlen, "coef_cdf_gp: method must be 0 (automatic), %d (the single inversion of Bao and Kan) or %d (the fixed grid)", DFL_METHOD_INVERSION, DFL_METHOD_GRID); return 1;
+    }
+    int fixed = o->start == DFL_START_FIXED && o->gamma0 != 0, given = N > 0 || umax > 0;
+    if (method == DFL_METHOD_INVERSION && (fixed || given)) { snprintf(err, errlen, "coef_cdf_gp: method %d takes a zero or stationary start and no N, umax", DFL_METHOD_INVERSION); return 1; }
+    if (errest) for (int k = 0; k < n; k++) errest[k] = NAN;
+    if (method == DFL_METHOD_GRID || given || fixed || (method == 0 && !(c <= DFL_GP_INV_CMAX))) return coef_cdf_grid(D, n, y, c, o, N, umax, out, err, errlen);
+    double tl = tol;
+    if (isnan(tl) || tl == 0) tl = DFL_KAN_TOL;
+    else if (!(tl > 0 && isfinite(tl))) { snprintf(err, errlen, "coef_cdf_gp: tol must be a positive finite number (NaN or 0: the default %g)", DFL_KAN_TOL); return 1; }
+    if (check_common(D, c, o, "the coefficient statistic (coef_cdf_gp)", err, errlen)) return 1;
+    det_prep *P = det_prep_cached(D, o->gls, err, errlen);
+    if (!P) return 1;
+    det_model Mo;
+    if (det_model_make(P, o->start, o->gamma0, &Mo, err, errlen)) { det_prep_release(P); return 1; }
+    det_cf *F = det_cf_new(&Mo, c, 0);
+    double *E = malloc((n + 1) * sizeof(double));
+    int rc = F ? 0 : 1;
+    if (!F) snprintf(err, errlen, "out of memory");
+    for (int k = 0; k < n && !rc; k++) {
+        rc = det_gcoef_cdf1(F, y[k], o->c0, tl, &out[k], &E[k]);
+        if (rc) snprintf(err, errlen, "coef_cdf_gp: the single inversion failed at y = %g", y[k]);
+    }
+    if (!rc) {
+        int bad = 0; double mx = 0;
+        for (int k = 0; k < n; k++) if (!(E[k] <= tl)) { bad++; mx = isnan(E[k]) || E[k] > mx ? E[k] : mx; }
+        if (bad) det_warn("coef_cdf_gp: the error estimate of the single inversion exceeds the tolerance %g at %d of %d points (largest %g); method %d gives the fixed grid", tl, bad, n, mx, DFL_METHOD_GRID);
+        if (errest) memcpy(errest, E, n * sizeof(double));
+    }
+    free(E); det_cf_free(F); det_model_free(&Mo); det_prep_release(P);
+    return rc;
+}
+int dfl_det_coef_cdf_gp(const dfl_design *D, int n, const double *y, double c, const dfl_det_opts *o0, int N, double umax, double *out, char *err, size_t errlen)
+{
+    return dfl_det_coef_cdf_gp_x(D, n, y, c, o0, 0, N, umax, NAN, out, NULL, err, errlen);
 }
 
 /* ---------- the moments ---------- */

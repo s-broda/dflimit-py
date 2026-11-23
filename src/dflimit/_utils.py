@@ -79,6 +79,51 @@ def dfl_method(method):
         raise ValueError(_METHOD_MSG) from None
 
 
+_IMETHODS = {"auto": 0, "inversion": 5, "jets": 5, "engine": 6, "single": 1, "line": 1, "double": 2, "conditional": 2,
+             "contour": 3, "paths": 4}
+
+
+def dfl_imethod(method, fn, rep=False):
+    """The method of the functions with the devices of Bao and Kan (dfl_inv_opts of the C router): "auto" 0,
+    "inversion" (or "jets", the moments) 5, "engine" (the engines' computation of before) 6, and where rep the
+    representations of the t-ratio ("single" or "line" 1, "double" or "conditional" 2, "contour" 3, "paths" 4)."""
+    msg = (f'{fn}: method must be "auto", "inversion" (the single inversion of Bao and Kan) or "engine" (the engines\' '
+           "computation)" + (', or a representation of the t-ratio ("single" or "line", "double" or "conditional", '
+                              '"contour", "paths")' if rep else ""))
+    if not isinstance(method, str):
+        raise TypeError(msg)
+    m = _IMETHODS.get(method.lower())
+    if m is None or (not rep and 1 <= m <= 4):
+        raise ValueError(msg)
+    return m
+
+
+def dfl_tol(tol):
+    """The tolerance of the single inversion (None: the default of the engine, NaN)."""
+    return math.nan if tol is None else dfl_num(tol, "tol")
+
+
+_RTEXT = (("method 5", 'method="inversion"'), ("method 6", 'method="engine"'), ("method 7", 'method="grid"'),
+          ("with engine general", 'with engine="general"'), ("engine auto or classical", 'engine="auto" or "classical"'),
+          ("; verified recomputes", "; verified=True recomputes"))
+
+
+def py_text(m):
+    """The options of the C engine's messages in the words of the Python functions (the method codes of the devices of
+    Bao and Kan, the engine general, verified)."""
+    for a, b in _RTEXT:
+        m = m.replace(a, b)
+    return m
+
+
+def engine_call(f, *args):
+    """An entry point of the gateway, its ValueError in the words of the Python functions."""
+    try:
+        return f(*args)
+    except ValueError as e:
+        raise ValueError(py_text(str(e))) from None
+
+
 def dfl_real(x, name):
     """A numeric array (any shape) as a C-contiguous float64 array."""
     try:

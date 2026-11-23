@@ -70,10 +70,16 @@ def test_conditional(r):
 
 @pytest.mark.parametrize("r", MOM, ids=lambda r: f"{case_code(r[0], r[4])} c={r[1]:g} c0={r[2]:g} g0={r[3]:g}")
 def test_moments(r):
-    """the moments reproduce the Julia values"""
+    """the moments reproduce the Julia values (the stored values are the engines' circles: method="engine" to 1e-10;
+    the default, the moments from jets of Bao and Kan, agrees with DFLimit.jl's to rounding and with these to 1e-10
+    relative to the size of the moments near the unit root, to 3.7e-9 at c = -60, c0 = c, where its error estimate does
+    not flag it)"""
     m, c, c0, g0, st = r[:5]
-    mr = r[5:9]
-    assert np.max(np.abs(ltratio_mom(4, case_code(m, st), c, c0, g0) / mr - 1)) < 1e-10
+    mr = np.asarray(r[5:9])
+    cas = case_code(m, st)
+    assert np.max(np.abs(ltratio_mom(4, cas, c, c0, g0, method="engine") / mr - 1)) < 1e-10
+    sc = np.maximum(np.abs(mr), np.abs(mr[1]) ** (np.arange(1, 5) / 2))
+    assert np.max(np.abs(ltratio_mom(4, cas, c, c0, g0) - mr) / sc) < (1e-9 if c >= -20 else 1e-8)
 
 
 @pytest.mark.parametrize("row", APP, ids=lambda row: row[0] + " " + " ".join(f"{v:g}" for v in row[1][:5]))
@@ -94,7 +100,11 @@ def test_applications(row):
     elif tag == "envelope":         # model alpha k c_1 P_1 ...
         c, P = pairs(3)
         cas = {1: "DK", 4: "DG"}[int(v[0])]
-        assert np.max(np.abs(power_envelope(c, cas, v[1]) - P)) < 1e-10
+        # (the stored values are those of the critical value bisected to 1e-9: method="engine" to 1e-10; the default in
+        # case DK, the single inversion of Bao and Kan with the critical value to 1e-12, moves by up to 1.2e-9, within
+        # 3e-12 of the general engine's envelope)
+        assert np.max(np.abs(power_envelope(c, cas, v[1], method="engine") - P)) < 1e-10
+        assert np.max(np.abs(power_envelope(c, cas, v[1]) - P)) < 5e-9
     elif tag == "adfmax":
         model, stat, c, x, F, f = v
         cas = ("S" if stat == 1 else "D") + "KUT"[int(model) - 1]

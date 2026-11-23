@@ -192,45 +192,147 @@ static int ptquantile(const qgrid_t *G, double p, double q0, double *qout, char 
     return 0;
 }
 static void gp_defaults(int *N, double *umax) { if (*N <= 0) *N = 60000; if (!(*umax > 0)) *umax = 4000; }
+/* the computation of the point-optimal functions (pt_method of DFDet_paper2.jl): method 0 (automatic) and
+ * DFL_METHOD_INVERSION the single inversion of Bao and Kan with the branch of the transform from the pivots and the tail
+ * completed by integration by parts (det_pt_cdf1 of dfl_det_kan.c), up to c = DFL_PT_INV_CMAX with method 0; DFL_METHOD_GRID,
+ * or N or umax given (> 0), the inversion of Gil-Pelaez on the fixed grid of N steps up to umax (60000 and 4000 by
+ * default; qgrid, ptF), the computation of before, with its refusals.  (PT_INV_CMAX: compared in November 2026 with the
+ * contour integral of the general engine on the statistic's quadratic form for an intercept at cbar = -7, a linear trend
+ * at -13.5, Perron's model B at -17.8 and a quadratic trend at -20, c from -30 to 7, the 1 to 99% points: within 3.3e-12,
+ * where the grid is off by up to 6e-8 or refuses above the unit root; beyond c = 4 one value can take seconds, and the grid
+ * with its refusal stays the default there) */
+static int pt_method(int method, int N, double umax, double c, int *grid, char *err, size_t errlen)
+{
+    if (!(method == 0 || method == DFL_METHOD_INVERSION || method == DFL_METHOD_GRID)) {
+        snprintf(err, errlen, "the point-optimal statistic: method must be 0 (automatic), %d (the single inversion of Bao and Kan) or %d (the fixed grid of Gil-Pelaez)", DFL_METHOD_INVERSION, DFL_METHOD_GRID);
+        return 1;
+    }
+    int given = N > 0 || umax > 0;
+    if (method == DFL_METHOD_INVERSION && given) { snprintf(err, errlen, "the point-optimal statistic: N and umax belong to method %d (the fixed grid)", DFL_METHOD_GRID); return 1; }
+    *grid = method == DFL_METHOD_GRID || (method == 0 && (given || !(c <= DFL_PT_INV_CMAX)));
+    return 0;
+}
+static int kan_tol(const char *fn, double tol, double *out, char *err, size_t errlen)
+{
+    if (isnan(tol) || tol == 0) { *out = DFL_KAN_TOL; return 0; }
+    if (!(tol > 0 && isfinite(tol))) { snprintf(err, errlen, "%s: tol must be a positive finite number (NaN or 0: the default %g)", fn, DFL_KAN_TOL); return 1; }
+    *out = tol; return 0;
+}
+/* the transform of the point-optimal statistic at c for the single inversion (the checks of qgrid; pt_transform) */
+static det_cf *pt_transform(const det_prep *P, double c, det_model *Mo, char *err, size_t errlen)
+{
+    if (!isfinite(c)) { snprintf(err, errlen, "the point-optimal statistic: c must be a finite real scalar"); return NULL; }
+    if (det_model_make(P, 0, 0.0, Mo, err, errlen)) return NULL;
+    det_cf *F = det_cf_new(Mo, c, 0);
+    if (!F) { det_model_free(Mo); snprintf(err, errlen, "out of memory"); }
+    return F;
+}
+static void pt_warn(const char *fn, int n, const double *E, double tol)
+{
+    int bad = 0; double mx = 0;
+    for (int k = 0; k < n; k++) if (!(E[k] <= tol)) { bad++; mx = isnan(E[k]) || E[k] > mx ? E[k] : mx; }
+    if (bad) det_warn("%s: the error estimate of the single inversion exceeds the tolerance %g at %d of %d points (largest %g); method %d gives the inversion on the fixed grid", fn, tol, bad, n, mx, DFL_METHOD_GRID);
+}
+int dfl_det_pt_x(int kind, const dfl_design *D, int n, const double *q, double cbar, double c, int method, int N, double umax, double tol, double *out, double *errest, char *err, size_t errlen)
+{
+    det_warn_clear();
+    if (kind != 1 && kind != 2) { snprintf(err, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
+    int grid; if (pt_method(method, N, umax, c, &grid, err, errlen)) return 1;
+    if (errest) for (int k = 0; k < n; k++) errest[k] = NAN;
+    if (grid) {
+        gp_defaults(&N, &umax);
+        det_prep *P; if (prep_pt(D, cbar, &P, err, errlen)) return 1;
+        qgrid_t G; int rc = qgrid(P, cbar, c, N, umax, &G, err, errlen);
+        if (!rc) {
+            /* (non-finite q: 0 at -Inf, 1 (cdf) or 0 (density) at Inf, NaN at NaN; |q| beyond the range of the grid an error) */
+            for (int k = 0; k < n && !rc; k++) { double F, f; rc = ptF(&G, q[k], &F, &f, err, errlen); out[k] = kind == 2 ? F : f; }
+            qgrid_free(&G);
+        }
+        det_prep_free(P);
+        return rc;
+    }
+    double tl; if (kan_tol(kind == 2 ? "pt_cdf" : "pt_pdf", tol, &tl, err, errlen)) return 1;
+    if (!isfinite(c)) { snprintf(err, errlen, "the point-optimal statistic: c must be a finite real scalar"); return 1; }
+    det_prep *P; if (prep_pt(D, cbar, &P, err, errlen)) return 1;
+    det_model Mo; det_cf *F = pt_transform(P, c, &Mo, err, errlen);
+    if (!F) { det_prep_free(P); return 1; }
+    double *E = malloc((n + 1) * sizeof(double));
+    int rc = 0;
+    for (int k = 0; k < n && !rc; k++) {
+        rc = kind == 2 ? det_pt_cdf1(F, cbar, q[k], tl, &out[k], &E[k]) : det_pt_pdf1(F, cbar, q[k], tl, &out[k], &E[k]);
+        if (rc) snprintf(err, errlen, "the point-optimal statistic: the single inversion failed at q = %g", q[k]);
+    }
+    if (!rc) { pt_warn(kind == 2 ? "pt_cdf" : "pt_pdf", n, E, tl); if (errest) memcpy(errest, E, n * sizeof(double)); }
+    free(E); det_cf_free(F); det_model_free(&Mo); det_prep_free(P);
+    return rc;
+}
 int dfl_det_pt(int kind, const dfl_design *D, int n, const double *q, double cbar, double c, int N, double umax, double *out, char *err, size_t errlen)
 {
-    det_warn_clear(); gp_defaults(&N, &umax);
-    if (kind != 1 && kind != 2) { snprintf(err, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
+    return dfl_det_pt_x(kind, D, n, q, cbar, c, 0, N, umax, NAN, out, NULL, err, errlen);
+}
+int dfl_det_pt_quantile_x(const dfl_design *D, double p, double cbar, int method, int N, double umax, double tol, double *q, double *errest, char *err, size_t errlen)
+{
+    det_warn_clear();
+    if (!(p > 0 && p < 1)) { snprintf(err, errlen, "pt_quantile: p must lie in (0, 1)"); return 1; }
+    int grid; if (pt_method(method, N, umax, 0.0, &grid, err, errlen)) return 1;
+    if (errest) *errest = NAN;
     det_prep *P; if (prep_pt(D, cbar, &P, err, errlen)) return 1;
-    qgrid_t G; int rc = qgrid(P, cbar, c, N, umax, &G, err, errlen);
-    if (!rc) {
-        /* (non-finite q: 0 at -Inf, 1 (cdf) or 0 (density) at Inf, NaN at NaN; |q| beyond the range of the grid an error) */
-        for (int k = 0; k < n && !rc; k++) { double F, f; rc = ptF(&G, q[k], &F, &f, err, errlen); out[k] = kind == 2 ? F : f; }
-        qgrid_free(&G);
+    int rc;
+    if (grid) {
+        gp_defaults(&N, &umax);
+        qgrid_t G; rc = qgrid(P, cbar, 0.0, N, umax, &G, err, errlen);
+        if (!rc) { rc = ptquantile(&G, p, 6.0, q, err, errlen); qgrid_free(&G); }
+    } else {
+        double tl, e; det_model Mo; det_cf *F = NULL;
+        rc = kan_tol("pt_quantile", tol, &tl, err, errlen) || !(F = pt_transform(P, 0.0, &Mo, err, errlen));
+        if (!rc) { rc = det_pt_quantile1(F, cbar, p, tl, q, &e, err, errlen); if (!rc && errest) *errest = e; det_cf_free(F); det_model_free(&Mo); }
     }
     det_prep_free(P);
     return rc;
 }
 int dfl_det_pt_quantile(const dfl_design *D, double p, double cbar, int N, double umax, double *q, char *err, size_t errlen)
 {
-    det_warn_clear(); gp_defaults(&N, &umax);
-    if (!(p > 0 && p < 1)) { snprintf(err, errlen, "pt_quantile: p must lie in (0, 1)"); return 1; }
+    return dfl_det_pt_quantile_x(D, p, cbar, 0, N, umax, NAN, q, NULL, err, errlen);
+}
+int dfl_det_pt_power_x(const dfl_design *D, double cbar, double c, double level, int method, int N, double umax, double tol, double *b, double *power, char *err, size_t errlen)
+{
+    det_warn_clear();
+    if (!(level > 0 && level < 1)) { snprintf(err, errlen, "pt_power: the level must lie in (0, 1)"); return 1; }
+    int grid; if (pt_method(method, N, umax, c, &grid, err, errlen)) return 1;
     det_prep *P; if (prep_pt(D, cbar, &P, err, errlen)) return 1;
-    qgrid_t G; int rc = qgrid(P, cbar, 0.0, N, umax, &G, err, errlen);
-    if (!rc) { rc = ptquantile(&G, p, 6.0, q, err, errlen); qgrid_free(&G); }
+    int rc;
+    if (grid) {
+        gp_defaults(&N, &umax);
+        qgrid_t G; rc = qgrid(P, cbar, 0.0, N, umax, &G, err, errlen);
+        if (!rc) {
+            rc = ptquantile(&G, level, 6.0, b, err, errlen); qgrid_free(&G);
+            if (!rc) rc = qgrid(P, cbar, c, N, umax, &G, err, errlen);
+            if (!rc) { double f; rc = ptF(&G, *b, power, &f, err, errlen); qgrid_free(&G); }
+        }
+    } else {
+        double tl, e; det_model M0, Mc; det_cf *F0 = NULL, *Fc = NULL;
+        rc = kan_tol("pt_power", tol, &tl, err, errlen);
+        if (!rc && !isfinite(c)) { snprintf(err, errlen, "the point-optimal statistic: c must be a finite real scalar"); rc = 1; }
+        if (!rc && !(F0 = pt_transform(P, 0.0, &M0, err, errlen))) rc = 1;
+        if (!rc) {
+            rc = det_pt_quantile1(F0, cbar, level, tl, b, &e, err, errlen);
+            det_cf_free(F0); det_model_free(&M0);
+            if (!rc && !(Fc = pt_transform(P, c, &Mc, err, errlen))) rc = 1;
+            if (!rc) {
+                rc = det_pt_cdf1(Fc, cbar, *b, tl, power, &e);
+                if (rc) snprintf(err, errlen, "pt_power: the single inversion failed at c = %g", c);
+                det_cf_free(Fc); det_model_free(&Mc);
+            }
+        }
+    }
     det_prep_free(P);
     return rc;
 }
 int dfl_det_pt_power(const dfl_design *D, double cbar, double c, double level, int N, double umax, double *b, double *power, char *err, size_t errlen)
 {
-    det_warn_clear(); gp_defaults(&N, &umax);
-    if (!(level > 0 && level < 1)) { snprintf(err, errlen, "pt_power: the level must lie in (0, 1)"); return 1; }
-    det_prep *P; if (prep_pt(D, cbar, &P, err, errlen)) return 1;
-    qgrid_t G; int rc = qgrid(P, cbar, 0.0, N, umax, &G, err, errlen);
-    if (!rc) {
-        rc = ptquantile(&G, level, 6.0, b, err, errlen); qgrid_free(&G);
-        if (!rc) rc = qgrid(P, cbar, c, N, umax, &G, err, errlen);
-        if (!rc) { double f; rc = ptF(&G, *b, power, &f, err, errlen); qgrid_free(&G); }
-    }
-    det_prep_free(P);
-    return rc;
+    return dfl_det_pt_power_x(D, cbar, c, level, 0, N, umax, NAN, b, power, err, errlen);
 }
-int dfl_det_pt_envelope(const dfl_design *D, int n, const double *cs, double level, int N, double umax, double *out, char *err, size_t errlen)
+int dfl_det_pt_envelope_x(const dfl_design *D, int n, const double *cs, double level, int method, int N, double umax, double tol, double *out, char *err, size_t errlen)
 {
     det_warn_clear();
     if (!(level > 0 && level < 1)) { snprintf(err, errlen, "pt_envelope: the level must lie in (0, 1)"); return 1; }
@@ -238,10 +340,14 @@ int dfl_det_pt_envelope(const dfl_design *D, int n, const double *cs, double lev
     for (int k = 0; k < n; k++) {
         if (!(cs[k] < 0)) { out[k] = isnan(cs[k]) ? NAN : level; continue; }   /* (NaN at NaN, as the classical envelope) */
         if (cs[k] == -INFINITY) { out[k] = 1.0; continue; }                     /* (the limit) */
-        double b; if (dfl_det_pt_power(D, cs[k], cs[k], level, N, umax, &b, &out[k], err, errlen)) { det_warn_hold(0); return 1; }
+        double b; if (dfl_det_pt_power_x(D, cs[k], cs[k], level, method, N, umax, tol, &b, &out[k], err, errlen)) { det_warn_hold(0); return 1; }
     }
     det_warn_hold(0);
     return 0;
+}
+int dfl_det_pt_envelope(const dfl_design *D, int n, const double *cs, double level, int N, double umax, double *out, char *err, size_t errlen)
+{
+    return dfl_det_pt_envelope_x(D, n, cs, level, 0, N, umax, NAN, out, err, errlen);
 }
 
 /* ---------------------------------------------------------------------------------------------------------------- */

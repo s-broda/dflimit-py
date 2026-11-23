@@ -204,6 +204,8 @@ def det_value(r, D):
         return d.pt_cdf(G, x, par, c)
     if fn == "ptcdfN":                               # (the field c0 carries the grid size N)
         return d.pt_cdf(G, x, par, c, N=int(c0))
+    if fn == "ptcdfG":                               # (the fixed grid of before)
+        return d.pt_cdf(G, x, par, c, method="grid")
     if fn == "ptpdf":
         return d.pt_pdf(G, x, par, c)
     if fn == "ptq":

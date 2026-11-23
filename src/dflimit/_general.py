@@ -16,8 +16,8 @@ import numpy as np
 
 from . import _engine
 from ._design import Design
-from ._route import gls_value, start_code, warn_lines
-from ._utils import Result, dfl_flag, dfl_num, dfl_posint, dfl_real, dfl_shape, f64, fill_doc
+from ._route import engine_of, gls_value, route_tuple, route_x, spec_of, start_code, warn_lines
+from ._utils import Result, dfl_flag, dfl_imethod, dfl_num, dfl_posint, dfl_real, dfl_shape, engine_call, f64, fill_doc
 
 # the operations of _engine.det (det_run in _engine.c)
 (DET_CDF, DET_PDF, DET_COEF_CDF, DET_COEF_PDF, DET_COEF_GP, DET_LIN_CDF, DET_LIN_PDF, DET_ADF_CDF, DET_ADF_PDF, DET_LPOW,
@@ -298,24 +298,44 @@ def dist_moments(D, c=0, *, p=4, c0=0, start=None, gamma0=0, gls=None, info=Fals
 
 
 @fill_doc(opts=OPTS_DOC, verified=VERIFIED_DOC)
-def coef_pdf(D, y, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False):
-    """Density of the limit of the coefficient statistic n(phi^ - phi0) for a design, by the general engine.
+def coef_pdf(D, y, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False, method="auto", engine="auto", tol=1e-12,
+             err=False):
+    """Density of the limit of the coefficient statistic n(phi^ - phi0) for a design or a classical case.
 
-    The limit is (U - c0 V)/V; its distribution function is `coef_cdf` with the design.
+    The limit is (U - c0 V)/V; its distribution function is `coef_cdf`. In the cases DK, DU, DT (zero or fixed start
+    ``gamma0``) and SK, SU, ST, and for a design that is one of them, the default (``method="auto"`` with
+    ``engine="auto"``, up to c = 20) is the single inversion of Yong Bao and Raymond Kan, "Exact Finite-Sample
+    Distribution and Moments of the Least Squares Estimator in First-Order Autoregressions: O(1) Algorithms": the
+    density of the ratio by the formula of Geary, one integral of the derivative of the joint characteristic function
+    along the ray, from jets, the tail completed by integration by parts (as ``coef_pdf`` of DFLimit.jl and of the
+    MATLAB programs). ``tol`` is its tolerance relative to the scale max(1, E[V]/sd(U)) of the density, and a warning
+    names the points at which the estimate exceeds it (``verified=True`` recomputes those by the general engine's checked
+    computation). ``method="inversion"`` forces it, ``method="engine"`` (and ``engine="general"``, case DG, the other
+    designs) is the general engine's density, the kernel of its contour integral. Near y = -c0, where the integrand
+    decays slowly, one value of the single inversion can take a second, with a warning.
 
     Parameters
     ----------
-    D : Design
-        The design.
+    D : Design or str
+        The design, or a case code (``"DK"``, ``"DU"``, ``"DT"``, ``"SK"``, ``"SU"``, ``"ST"``, ``"DG"``; the fixed start
+        of cases DK, DU, DT is ``gamma0``).
     y : array_like
         The points. ``-inf``, ``inf`` and ``nan`` give 0, 0 and ``nan``.
     {opts}
     {verified}
+    method : {"auto", "inversion", "engine"}, default "auto"
+        ``"inversion"`` forces the single inversion of Bao and Kan, ``"engine"`` the general engine.
+    engine : {"auto", "classical", "general"}, default "auto"
+        ``"classical"``: the six classical cases by the single inversion; ``"general"``: the general engine.
+    tol : float, default 1e-12
+        The tolerance of the single inversion.
+    err : bool, default False
+        If true, return the tuple (values, error estimates; ``nan`` where the general engine computed).
 
     Returns
     -------
     float or numpy.ndarray
-        The density at ``y``.
+        The density at ``y`` (with ``err=True`` the tuple of the values and their error estimates).
 
     See Also
     --------
@@ -326,8 +346,24 @@ def coef_pdf(D, y, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False)
     >>> from dflimit import coef_pdf, trend
     >>> coef_pdf(trend(0), [-12.0, -6.0])
     array([0.020277..., 0.079232...])
+    >>> float(coef_pdf("DK", -8.039))        # the density at the 5% critical value of rho
+    0.01463777932...
     """
-    return _values(DET_COEF_PDF, D, y, c, _opts(c0, start, gamma0, gls, verified), name="y")
+    S = spec_of(D, gamma0, start, gls)
+    e = engine_of(S, engine)
+    im = dfl_imethod(method, "coef_pdf")
+    ve = dfl_flag(verified, "verified")
+    a = dfl_real(y, "y")
+    flat = a.ravel()
+    out = np.where(np.isnan(flat), math.nan, 0.0)
+    eo = np.where(np.isfinite(flat), math.nan, 0.0)
+    fin = np.isfinite(flat)
+    if fin.any():
+        v, ev = route_x(4, route_tuple(S), flat[fin], dfl_num(c, "c"), dfl_num(c0, "c0"), e, im,
+                        math.nan if tol is None else dfl_num(tol, "tol"), ve)
+        out[fin] = v
+        eo[fin] = ev
+    return (dfl_shape(out, a), dfl_shape(eo, a)) if err else dfl_shape(out, a)
 
 
 @fill_doc(opts=OPTS_DOC)
@@ -367,28 +403,42 @@ def coef_quantile(D, p, c=0, *, y0=-10, tol=1e-9, c0=0, start=None, gamma0=0, gl
 
 
 @fill_doc(opts=OPTS_DOC)
-def coef_cdf_gp(D, y, c=0, *, c0=0, start=None, gamma0=0, gls=None, N=60000, umax=4000):
+def coef_cdf_gp(D, y, c=0, *, c0=0, start=None, gamma0=0, gls=None, N=None, umax=None, method="auto", tol=1e-12,
+                err=False):
     """Distribution function of the limit of the coefficient statistic by the inversion formula of Gil-Pelaez.
 
-    P[(U - c0 V)/V <= y] = P[U - (c0 + y) V <= 0] from the characteristic function on the trapezoidal rule in u =
-    sinh(v) with ``N`` steps up to ``umax`` (a check of `coef_cdf`, which inverts on paths around the roots).
+    P[(U - c0 V)/V <= y] = P[U - (c0 + y) V <= 0] from the characteristic function (a check of `coef_cdf`, which
+    inverts on paths around the roots). By default (a zero or stationary start, up to c = 5) the single inversion of
+    Yong Bao and Raymond Kan, "Exact Finite-Sample Distribution and Moments of the Least Squares Estimator in First-Order
+    Autoregressions: O(1) Algorithms", for the general engine's transform, with the branch of the square root of its
+    determinant fixed at each point from the pivots of the precision matrix and the tail completed by integration by
+    parts; a warning names the points at which the error estimate exceeds ``tol``. ``method="grid"`` (and ``N`` or
+    ``umax`` given, a fixed start, c above 5) is the trapezoidal rule of before in u = sinh(v) with ``N`` steps (60000)
+    up to ``umax`` (4000), refused where the grid does not resolve the singularity of the transform nearest the real
+    line.
 
     Parameters
     ----------
     D : Design
         The design.
     y : array_like
-        The points (finite).
+        The points. ``-inf``, ``inf`` and ``nan`` give 0, 1 and ``nan``.
     {opts}
-    N : int, default 60000
-        The number of steps.
-    umax : float, default 4000
-        The end of the grid.
+    N : int, optional
+        The number of steps of the fixed grid (60000 where it computes); given, it chooses the grid.
+    umax : float, optional
+        The end of the grid (4000); given, it chooses the grid.
+    method : {"auto", "inversion", "grid"}, default "auto"
+        ``"inversion"`` forces the single inversion of Bao and Kan, ``"grid"`` the fixed grid.
+    tol : float, default 1e-12
+        The absolute tolerance of the single inversion.
+    err : bool, default False
+        If true, return the tuple (values, error estimates; ``nan`` on the fixed grid).
 
     Returns
     -------
     float or numpy.ndarray
-        The distribution function at ``y``.
+        The distribution function at ``y`` (with ``err=True`` the tuple of the values and their error estimates).
 
     See Also
     --------
@@ -400,8 +450,16 @@ def coef_cdf_gp(D, y, c=0, *, c0=0, start=None, gamma0=0, gls=None, N=60000, uma
     >>> coef_cdf_gp(trend(0), -14.0936)      # 0.05
     0.04999988...
     """
-    return _values(DET_COEF_GP, D, y, c, _opts(c0, start, gamma0, gls), dfl_posint(N, "N"), dfl_num(umax, "umax"),
-                   name="y", cdf=True)
+    a = dfl_real(y, "y")
+    flat = a.ravel()
+    out = np.where(np.isnan(flat), math.nan, np.where(flat > 0, 1.0, 0.0))
+    eo = np.where(np.isfinite(flat), math.nan, 0.0)
+    fin = np.isfinite(flat)
+    if fin.any():
+        v, ev = _ptx(DET_COEF_GP, D, flat[fin], c, _opts(c0, start, gamma0, gls), method, N, umax, tol, name="y")
+        out[fin] = v
+        eo[fin] = ev
+    return (dfl_shape(out, a), dfl_shape(eo, a)) if err else dfl_shape(out, a)
 
 
 def local_power(D, cs, *, level=0.05, statistic="tratio", c0=0, start=None, gamma0=0, gls=None):
@@ -729,14 +787,52 @@ def region_prob(D, bnd, c=0, *, start=None, gamma0=0, gls=None):
 # the companions: the point-optimal statistic, the LM statistic, MZ_alpha, MSB
 # ---------------------------------------------------------------------------------------------------------------------
 GP_DOC = """\
-N : int, default 60000
-    The number of steps of the trapezoidal rule of the inversion formula of Gil-Pelaez (in u = sinh(v)).
-umax : float, default 4000
-    The end of its grid."""
+N : int, optional
+    The number of steps of the fixed grid of the inversion formula of Gil-Pelaez (in u = sinh(v); 60000 where the grid
+    computes); given, it chooses the grid.
+umax : float, optional
+    The end of that grid (4000); given, it chooses the grid.
+method : {"auto", "inversion", "grid"}, default "auto"
+    ``"auto"``: the single inversion of Bao and Kan up to c = 4, the fixed grid beyond (see `pt_cdf`).
+tol : float, default 1e-12
+    The absolute tolerance of the single inversion."""
+
+_PTMETHODS = {"auto": 0, "inversion": 5, "grid": 7}
+
+
+def _ptmethod(method):
+    """The method of the point-optimal functions and coef_cdf_gp: "auto" 0, "inversion" 5, "grid" 7."""
+    msg = 'method must be "auto", "inversion" (the single inversion of Bao and Kan) or "grid" (the fixed grid of Gil-Pelaez)'
+    if not isinstance(method, str):
+        raise TypeError(msg)
+    m = _PTMETHODS.get(method.lower())
+    if m is None:
+        raise ValueError(msg)
+    return m
+
+
+def _ptx(op, D, x, c, opts, method, N, umax, tol, *par, name="x"):
+    """The values and the error estimates of the point-optimal functions and coef_cdf_gp (_engine.det_x) at the points
+    x, in the shape of x (the flat values for DET_PT_POW)."""
+    a = dfl_real(x, name)
+    Nv = 0 if N is None else dfl_posint(N, "N")
+    uv = 0.0 if umax is None else dfl_num(umax, "umax")
+    tv = math.nan if tol is None else dfl_num(tol, "tol")
+    out, eo, w = engine_call(_engine.det_x, op, _design(D), np.ascontiguousarray(a.ravel(), dtype=np.float64).tobytes(),
+                             dfl_num(c, "c"), opts, _ptmethod(method), Nv, uv, tv, *[float(p) for p in par])
+    warn_lines(w)
+    out, eo = f64(out).copy(), f64(eo).copy()
+    if op == DET_PT_POW:
+        return out, eo
+    return dfl_shape(out, a), dfl_shape(eo, a)
+
+
+def _err(r, err):
+    return r if err else r[0]
 
 
 @fill_doc(gp=GP_DOC)
-def pt_cdf(D, q, cbar, c=0, *, N=60000, umax=4000):
+def pt_cdf(D, q, cbar, c=0, *, N=None, umax=None, method="auto", tol=1e-12, err=False):
     """Limiting distribution of the point-optimal statistic of Elliott, Rothenberg and Stock for a design.
 
     P(P_T <= q), P_T = {S(abar) - abar S(1)}/s^2 the point-optimal statistic against cbar (abar = 1 + cbar/n, S(a)
@@ -744,10 +840,19 @@ def pt_cdf(D, q, cbar, c=0, *, N=60000, umax=4000):
     way), under phi = 1 + c/n, zero start, by one inversion of the characteristic function of its limit, a quadratic
     form. The test rejects for small values.
 
-    The inversion is the trapezoidal rule of Gil-Pelaez on a grid of ``N`` steps in u = sinh(v) up to ``umax``. Where
-    that grid does not resolve the transform (its singularity near the real line, far above the unit root: with a
-    linear trend at cbar = -13.5 from c = 3.7) the functions of the point-optimal statistic raise a ``ValueError`` that
-    names the ``N`` that would serve, and so they do at |q| beyond 0.15 N/asinh(umax) (1000 with the default grid).
+    By default (``method="auto"``, up to c = 4) the inversion is the single inversion of Yong Bao and Raymond Kan,
+    "Exact Finite-Sample Distribution and Moments of the Least Squares Estimator in First-Order Autoregressions: O(1)
+    Algorithms": adaptive quadrature over decades along the real axis, with the branch of the square root of the
+    determinant fixed at each point from the pivots of the precision matrix, and the tail completed by integration by
+    parts (as ``pt_cdf`` of DFLimit.jl and of the MATLAB programs); a warning names the points at which the error
+    estimate exceeds ``tol``, and the quantiles are found by regula falsi on it with the values of the transform along
+    the ray kept across the search. Above c = 4, with ``method="grid"`` and wherever ``N`` or ``umax`` is given, the
+    inversion is that of before, the trapezoidal rule of Gil-Pelaez on a grid of ``N`` steps in u = sinh(v) up to
+    ``umax``. Where that grid does not resolve the transform (its singularity near the real line, far above the unit
+    root: with a linear trend at cbar = -13.5 from c = 3.7) the functions of the point-optimal statistic raise a
+    ``ValueError`` that names the ``N`` that would serve, and so they do at |q| beyond 0.15 N/asinh(umax) (1000 with
+    the default grid); `pt_power` and `pt_envelope` take the grid for the critical value too where the alternative c is
+    above 4.
 
     Parameters
     ----------
@@ -760,11 +865,13 @@ def pt_cdf(D, q, cbar, c=0, *, N=60000, umax=4000):
     c : float, default 0
         The local-to-unity parameter.
     {gp}
+    err : bool, default False
+        If true, return the tuple (values, error estimates; ``nan`` on the fixed grid).
 
     Returns
     -------
     float or numpy.ndarray
-        The probabilities at ``q``.
+        The probabilities at ``q`` (with ``err=True`` the tuple of the values and their error estimates).
 
     See Also
     --------
@@ -776,12 +883,11 @@ def pt_cdf(D, q, cbar, c=0, *, N=60000, umax=4000):
     >>> pt_cdf(trend(1), [4.0, 7.0], -13.5)      # the trend case at cbar = -13.5
     array([0.009748..., 0.100187...])
     """
-    return _values(DET_PT_CDF, D, q, c, _NOOPTS, dfl_num(cbar, "cbar"), dfl_posint(N, "N"), dfl_num(umax, "umax"),
-                   name="q")
+    return _err(_ptx(DET_PT_CDF, D, q, c, _NOOPTS, method, N, umax, tol, dfl_num(cbar, "cbar"), name="q"), err)
 
 
 @fill_doc(gp=GP_DOC)
-def pt_pdf(D, q, cbar, c=0, *, N=60000, umax=4000):
+def pt_pdf(D, q, cbar, c=0, *, N=None, umax=None, method="auto", tol=1e-12, err=False):
     """Limiting density of the point-optimal statistic for a design (arguments as `pt_cdf`).
 
     Parameters
@@ -795,11 +901,13 @@ def pt_pdf(D, q, cbar, c=0, *, N=60000, umax=4000):
     c : float, default 0
         The local-to-unity parameter.
     {gp}
+    err : bool, default False
+        If true, return the tuple (values, error estimates; ``nan`` on the fixed grid).
 
     Returns
     -------
     float or numpy.ndarray
-        The density at ``q``.
+        The density at ``q`` (with ``err=True`` the tuple of the values and their error estimates).
 
     Examples
     --------
@@ -807,13 +915,14 @@ def pt_pdf(D, q, cbar, c=0, *, N=60000, umax=4000):
     >>> pt_pdf(trend(1), 7.0, -13.5)
     0.0...
     """
-    return _values(DET_PT_PDF, D, q, c, _NOOPTS, dfl_num(cbar, "cbar"), dfl_posint(N, "N"), dfl_num(umax, "umax"),
-                   name="q")
+    return _err(_ptx(DET_PT_PDF, D, q, c, _NOOPTS, method, N, umax, tol, dfl_num(cbar, "cbar"), name="q"), err)
 
 
 @fill_doc(gp=GP_DOC)
-def pt_quantile(D, p, cbar, *, N=60000, umax=4000):
+def pt_quantile(D, p, cbar, *, N=None, umax=None, method="auto", tol=1e-12):
     """Quantiles at c = 0 of the limit of the point-optimal statistic against cbar: the critical values.
+
+    By default regula falsi on the single inversion of Bao and Kan (see `pt_cdf`); with the fixed grid Newton's method.
 
     Parameters
     ----------
@@ -836,11 +945,11 @@ def pt_quantile(D, p, cbar, *, N=60000, umax=4000):
     >>> pt_quantile(trend(1), 0.05, -13.5)    # (5.62 in the simulated table of Elliott, Rothenberg and Stock, 1996)
     5.704481...
     """
-    return _quantiles(DET_PT_Q, D, p, 0.0, _NOOPTS, dfl_num(cbar, "cbar"), dfl_posint(N, "N"), dfl_num(umax, "umax"))
+    return _ptx(DET_PT_Q, D, p, 0.0, _NOOPTS, method, N, umax, tol, dfl_num(cbar, "cbar"), name="p")[0]
 
 
 @fill_doc(gp=GP_DOC)
-def pt_power(D, cbar, c, *, level=0.05, N=60000, umax=4000):
+def pt_power(D, cbar, c, *, level=0.05, N=None, umax=None, method="auto", tol=1e-12):
     """The critical value of the level-``level`` point-optimal test against cbar and its limiting power at c.
 
     Parameters
@@ -867,17 +976,18 @@ def pt_power(D, cbar, c, *, level=0.05, N=60000, umax=4000):
     >>> round(power, 4)
     0.3101
     """
-    out = _call(DET_PT_POW, D, np.empty(1), dfl_num(c, "c"), _NOOPTS, dfl_num(cbar, "cbar"), dfl_num(level, "level"),
-                dfl_posint(N, "N"), dfl_num(umax, "umax"))
+    out, _ = _ptx(DET_PT_POW, D, np.empty(1), dfl_num(c, "c"), _NOOPTS, method, N, umax, tol, dfl_num(cbar, "cbar"),
+                  dfl_num(level, "level"))
     return float(out[0]), float(out[1])
 
 
 @fill_doc(gp=GP_DOC)
-def pt_envelope(D, cs, *, level=0.05, N=60000, umax=4000):
+def pt_envelope(D, cs, *, level=0.05, N=None, umax=None, method="auto", tol=1e-12):
     """The Gaussian power envelope for a design: the power at c of the point-optimal test against cbar = c.
 
     ``level`` for c >= 0. For no deterministic terms, an intercept and a linear trend it is `power_envelope` (to
-    1e-8); `power_envelope` with any other design is this function.
+    1e-8); `power_envelope` with any other design is this function. By default by the single inversion of Bao and Kan
+    up to c = 4 (see `pt_cdf`).
 
     Parameters
     ----------
@@ -904,8 +1014,7 @@ def pt_envelope(D, cs, *, level=0.05, N=60000, umax=4000):
     >>> pt_envelope(perron("C", 0.3), [-5.0, -10.0, 1.0])
     array([0.081798..., 0.178810..., 0.05    ...])
     """
-    return _values(DET_PT_ENV, D, cs, 0.0, _NOOPTS, dfl_num(level, "level"), dfl_posint(N, "N"), dfl_num(umax, "umax"),
-                   name="cs")
+    return _ptx(DET_PT_ENV, D, cs, 0.0, _NOOPTS, method, N, umax, tol, dfl_num(level, "level"), name="cs")[0]
 
 
 def lm_cdf(D, x, c=0):

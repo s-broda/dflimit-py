@@ -191,6 +191,11 @@ cdouble det_dval_st(det_work *W, double c, cdouble s, cdouble t);   /* Dval of t
 int det_logmgf_tpart(det_work *W, double c, cdouble t, cdouble *th, det_fixt *fx);
 void det_logmgf_spart(det_work *W, double c, cdouble s, cdouble t, cdouble th, const det_fixt *fx, cdouble *l0, cdouble *ld);
 int det_tstar(const det_model *Mo, double c, double *ts, int *mult, char *err, size_t errlen);
+/* log det(I - 2 Q Sigma) at (s, t) with its continuous argument from the pivots of K^T = Sigma_x^{-1} M^T and of Sigma (the
+ * branch of Bao and Kan; W holds Sigma, and Sigma_x with a stationary start, for t: det_logmgf_tpart or det_mgfparts); K, Sl
+ * of N x N, Sc of N0 x N0 complex entries and piv of N ints are the caller's work space; W->M is overwritten */
+cdouble det_detlog_piv(det_work *W, double c, cdouble s, cdouble t, cdouble th, cdouble *K, cdouble *Sl, cdouble *Sc, int *piv);
+
 /* the two largest eigenvalues of the Nystrom estimates (eigtop, eigtop_q) */
 int det_eigtop(const det_prep *P, double c, int m, int stat, double *l1, double *l2);
 int det_eigtop_q(const det_prep *P, double c, int m, double *l1, double *l2);
@@ -251,6 +256,25 @@ int det_contour_eval(const det_path *CP, int nx, const double *xs, double c0, in
 int det_contour_eval_specs(const det_path *CP, int ne, const int *nt, const det_xspec *specs, const det_eval_opts *o,
                            double *F, double *f, double *eF, double *ef, char *err, size_t errlen);
 double det_vsum(const det_path *CP, double y, int cdf);
+
+/* ---- the devices of Bao and Kan for the general engine (dfl_det_kan.c; src/DFKan_det.jl) ----
+ * The transform of a model with a zero or stationary start at c with the branch of the square root of its determinant from
+ * the pivots (det_detlog_piv): log E exp(i t1 A + i t2 B), A = U - cV, B = V, and the single inversion of the point-optimal
+ * statistic (Q = U + 1/2 + cbar^2 V of the model of prep_pt) and of the coefficient statistic (coef_cdf_gp) with the
+ * generic inversion of dfl_kan.c.  One work space: one per thread.  memo 1 keeps the values along one ray (the quantile
+ * searches). */
+typedef struct det_cf det_cf;
+struct dfl_kcf;
+det_cf *det_cf_new(const det_model *Mo, double c, int memo);
+void det_cf_free(det_cf *F);
+void det_cf_memo(det_cf *F, int on);
+cdouble det_cf_logcf(det_cf *F, double t1, double t2);
+void det_cf_scale(det_cf *F, double *out);
+struct dfl_kcf *det_cf_kcf(det_cf *F);
+int det_pt_cdf1(det_cf *F, double cbar, double q, double tol, double *P, double *e);
+int det_pt_pdf1(det_cf *F, double cbar, double q, double tol, double *f, double *e);
+int det_pt_quantile1(det_cf *F, double cbar, double p, double tol, double *q, double *e, char *err, size_t errlen);
+int det_gcoef_cdf1(det_cf *F, double y, double c0, double tol, double *P, double *e);
 
 /* ---- the line integral with the explicit kernel for the designs of rank one or two (dfl_det_line.c) ---- */
 typedef struct dfl_prov dfl_prov;

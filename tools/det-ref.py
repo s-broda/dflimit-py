@@ -27,6 +27,7 @@ KEEP = {
     "coefgp": {2},
     "env": {1},
     "ptcdf": {1, 2, 3},
+    "ptcdfG": {1, 2, 3},
     "ptpdf": {1, 2, 3},
     "mzacdf": {3},
     "msbcdf": {3, 5},

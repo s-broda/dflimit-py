@@ -417,6 +417,48 @@ void det_logmgf_spart(det_work *W, double c, cdouble s, cdouble t, cdouble th, c
     *ld = det_clogdet(W->N0, W->M, odd); *l0 = cadd(base, extra);
 }
 
+/* ---------------------------------------------------------------------------------------------------------------- */
+/* The branch of the square root of the determinant at each point (detlog of src/DFKan_det.jl), after Bao and Kan, "Exact
+ * Finite-Sample Distribution and Moments of the Least Squares Estimator in First-Order Autoregressions: O(1) Algorithms":
+ * det(I - 2 Q Sigma) = det(K) det(Sigma) with K = Sigma^{-1} - 2 Q the precision matrix of the functionals under the tilt.
+ * Both have a positive definite Hermitian part where (Re s, Re t) lies in the domain of convergence, in particular for
+ * imaginary (s, t) (A and B are real symmetric, so that an imaginary (s, t) adds a skew-Hermitian part only), for any
+ * design, start and detrending; elimination without pivoting of such a matrix has every pivot in the open right half-plane
+ * (each is a Schur complement of order one), so that the logarithm of the determinant with its continuous argument is the
+ * sum of the principal logarithms of the pivots.  With a stationary start det Sigma_x = v det Sigma, v = -1/(2c) > 0. */
+/* the sum of the principal logarithms of the pivots of Gaussian elimination without pivoting (A, n x n column-major, is
+ * overwritten) */
+static cdouble pivlogs(int n, cdouble *A)
+{
+    cdouble s = DZERO;
+    for (int k = 0; k < n; k++) {
+        cdouble p = A[k + (size_t) k * n], ip = cinv(p);
+        s = cadd(s, clog(p));
+        for (int i = k + 1; i < n; i++) {
+            cdouble l = cmul(A[i + (size_t) k * n], ip);
+            if (creal(l) == 0 && cimag(l) == 0) continue;
+            for (int j = k + 1; j < n; j++) A[i + (size_t) j * n] = csub(A[i + (size_t) j * n], cmul(l, A[k + (size_t) j * n]));
+        }
+    }
+    return s;
+}
+cdouble det_detlog_piv(det_work *W, double c, cdouble s, cdouble t, cdouble th, cdouble *K, cdouble *Sl, cdouble *Sc, int *piv)
+{
+    const det_model *Mo = W->Mo;
+    int stat = Mo->start == 2, n = stat ? W->N : W->N0, N0 = W->N0, odd;
+    if (stat) buildMx(W, c, s, t, th); else buildM(W, c, s, t, th);
+    const cdouble *Sx = stat ? W->Sx : W->S, *M = W->M;
+    /* K^T = Sigma_x^{-1} M^T (Sigma_x is complex symmetric); the pivots of K^T without pivoting are those of K */
+    for (int j = 0; j < n; j++) for (int i = 0; i < n; i++) K[i + (size_t) j * n] = M[j + (size_t) i * n];
+    memcpy(Sl, Sx, (size_t) n * n * sizeof(cdouble));
+    det_clu(n, Sl, piv, &odd);
+    for (int j = 0; j < n; j++) det_csolve(n, Sl, piv, K + (size_t) j * n);
+    cdouble ld = pivlogs(n, K);
+    memcpy(Sc, W->S, (size_t) N0 * N0 * sizeof(cdouble));
+    ld = cadd(ld, pivlogs(N0, Sc));
+    return stat ? caddr(ld, log(-1 / (2 * c))) : ld;
+}
+
 /* =====================================================================================================================
  * t_* = sup{t: E e^{tV} < inf}, the first zero of D_V(t) on the positive real axis
  * ===================================================================================================================== */

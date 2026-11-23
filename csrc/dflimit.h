@@ -323,6 +323,19 @@ int dfl_vgrid(double c, double tail, int *N, double *umax, char *err, size_t err
  * NaN (power_envelope of DFExact.jl) */
 int dfl_power_envelope(int n, const double *c, int model, double alpha, const dfl_gp_opts *o, double *out, char *err, size_t errlen);
 
+/* ---- the devices of Bao and Kan (dfl_kan.c, dfl_det_kan.c; the module DFKan of DFLimit.jl) ----
+ * Yong Bao and Raymond Kan, "Exact Finite-Sample Distribution and Moments of the Least Squares Estimator in First-Order
+ * Autoregressions: O(1) Algorithms": the joint characteristic function of the limit pair (U, V) of the six classical cases
+ * in closed forms free of cancellation on both sides of the unit root, with the branch of the square root fixed at each
+ * point, in Taylor-mode arithmetic (jets); a statistic that rejects on a half-plane by one inversion along a ray, adaptive
+ * quadrature over decades with the tail completed by repeated integration by parts from a jet of order eight; the moments
+ * of the t-ratio from one jet per node; and for the general engine the branch of the square root of its determinant from
+ * the pivots of the precision matrix.  The router's functions take them by default where they are checked (below). */
+#define DFL_KAN_TOL 1e-12      /* the default absolute tolerance of each value of the single inversion (TOL of DFKan) */
+#define DFL_INV_CMAX 20.0      /* the largest c at which the single inversion (and the moments from jets) is the default (INV_CMAX) */
+#define DFL_PT_INV_CMAX 4.0    /* the same for the point-optimal statistic of the general engine (PT_INV_CMAX) */
+#define DFL_GP_INV_CMAX 5.0    /* and for its coefficient statistic by Gil-Pelaez (GP_INV_CMAX) */
+
 /* ---- the user-level entry points (dfl_api.c) ---- */
 /* the validation shared by the entry points (and dfl_moments): the model, c (finite, at least DFL_CMIN), c0, g0, the start */
 int dfl_check_args(int model, double c, double c0, double g0, bool stat, char *err, size_t errlen);
@@ -484,6 +497,12 @@ int dfl_det_quantile(const dfl_design *D, int n, const double *p, double c, doub
 int dfl_det_coef(int kind, const dfl_design *D, int n, const double *y, double c, const dfl_det_opts *o, double *out, char *err, size_t errlen);
 int dfl_det_coef_quantile(const dfl_design *D, int n, const double *p, double c, double y0, double tol, const dfl_det_opts *o, double *q, char *err, size_t errlen);
 int dfl_det_coef_cdf_gp(const dfl_design *D, int n, const double *y, double c, const dfl_det_opts *o, int N, double umax, double *out, char *err, size_t errlen);
+/* coef_cdf_gp by default (a zero or stationary start, c <= DFL_GP_INV_CMAX) the single inversion of Bao and Kan with the
+ * branch of the square root of the determinant from the pivots at each point, tol (NaN or 0: 1e-12) its absolute
+ * tolerance, errest (may be NULL) its estimates; method DFL_METHOD_GRID (or N, umax > 0, or a fixed start) the fixed grid
+ * of before with its refusal, DFL_METHOD_INVERSION forces the single inversion; a warning names the points whose estimate
+ * exceeds the tolerance */
+int dfl_det_coef_cdf_gp_x(const dfl_design *D, int n, const double *y, double c, const dfl_det_opts *o, int method, int N, double umax, double tol, double *out, double *errest, char *err, size_t errlen);
 /* the moments E tau^k, k = 1..pmax, and the differences to the rule of twice the step (dist_moments; errest may be NULL) */
 int dfl_det_moments(const dfl_design *D, double c, int pmax, const dfl_det_opts *o, double *m, double *errest, char *err, size_t errlen);
 /* the asymptotic local power at c[0..n-1] of the level test of phi = 1 + c0/n (statistic 0: the t-ratio, 1: the
@@ -501,12 +520,22 @@ int dfl_det_adfmax_quantile(const dfl_design *D, double p, double c, double x0, 
 /* P{U <= g(V)}: type 1 the line g(v) = par[1] + par[0] v, type 2 the parabola par[0] sqrt(v) + par[1] v (region_prob) */
 int dfl_det_region(const dfl_design *D, int type, const double *par, double c, const dfl_det_opts *o, double *out, char *err, size_t errlen);
 /* the companions: the point-optimal statistic against cbar and its envelope (pt_cdf, pt_pdf, pt_quantile, pt_power,
- * pt_envelope; zero start, Gil-Pelaez with N steps to umax: 0 for 60000, 4000), the LM statistic (lm_cdf, lm_quantile,
- * lm_power), MZ_alpha and MSB with the data GLS-detrended at gls (mza_cdf, mza_quantile, msb_cdf, msb_quantile) */
+ * pt_envelope; zero start; by default the single inversion of Bao and Kan up to c = DFL_PT_INV_CMAX, the inversion of
+ * Gil-Pelaez on a grid of N steps to umax beyond or where N or umax is given (0 for 60000, 4000)), the LM statistic (lm_cdf,
+ * lm_quantile, lm_power), MZ_alpha and MSB with the data GLS-detrended at gls (mza_cdf, mza_quantile, msb_cdf, msb_quantile) */
 int dfl_det_pt(int kind, const dfl_design *D, int n, const double *q, double cbar, double c, int N, double umax, double *out, char *err, size_t errlen);
 int dfl_det_pt_quantile(const dfl_design *D, double p, double cbar, int N, double umax, double *q, char *err, size_t errlen);
 int dfl_det_pt_power(const dfl_design *D, double cbar, double c, double level, int N, double umax, double *b, double *power, char *err, size_t errlen);
 int dfl_det_pt_envelope(const dfl_design *D, int n, const double *cs, double level, int N, double umax, double *out, char *err, size_t errlen);
+/* the same with the method (pt_method): 0 automatic, the single inversion of Bao and Kan up to c = DFL_PT_INV_CMAX (the
+ * branch of the transform from the pivots, the tail completed by integration by parts, no limit on q; regula falsi for the
+ * quantiles with the values along the ray kept), the fixed grid beyond and where N or umax is given (> 0); DFL_METHOD_GRID
+ * the grid of before with its refusals; DFL_METHOD_INVERSION forces the single inversion; tol (NaN or 0: 1e-12), errest
+ * (may be NULL) the estimates (NaN on the grid); a warning names the points whose estimate exceeds the tolerance */
+int dfl_det_pt_x(int kind, const dfl_design *D, int n, const double *q, double cbar, double c, int method, int N, double umax, double tol, double *out, double *errest, char *err, size_t errlen);
+int dfl_det_pt_quantile_x(const dfl_design *D, double p, double cbar, int method, int N, double umax, double tol, double *q, double *errest, char *err, size_t errlen);
+int dfl_det_pt_power_x(const dfl_design *D, double cbar, double c, double level, int method, int N, double umax, double tol, double *b, double *power, char *err, size_t errlen);
+int dfl_det_pt_envelope_x(const dfl_design *D, int n, const double *cs, double level, int method, int N, double umax, double tol, double *out, char *err, size_t errlen);
 int dfl_det_lm_cdf(const dfl_design *D, int n, const double *x, double c, double *out, char *err, size_t errlen);
 int dfl_det_lm_quantile(const dfl_design *D, double p, double c, double *q, char *err, size_t errlen);
 int dfl_det_lm_power(const dfl_design *D, int n, const double *cs, double level, double *q, double *out, char *err, size_t errlen);
@@ -553,15 +582,54 @@ int dfl_autoengine(int f, int model, int stat, double g0, double gls, double c, 
 int dfl_engine_dist(int kind, int n, const double *x, const dfl_spec *S, double c, double c0, int engine, int method, int verified, double *out, char *err, size_t errlen);
 /* its p-quantiles to tol (1e-10) */
 int dfl_engine_icdf(int n, const double *p, const dfl_spec *S, double c, double c0, int engine, int method, double tol, double *q, char *err, size_t errlen);
-/* its moments E t^k, k = 1..pmax */
+/* The single inversion of Bao and Kan and the moments from jets in the router (dfl_det_route.c; inv_* of merged.jl): the
+ * coefficient statistic (dfl_engine_coef, dfl_engine_coef_icdf, dfl_engine_coef_pdf, dfl_engine_coef_mom), the linear form
+ * (dfl_engine_lincdf), the power envelope (dfl_engine_envelope) and the moments of the t-ratio (dfl_engine_mom) take them by
+ * default (method 0 with engine auto) in the six classical cases DK, DU, DT (zero or fixed start), SK, SU, ST, up to
+ * c = DFL_INV_CMAX, within the regions of the functions below; the functions without the suffix _x are those with the
+ * default options.  The options (dfl_inv_opts; NULL: the defaults): method 0 (automatic), DFL_METHOD_INVERSION (forces the
+ * single inversion, the jets for the moments: an error with engine general or another case), DFL_METHOD_ENGINE (the
+ * engines' computation of before, which reproduces those values; also engine classical or general and case DG), and for
+ * the coefficient statistic's distribution function and quantiles 1, 2, 3, DFL_METHOD_PATHS the representations of the
+ * t-ratio (the engines); tol the absolute tolerance of each value (NaN or 0: DFL_KAN_TOL; for the moments the relative
+ * tolerance of the quadrature, 1e-10); verified 1 recomputes by the engines' checked computation the values whose error
+ * estimate exceeds the tolerance, otherwise the warning of the call (dfl_det_warning) names them.  errest (may be NULL):
+ * the error estimate of each value (NaN where the engines computed). */
+#define DFL_METHOD_INVERSION 5
+#define DFL_METHOD_ENGINE 6
+#define DFL_METHOD_GRID 7       /* the fixed grid of the general engine (the point-optimal statistic, coef_cdf_gp) */
+typedef struct { int method; double tol; int verified; } dfl_inv_opts;
+void dfl_inv_defaults(dfl_inv_opts *o);
+/* whether the single inversion computes a call of the coefficient statistic, the linear form (a classical case) or the
+ * moments with these arguments (the rule of inv_take; for the wrappers, which give the warnings of the classical engine's
+ * brittle regimes only where it computes) */
+int dfl_inv_takes(const dfl_spec *S, double c, double c0, int engine, int method);
+/* the moments E t^k, k = 1..pmax: by default from one jet per node (c <= DFL_INV_CMAX and pmax <= 31 in the classical
+ * cases; the engines' circles elsewhere and with DFL_METHOD_ENGINE) */
 int dfl_engine_mom(int pmax, const dfl_spec *S, double c, double c0, int engine, double *m, char *err, size_t errlen);
-/* the coefficient statistic: distribution function at y and its p-quantiles to tol (1e-9) */
+int dfl_engine_mom_x(int pmax, const dfl_spec *S, double c, double c0, int engine, const dfl_inv_opts *io, double *m, double *errest, char *err, size_t errlen);
+/* the coefficient statistic (U - c0 V)/V: distribution function at y, by default the single inversion (the engines: the
+ * t-ratio at 0 with the null value c0 + y); its p-quantiles to the width tol (1e-9), by default regula falsi on the single
+ * inversion (errest: the estimate of the distribution function at the quantile divided by the density); its density, by
+ * default the single inversion (also with engine classical; the engines: the general engine's density); its moments
+ * E[{(U - c0 V)/V}^j], j = 1..pmax, from jets (the cases DK, DU, DT, SK, SU, ST, c <= DFL_INV_CMAX with method 0; the
+ * engines have none) */
 int dfl_engine_coef(int n, const double *y, const dfl_spec *S, double c, double c0, int engine, double *out, char *err, size_t errlen);
+int dfl_engine_coef_x(int n, const double *y, const dfl_spec *S, double c, double c0, int engine, const dfl_inv_opts *io, double *out, double *errest, char *err, size_t errlen);
 int dfl_engine_coef_icdf(int n, const double *p, const dfl_spec *S, double c, double c0, int engine, double tol, double *q, char *err, size_t errlen);
-/* P(U - aV <= b) of case DK (model 1, or 2) or DG (model 4, detrended at cbar; NaN for -13.5); a = NaN: P(V <= b) */
+int dfl_engine_coef_icdf_x(int n, const double *p, const dfl_spec *S, double c, double c0, int engine, double tol, const dfl_inv_opts *io, double *q, double *errest, char *err, size_t errlen);
+int dfl_engine_coef_pdf(int n, const double *y, const dfl_spec *S, double c, double c0, int engine, const dfl_inv_opts *io, double *out, double *errest, char *err, size_t errlen);
+int dfl_engine_coef_mom(int pmax, const dfl_spec *S, double c, double c0, int engine, const dfl_inv_opts *io, double *m, double *errest, char *err, size_t errlen);
+/* P(U - aV <= b) of case DK (model 1, or 2) or DG (model 4, detrended at cbar; NaN for -13.5); a = NaN: P(V <= b).  By
+ * default the single inversion in case DK for a != 0 and -100 <= c <= 4; dfl_engine_lincdf_x takes a case code (zero start)
+ * or a design (with its start, g0 and gls; cbar unused), the six classical cases through their designs by the single
+ * inversion for a != 0 and -100 <= c <= 2 (fixed and stationary starts included) */
 int dfl_engine_lincdf(int n, const double *b, double a, int model, double c, double cbar, int engine, double *out, char *err, size_t errlen);
-/* the power envelope of case DK (model 1, or 2) or DG (model 4) at c[0..n-1] */
+int dfl_engine_lincdf_x(int n, const double *b, double a, const dfl_spec *S, double c, double cbar, int engine, const dfl_inv_opts *io, double *out, double *errest, char *err, size_t errlen);
+/* the power envelope of case DK (model 1, or 2) or DG (model 4) at c[0..n-1]; by default in case DK for c <= -1e-4 the
+ * single inversion (the critical value by regula falsi to 1e-12; errest the sum of the two estimates) */
 int dfl_engine_envelope(int n, const double *c, int model, double alpha, int engine, double *out, char *err, size_t errlen);
+int dfl_engine_envelope_x(int n, const double *c, int model, double alpha, int engine, const dfl_inv_opts *io, double *out, double *errest, char *err, size_t errlen);
 /* ADFmax (kind 2 distribution function, 1 density) */
 int dfl_engine_adfmax(int kind, int n, const double *x, const dfl_spec *S, double c, int engine, double *out, char *err, size_t errlen);
 /* P{U <= g(V)}: type 1 the line, 2 the parabola (both engines), 3 the WAP boundary (the classical engine, case DK) */
