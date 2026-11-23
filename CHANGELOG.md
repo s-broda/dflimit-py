@@ -2,6 +2,21 @@
 
 ## 0.5.0
 
+- The C engine of dflimit-matlab 06bb2cd: the general engine above the unit root. The coefficient statistic far above
+  the unit root was silently wrong in the general engine (the segment of the path around the positive root, shorter than
+  1e-12 from c = 16 on, got no panel; case DK at c = 20 gave 0.3128 for the 30% point with `engine="general"`; the
+  default route takes the classical engine there): now within 2.4e-9 of the classical engine up to c = 20 without
+  deterministic terms and 1.5e-8 up to c = 16 with them. The moments of the general engine, which the default route
+  takes at `c0=0`, were off by 6e-4 relative at c = 15 and 0.95 at c = 20 (an absolute rounding error of 1e-16 in the
+  matrix of the transform): now within 1.1e-14 of the classical engine. `ltratio_mom(4, "DT", 0, c0=-2)` raised
+  `ValueError` on the default route (the circle of the Cauchy integrals continued the wrong logarithm): now within
+  2.4e-14. The density of the coefficient statistic with a fixed start above the unit root (`coef_pdf`) was off by up to
+  0.12 at c from 1 to 5 without a warning (the path around the positive roots came too close to the double pole of its
+  kernel): now within about 1e-8 of the single inversion of DFKan (DFLimit.jl). `coef_cdf_gp` raises `ValueError` that
+  names the grid size `N` that serves where its grid does not resolve the transform (it was off by 1.1e-2 at c = 12 and
+  by 15 at c = 20 for the 30% point of case DK). Every function of the general engine raises `ValueError` above c = 16
+  with deterministic terms (10 with them and a fixed start) and above c = 20 without them, where the roots of its
+  transform are no longer resolved in double precision; `engine="auto"` takes the classical engine there.
 - The C engine of dflimit-matlab 4910ea2: the line integral with the explicit kernel for the general designs of rank one
   or two (polynomial trends of any order, an intercept with sines and cosines, the statistic that detrends first for a
   continuous design with d(0) != 0; zero or stationary start, least squares detrending): `dist_cdf`, `dist_pdf` and

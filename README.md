@@ -135,11 +135,14 @@ array([-5.28735943, -4.75056961, -4.46887591])
 The general engine also gives ADFmax with a fixed start (through the router: `adfmax_cdf(x, "DU", c, g0=1.5,
 engine="auto")`, or a design), and the regions and the linear form of case DK with a fixed start; the classical engine
 has the zero and the stationary start only there, and refuses a fixed start. It refuses, with a `ValueError` that says
-why: probabilities and levels outside (0, 1); the LM statistic above c = 10; the point-optimal statistic where the
-grid of its inversion does not resolve the transform (far above the unit root; the message names the grid size `N`
-that serves) and at |q| beyond 0.15 N/asinh(umax) (1000 with the default grid); and a design whose roots run off on
-the vertical line, where the paths around them would need more than a million nodes (such as (1 + r, 1{r < 0.4}),
-which has no proper intercept). The law of V is 0 at b <= 0.
+why: probabilities and levels outside (0, 1); every function of the general engine above c = 16 with deterministic terms
+(10 with them and a fixed start) and above c = 20 without them (the range in which it is checked above the unit root;
+there the roots of its transform are no longer resolved in double precision, and `engine="auto"` takes the classical
+engine for the classical cases); the LM statistic above c = 10; the point-optimal statistic and `coef_cdf_gp` where the
+grid of their inversion does not resolve the transform (far above the unit root; the message names the grid size `N`
+that serves), the point-optimal statistic also at |q| beyond 0.15 N/asinh(umax) (1000 with the default grid); and a
+design whose roots run off on the vertical line, where the paths around them would need more than a million nodes (such
+as (1 + r, 1{r < 0.4}), which has no proper intercept). The law of V is 0 at b <= 0.
 
 Points of one call share the paths of the inversion, so pass a whole vector in one call. The engine caches up to 64
 prepared designs, paths and refined lines; `empty_caches()` frees them.
