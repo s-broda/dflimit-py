@@ -5,11 +5,15 @@ import warnings
 
 import numpy as np
 
-from . import _engine, _general
-from ._ltratio import CASES_DOC, ERRORS_DOC, R_COEF, R_COEF_ICDF, ROUTE_DOC, _classical, ltratio_cdf
-from ._route import (AUTO, DESIGN_DOC, ENGINE_DOC, GENERAL, NO_METHOD, brittle, classical_ok, det_opts, engine_of,
-                     route_tuple, spec_of, warn_lines)
-from ._utils import dfl_flag, dfl_method, dfl_num, dfl_real, dfl_shape, f64, fill_doc, warn
+from . import _general
+from ._ltratio import CASES_DOC, ERRORS_DOC, ROUTE_DOC, _classical, ltratio_cdf
+from ._route import (AUTO, CLASSICAL, DESIGN_DOC, ENGINE_DOC, GENERAL, NO_METHOD, brittle, classical_ok, det_opts,
+                     engine_of, route_tuple, route_x, spec_of, warn_lines)
+from ._route import dfl_engine as dfl_engine_code
+from ._utils import dfl_flag, dfl_imethod, dfl_num, dfl_posint, dfl_real, dfl_shape, dfl_tol, fill_doc, warn
+
+# (the operations of _engine.route_x)
+RX_MOM, RX_COEF, RX_COEF_ICDF, RX_COEF_PDF, RX_COEF_MOM, RX_LIN, RX_ENV = range(1, 8)
 
 COEF_PARAMS_DOC = """\
 cas : str or Design
@@ -21,10 +25,12 @@ c0 : float, default 0
     The local null value c0 of the statistic n(phi^ - phi0), phi0 = 1 + c0/n.
 g0 : float, default 0
     The fixed start, y_0 = g0 sigma sqrt(n) (cases DK, DU, DT).
-method : {"auto", "single", "line", "double", "conditional", "contour"}, default "auto"
-    The representation, as in `ltratio_cdf`.
+method : {"auto", "inversion", "engine", "single", "line", "double", "conditional", "contour"}, default "auto"
+    ``"inversion"`` forces the single inversion of Bao and Kan, ``"engine"`` the engines' computation of before; a
+    representation of the t-ratio, as in `ltratio_cdf`, takes the engines too (see Notes).
 verified : bool, default False
-    One evaluation (False) or the checked computation (True), as in `ltratio_cdf`."""
+    One evaluation (False) or the checked computation (True): the values of the single inversion whose error estimate
+    exceeds ``tol`` are recomputed by the engines' checked computation, as in `ltratio_cdf`."""
 
 COEF_ROUTE_DOC = """\
 With a design or ``engine="auto"`` the router evaluates the t-ratio at 0 with the null value c0 + y by the engine of
@@ -32,17 +38,34 @@ its rule; the general engine (a design beyond the classical cases, or ``engine="
 statistic directly, by the inversion on paths around the roots, and its quantiles by Newton's method from y = -10."""
 
 COEF_NOTES_DOC = """\
-The limit is (U - c0 V)/V, so that P[(U - c0 V)/V <= y] = P[U - (c0 + y)V <= 0]: the distribution function of the
-t-ratio at 0 with the local null value c0 + y. The C engine has no entry point of its own for the coefficient
-statistic: as ``coef_cdf`` and ``coef_icdf`` of the MATLAB programs, `coef_cdf` evaluates
-``ltratio_cdf(0, cas, c, c0=c0 + y, g0=g0, method=method)`` at each ``y``, in every case and with every start and
-option of `ltratio_cdf`, and `coef_icdf` finds each quantile by the Illinois variant of regula falsi on `coef_cdf`,
-on a bracket grown from [-40, 10] until its width is below ``tol`` (about ten evaluations of `coef_cdf`)."""
+The limit is (U - c0 V)/V, so that P[(U - c0 V)/V <= y] = P[U - (c0 + y)V <= 0]. In the cases DK, DU, DT (zero or
+fixed start ``g0``) and SK, SU, ST the default (``method="auto"`` with ``engine="auto"``, up to c = 20) is the single
+inversion of the joint characteristic function along the ray of the half-plane, the method of Yong Bao and Raymond Kan,
+"Exact Finite-Sample Distribution and Moments of the Least Squares Estimator in First-Order Autoregressions: O(1)
+Algorithms": adaptive quadrature over decades, the tail completed by integration by parts with the derivatives from
+jets, the closed-form transform with the branch fixed at each point, one evaluation with an error estimate per value
+(as ``coef_cdf`` of DFLimit.jl and of the MATLAB programs). ``tol`` is its absolute tolerance, ``err=True`` returns the
+estimates as well, and a warning names the points at which they exceed it. ``method="inversion"`` forces it (also above
+c = 20); ``method="engine"`` is the computation of before, the distribution function of the t-ratio at 0 with the local
+null value c0 + y (``ltratio_cdf(0, cas, c, c0=c0 + y, g0=g0)``, with its choice of engine and representation), which
+reproduces the values of earlier versions; a representation of the t-ratio, ``engine="classical"`` or ``"general"``
+and case DG take that computation too. `coef_icdf` finds each quantile by the Illinois variant of regula falsi to the
+width ``tol``: by default on the single inversion's distribution function (tolerance 1e-12) from the bracket
+E[U - cV]/E[V] -/+ twice the scale of the ratio (``err=True``: the estimate of the distribution function at the
+quantile divided by the density there), otherwise on the engines' distribution function from a bracket grown from
+[-40, 10]."""
+
+ERR_DOC = """\
+tol : float, default 1e-12
+    The absolute tolerance of each value of the single inversion.
+err : bool, default False
+    If true, return the tuple (values, error estimates); the estimates are ``nan`` where the engines computed."""
 
 
 @fill_doc(params=COEF_PARAMS_DOC, errors=ERRORS_DOC, notes=COEF_NOTES_DOC, cases=CASES_DOC, engine=ENGINE_DOC,
-          design=DESIGN_DOC, route=ROUTE_DOC, croute=COEF_ROUTE_DOC)
-def coef_cdf(y, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engine="auto", start=None, gls=None):
+          design=DESIGN_DOC, route=ROUTE_DOC, croute=COEF_ROUTE_DOC, errdoc=ERR_DOC)
+def coef_cdf(y, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engine="auto", start=None, gls=None, tol=1e-12,
+             err=False):
     """Distribution function of the limit of the Dickey-Fuller coefficient statistic.
 
     The limit of P[n(phi^ - phi0) <= y] for the least squares estimate phi^ of phi in the regression of
@@ -56,11 +79,13 @@ def coef_cdf(y, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engine="
     {params}
     {engine}
     {design}
+    {errdoc}
 
     Returns
     -------
     float or numpy.ndarray
-        The distribution function at ``y``: a float for a scalar ``y``, otherwise an array of the shape of ``y``.
+        The distribution function at ``y``: a float for a scalar ``y``, otherwise an array of the shape of ``y`` (with
+        ``err=True`` the tuple of the values and their error estimates).
 
     Raises
     ------
@@ -91,21 +116,34 @@ def coef_cdf(y, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engine="
     """
     S = spec_of(cas, g0, start, gls)
     e = engine_of(S, engine)
-    me = dfl_method(method)
+    im = dfl_imethod(method, "coef_cdf", True)
     ve = dfl_flag(verified, "verified")
     c = dfl_num(c, "c")
     c0 = dfl_num(c0, "c0")
     a = dfl_real(y, "y")
-    if _classical(S, e, c, c0, me, ve):
-        with _once():
-            return _coef_cdf(a, S.case, c, c0, S.g0, method, verified)
-    if e == GENERAL or not (S.named or classical_ok(S, c, c0, 0)):
+    if 1 <= im <= 4 or (e == CLASSICAL and im != 5):
+        # (a representation named, or the classical engine: the computation of before)
+        me = im if im <= 4 else 0
+        if _classical(S, e, c, c0, me, ve):
+            with _once():
+                return _with_err(_coef_cdf(a, S.case, c, c0, S.g0, method if me else "auto", verified), None, a, err)
         if me != 0:
             raise ValueError(NO_METHOD)
-        return _general._values(_general.DET_COEF_CDF, S.design, a, c, det_opts(S, c0, ve), name="y")
-    out, wd, wc = _engine.route(R_COEF, route_tuple(S), a.tobytes(), c, c0, AUTO, 0, 0, 0.0)
-    warn_lines(_coef_brittle(S, c, c0, a), wc, wd)
-    return dfl_shape(f64(out), a)
+    if im != 5 and (e == GENERAL or not (S.named or classical_ok(S, c, c0, 0))):
+        return _with_err(_general._values(_general.DET_COEF_CDF, S.design, a, c, det_opts(S, c0, ve), name="y"), None, a, err)
+    out, eo = route_x(RX_COEF, route_tuple(S), a.ravel(), c, c0, e, im if im >= 5 else 0, dfl_tol(tol), ve)
+    if np.all(np.isnan(eo)) and e == AUTO and not ve:
+        warn_lines(_coef_brittle(S, c, c0, a))
+    return _with_err(dfl_shape(out, a), eo, a, err)
+
+
+def _with_err(v, e, a, err):
+    """The values, with err the tuple (values, error estimates; nan where the engines computed)."""
+    if not err:
+        return v
+    if e is None:
+        e = np.full(a.size, np.nan)
+    return v, dfl_shape(np.asarray(e, dtype=np.float64), a)
 
 
 def _coef_brittle(S, c, c0, ys):
@@ -129,8 +167,9 @@ def _coef_cdf(a, cas, c, c0, g0, method, verified):
 
 
 @fill_doc(params=COEF_PARAMS_DOC, errors=ERRORS_DOC, notes=COEF_NOTES_DOC, cases=CASES_DOC, engine=ENGINE_DOC,
-          design=DESIGN_DOC, route=ROUTE_DOC, croute=COEF_ROUTE_DOC)
-def coef_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-9, verified=False, *, engine="auto", start=None, gls=None):
+          design=DESIGN_DOC, route=ROUTE_DOC, croute=COEF_ROUTE_DOC, errdoc=ERR_DOC)
+def coef_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-9, verified=False, *, engine="auto", start=None, gls=None,
+              err=False):
     """Quantiles of the limit of the Dickey-Fuller coefficient statistic.
 
     The p-quantiles of the limit of n(phi^ - phi0) of `coef_cdf`.
@@ -144,11 +183,15 @@ def coef_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-9, verified=False, 
         The width of the final bracket (with the general engine: the tolerance of Newton's method).
     {engine}
     {design}
+    err : bool, default False
+        If true, return the tuple (quantiles, error estimates): by the single inversion the estimate of the distribution
+        function at the quantile divided by the density there, ``nan`` where the engines computed.
 
     Returns
     -------
     float or numpy.ndarray
-        The quantiles: a float for a scalar ``p``, otherwise an array of the shape of ``p``.
+        The quantiles: a float for a scalar ``p``, otherwise an array of the shape of ``p`` (with ``err=True`` the
+        tuple of the quantiles and their error estimates).
 
     Raises
     ------
@@ -183,25 +226,98 @@ def coef_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-9, verified=False, 
     tol = dfl_num(tol, "tol")
     S = spec_of(cas, g0, start, gls)
     e = engine_of(S, engine)
-    me = dfl_method(method)
+    im = dfl_imethod(method, "coef_icdf", True)
     ve = dfl_flag(verified, "verified")
     c = dfl_num(c, "c")
     c0 = dfl_num(c0, "c0")
-    if _classical(S, e, c, c0, me, ve):
-        y = np.empty(a.size)
-        with _once():
-            for k, pk in enumerate(a.ravel()):
-                y[k] = _coef_quantile(pk, S.case, c, c0, S.g0, method, tol, verified)
-        return dfl_shape(y, a)
-    if ve:
+    if 1 <= im <= 4 or (e == CLASSICAL and im != 5):
+        me = im if im <= 4 else 0
+        if _classical(S, e, c, c0, me, ve):
+            y = np.empty(a.size)
+            with _once():
+                for k, pk in enumerate(a.ravel()):
+                    y[k] = _coef_quantile(pk, S.case, c, c0, S.g0, method if me else "auto", tol, verified)
+            return _with_err(dfl_shape(y, a), None, a, err)
+        if me != 0:
+            raise ValueError(NO_METHOD)
+    gen = im != 5 and (e == GENERAL or not (S.named or classical_ok(S, c, c0, 0)))
+    if ve and gen:
         raise ValueError("verified=True: the checked computation of the quantiles is the classical engine's; the general "
                          "engine has none")
-    if me != 0:
-        raise ValueError(NO_METHOD)
-    q, wd, wc = _engine.route(R_COEF_ICDF, route_tuple(S), a.tobytes(), c, c0, e, 0, 0, tol)
-    qv = f64(q)
-    warn_lines(_coef_brittle(S, c, c0, qv) if e == AUTO else "", wc, wd)
-    return dfl_shape(qv, a)
+    q, eo = route_x(RX_COEF_ICDF, route_tuple(S), a.ravel(), c, c0, e, im if im >= 5 else 0, math.nan, ve, tol)
+    if np.all(np.isnan(eo)) and e == AUTO and not ve:
+        warn_lines(_coef_brittle(S, c, c0, q))
+    return _with_err(dfl_shape(q, a), eo, a, err)
+
+
+@fill_doc(errors=ERRORS_DOC, cases=CASES_DOC, engine=ENGINE_DOC, design=DESIGN_DOC)
+def coef_mom(p, cas, c=0, c0=0, g0=0, *, tol=1e-10, err=False, engine="auto", method="auto", start=None, gls=None):
+    """Moments of the limit of the Dickey-Fuller coefficient statistic.
+
+    m[j] = E[{(U - c0 V)/V}^j], j = 1, ..., p, the moments of the limit of n(phi^ - phi0) of `coef_cdf`, in the cases DK,
+    DU, DT (zero or fixed start ``g0``) and SK, SU, ST (a design that is one of them), up to c = 20.
+
+    Parameters
+    ----------
+    p : int
+        The number of moments, a positive integer (at most 31).
+    cas : str or Design
+        The case, one of ``"DK"``, ``"DU"``, ``"DT"``, ``"SK"``, ``"SU"``, ``"ST"``, or a design that is one of them.
+    c : float, default 0
+        The local-to-unity parameter c, phi = 1 + c/n.
+    c0 : float, default 0
+        The local null value c0 of the statistic n(phi^ - phi0), phi0 = 1 + c0/n.
+    g0 : float, default 0
+        The fixed start, y_0 = g0 sigma sqrt(n) (cases DK, DU, DT).
+    tol : float, default 1e-10
+        The relative tolerance of the quadrature.
+    err : bool, default False
+        If true, return the tuple (moments, error estimates).
+    {engine}
+    method : {"auto", "inversion", "jets"}, default "auto"
+        ``"jets"`` (or ``"inversion"``) also above c = 20.
+    {design}
+
+    Returns
+    -------
+    numpy.ndarray
+        The moments, an array of length ``p`` (with ``err=True`` the tuple of the moments and their error estimates).
+
+    Raises
+    ------
+    {errors}
+
+    See Also
+    --------
+    coef_cdf, ltratio_mom
+
+    Notes
+    -----
+    Sawa's representation m_j = int_0^inf [d^j M(s1, -s2)/ds1^j at s1 = 0] s2^(j-1)/Gamma(j) ds2 with the derivative
+    from one jet of order j per node, the method of Yong Bao and Raymond Kan, "Exact Finite-Sample Distribution and
+    Moments of the Least Squares Estimator in First-Order Autoregressions: O(1) Algorithms", adaptive quadrature in
+    log s2 to the relative tolerance ``tol`` (as ``coef_mom`` of DFLimit.jl and of the MATLAB programs). The engines
+    have no moments of the coefficient statistic: case DG, the other designs and ``engine="general"`` are refused.
+
+    {cases}
+
+    Examples
+    --------
+    >>> from dflimit import coef_mom
+    >>> float(coef_mom(1, "DK")[0])       # the mean of n(phi^ - 1) at the unit root
+    -1.7814...
+    """
+    p = dfl_posint(p, "p")
+    S = spec_of(cas, g0, start, gls)
+    e = dfl_engine_code(engine)
+    im = dfl_imethod(method, "coef_mom")
+    if im == 6:
+        raise ValueError('coef_mom: method must be "auto" (the jets of Bao and Kan; the engines have no moments of the '
+                         "coefficient statistic)")
+    m, eo = route_x(RX_COEF_MOM, route_tuple(S), np.array([float(p)]), dfl_num(c, "c"), dfl_num(c0, "c0"), e, im,
+                    dfl_tol(tol), 0)
+    m = m.copy()
+    return (m, eo.copy()) if err else m
 
 
 def _coef_quantile(pk, cas, c, c0, g0, method, tol, verified=False):

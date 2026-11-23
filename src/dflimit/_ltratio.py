@@ -2,14 +2,13 @@
 (R/ltratio.R of the R package dflimit).  With a design in place of the case, or with the keyword engine, they go to
 the router over the classical and the general engine (_route.py); with a case string and no engine, to the classical
 engine as before."""
-import math
-
 import numpy as np
 
 from . import _engine
 from ._route import (AUTO, CLASSICAL, DESIGN_DOC, ENGINE_DOC, F_ICDF, brittle, classical_ok, engine_of, route_tuple,
-                     spec_of, warn_lines)
-from ._utils import Result, cint, dfl_case, dfl_flag, dfl_method, dfl_num, dfl_posint, dfl_real, dfl_shape, f64, fill_doc, warn
+                     route_x, spec_of, warn_lines)
+from ._utils import (Result, cint, dfl_case, dfl_flag, dfl_imethod, dfl_method, dfl_num, dfl_posint, dfl_real, dfl_shape,
+                     dfl_tol, f64, fill_doc, warn)
 
 # the operations of _engine.route (py_route in _engine.c)
 R_CDF, R_PDF, R_ICDF, R_MOM, R_COEF, R_COEF_ICDF, R_ADF_CDF, R_ADF_PDF = range(1, 9)
@@ -381,12 +380,14 @@ def _icdf_classical(p, cas, c, c0, g0, me, tol, info, ve):
 
 @fill_doc(errors=ERRORS_DOC, cases=CASES_DOC, references=REFERENCES_DOC, engine=ENGINE_DOC, design=DESIGN_DOC,
           route=ROUTE_DOC)
-def ltratio_mom(p, cas, c=0, c0=0, g0=0, info=False, *, engine="auto", start=None, gls=None):
+def ltratio_mom(p, cas, c=0, c0=0, g0=0, info=False, *, engine="auto", start=None, gls=None, method="auto", tol=1e-10,
+                verified=False):
     """Moments of the limit of the Dickey-Fuller t-ratio.
 
     The moments E[tau^j], j = 1, ..., p, of the limit tau = (U - c0 V)/sqrt(V) of `ltratio_cdf`, as one-dimensional
     integrals of the joint moment generating function of (U, V) (the moments of the limit in the Supplementary
-    Material of the paper). Not available for case DG.
+    Material of the paper): E tau^j = Gamma(j/2)^(-1) int_0^inf s^(j/2-1) m_j(s) ds, m_j(s) the j-th derivative of the
+    moment generating function along its affine path. Not available for case DG.
 
     Parameters
     ----------
@@ -402,10 +403,17 @@ def ltratio_mom(p, cas, c=0, c0=0, g0=0, info=False, *, engine="auto", start=Non
     g0 : float, default 0
         The fixed start, y_0 = g0 sigma sqrt(n) (cases DK, DU, DT).
     info : bool, default False
-        If true, return a `Result` with the moments ``m`` and the error estimates ``err`` of the integrals (by the
-        router ``nan``; `dist_moments` has those of the general engine).
+        If true, return a `Result` with the moments ``m`` and the error estimates ``err`` of the integrals (``nan``
+        where the router computes by the engines; `dist_moments` has those of the general engine).
     {engine}
     {design}
+    method : {"auto", "jets", "engine"}, default "auto"
+        ``"jets"`` forces the moments from jets of Bao and Kan (also above c = 20), ``"engine"`` the engines' circles
+        (the computation of before).
+    tol : float, default 1e-10
+        The relative tolerance of the quadrature of the moments from jets.
+    verified : bool, default False
+        If true, the moments whose error estimate exceeds ``tol`` times their size are recomputed by the engines.
 
     Returns
     -------
@@ -425,6 +433,15 @@ def ltratio_mom(p, cas, c=0, c0=0, g0=0, info=False, *, engine="auto", start=Non
     {cases}
 
     {route}
+
+    By default (``method="auto"`` with ``engine="auto"``, the cases DK, DU, DT with a zero or fixed start and SK, SU,
+    ST, up to c = 20 and 31 moments) the derivative comes from one Taylor-mode jet of order j at each node of an
+    adaptive quadrature in log s, the method of Yong Bao and Raymond Kan, "Exact Finite-Sample Distribution and
+    Moments of the Least Squares Estimator in First-Order Autoregressions: O(1) Algorithms", with the closed-form
+    transform of the six cases (as ``ltratio_mom`` of DFLimit.jl and of the MATLAB programs); a warning names the
+    moments whose error estimate exceeds ``tol`` times their size. ``method="engine"`` is the computation of before
+    (the derivatives as Cauchy integrals on a circle, by the classical engine or the general engine), which reproduces
+    those values; ``engine="classical"`` or ``"general"`` takes that computation too.
 
     The general engine has the moments of case DG and of other designs too (not of the statistic that detrends first).
 
@@ -446,13 +463,13 @@ def ltratio_mom(p, cas, c=0, c0=0, g0=0, info=False, *, engine="auto", start=Non
     pm = dfl_posint(p, "p")
     S = spec_of(cas, g0, start, gls)
     e = engine_of(S, engine)
-    if e == CLASSICAL:
+    im = dfl_imethod(method, "ltratio_mom")
+    ve = dfl_flag(verified, "verified")
+    if e == CLASSICAL and im != 5:
         _, model, stat = dfl_case(S.case)
         m, er = _engine.moments(pm, model, dfl_num(c, "c"), dfl_num(c0, "c0"), S.g0, stat)
         r = Result(m=f64(m), err=f64(er))
         return r if info else r["m"]
-    m, wd, wc = _engine.route(R_MOM, route_tuple(S), np.array([float(pm)]).tobytes(), dfl_num(c, "c"), dfl_num(c0, "c0"), e,
-                              0, 0, 0.0)
-    warn_lines(wc, wd)
-    r = Result(m=f64(m), err=np.full(pm, math.nan))
+    m, eo = route_x(1, route_tuple(S), np.array([float(pm)]), dfl_num(c, "c"), dfl_num(c0, "c0"), e, im, dfl_tol(tol), ve)
+    r = Result(m=m.copy(), err=eo.copy())
     return r if info else r["m"]

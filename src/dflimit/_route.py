@@ -14,7 +14,7 @@ import numpy as np
 
 from . import _engine
 from ._design import Design, classical_case, trend
-from ._utils import CASES, dfl_case, dfl_num, warn
+from ._utils import CASES, dfl_case, dfl_num, engine_call, f64, py_text, warn
 
 AUTO, CLASSICAL, GENERAL = 0, 1, 2
 _ENGINES = {"auto": AUTO, "classical": CLASSICAL, "general": GENERAL}
@@ -166,10 +166,24 @@ def warn_lines(*msgs):
     """The warnings of the engine (each line once) as RuntimeWarnings."""
     seen = set()
     for m in msgs:
-        for line in (m or "").splitlines():
+        for line in py_text(m or "").splitlines():
             if line and line not in seen:
                 seen.add(line)
                 warn(line)
+
+
+def design_tuple(S):
+    """The computation for the router as its design (a case string too: its design with its start)."""
+    return (S.design._tuple(), 0, S.start, S.g0, S.gls)
+
+
+def route_x(op, spec, x, c, c0, engine, imethod, tol, verified, *par):
+    """The router with the options of the devices of Bao and Kan (_engine.route_x): the values and the error estimates
+    (NaN where the engines computed), with the warnings given."""
+    out, eo, wd, wc = engine_call(_engine.route_x, op, spec, np.ascontiguousarray(x, dtype=np.float64).tobytes(),
+                                  float(c), float(c0), engine, imethod, float(tol), int(verified), *[float(v) for v in par])
+    warn_lines(wc, wd)
+    return f64(out), f64(eo)
 
 
 def brittle(kind, S, c, c0, xs, values=None, f=F_DIST):

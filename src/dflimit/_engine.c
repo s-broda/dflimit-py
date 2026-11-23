@@ -691,6 +691,88 @@ done:
     PyMem_Free(out); PyMem_Free(cc);
     return res;
 }
+/* ---- the devices of Bao and Kan (dfl_inv_opts: the single inversion, the moments from jets) ---- */
+enum { RX_MOM = 1, RX_COEF, RX_COEF_ICDF, RX_COEF_PDF, RX_COEF_MOM, RX_LIN, RX_ENV };
+/* route_x(op, spec, x, c, c0, engine, imethod, tol, verified, p0, p1, p2) -> (bytearray out, bytearray errest, general
+ * warning, classical warning): the functions of the router with the options of the single inversion (imethod 0 automatic,
+ * 5 forces the devices, 6 the engines' computation of before, 1 to 4 the representations of the t-ratio for the
+ * coefficient statistic; tol NaN for the default; errest NaN where the engines computed):
+ *   RX_MOM, RX_COEF_MOM   the moments (x one value, their number)        RX_COEF, RX_COEF_PDF   the coefficient statistic
+ *   RX_COEF_ICDF          its quantiles, p0 the width of the bracket     RX_LIN  P(U - aV <= b), p0 = a, p1 = cbar (case
+ *   code: spec without a design, its model; a design with its start)  RX_ENV  the envelope, p0 = model, p1 = alpha */
+static PyObject *py_route_x(PyObject *self, PyObject *args)
+{
+    PyObject *st, *xb, *res = NULL;
+    int op, engine, imethod, verified, n = 0, rc = 0, nout;
+    double c, c0, tol, p0 = NAN, p1 = NAN, p2 = NAN, *xc = NULL, *out = NULL, *eo = NULL;
+    spec_arg s;
+    char err[ERRLEN] = "";
+    warn_t w = {"", ""};
+    if (!PyArg_ParseTuple(args, "iOOddiidi|ddd:route_x", &op, &st, &xb, &c, &c0, &engine, &imethod, &tol, &verified, &p0, &p1, &p2)) return NULL;
+    if (spec_in(st, &s)) return NULL;
+    const double *x = in_doubles(xb, "x", &n, &xc);
+    if (x == NULL) goto done;
+    nout = n;
+    if (op == RX_MOM || op == RX_COEF_MOM) {
+        if (n != 1 || !(x[0] >= 1 && x[0] <= INT_MAX / 2 && x[0] == floor(x[0]))) { PyErr_SetString(PyExc_ValueError, "p must be a positive integer"); goto done; }
+        nout = (int) x[0];
+    }
+    if ((out = scratch(nout, sizeof(double))) == NULL || (eo = scratch(nout, sizeof(double))) == NULL) goto done;
+    for (int k = 0; k < nout; k++) eo[k] = NAN;
+    dfl_inv_opts io; dfl_inv_defaults(&io); io.method = imethod; io.tol = tol; io.verified = verified != 0;
+    switch (op) {
+    case RX_MOM: WARN_CALL(rc = dfl_engine_mom_x(nout, &s.S, c, c0, engine, &io, out, eo, err, sizeof err), &w); break;
+    case RX_COEF_MOM: WARN_CALL(rc = dfl_engine_coef_mom(nout, &s.S, c, c0, engine, &io, out, eo, err, sizeof err), &w); break;
+    case RX_COEF: WARN_CALL(rc = dfl_engine_coef_x(n, x, &s.S, c, c0, engine, &io, out, eo, err, sizeof err), &w); break;
+    case RX_COEF_PDF: WARN_CALL(rc = dfl_engine_coef_pdf(n, x, &s.S, c, c0, engine, &io, out, eo, err, sizeof err), &w); break;
+    case RX_COEF_ICDF: WARN_CALL(rc = dfl_engine_coef_icdf_x(n, x, &s.S, c, c0, engine, p0, &io, out, eo, err, sizeof err), &w); break;
+    case RX_LIN: WARN_CALL(rc = dfl_engine_lincdf_x(n, x, p0, &s.S, c, p1, engine, &io, out, eo, err, sizeof err), &w); break;
+    case RX_ENV: WARN_CALL(rc = dfl_engine_envelope_x(n, x, ipar(p0), p1, engine, &io, out, eo, err, sizeof err), &w); break;
+    default: PyErr_Format(PyExc_ValueError, "unknown operation %d of the router", op); goto done;
+    }
+    if (check(rc, err)) goto done;
+    res = Py_BuildValue("(NNss)", out_bytes(out, nout, sizeof(double)), out_bytes(eo, nout, sizeof(double)), w.det, w.cls);
+done:
+    PyMem_Free(out); PyMem_Free(eo); PyMem_Free(xc); spec_release(&s);
+    return res;
+}
+/* det_x(op, design, x, c, opts, method, N, umax, tol, p0, p1) -> (bytearray out, bytearray errest, warning): the
+ * point-optimal statistic (DET_PT_CDF, DET_PT_PDF with p0 = cbar; DET_PT_Q with p0 = cbar; DET_PT_POW with p0 = cbar,
+ * p1 = level, out the critical value and the power at c; DET_PT_ENV with p0 = level) and DET_COEF_GP, with the method of
+ * dfl_det_pt_x (0 automatic, 5 the single inversion of Bao and Kan, 7 the fixed grid; N, umax 0 for the grid's defaults,
+ * given > 0 they choose the grid; tol NaN for 1e-12); errest NaN on the grid (DET_PT_POW, DET_PT_ENV: none) */
+static PyObject *py_det_x(PyObject *self, PyObject *args)
+{
+    PyObject *dt, *xb, *ot, *res = NULL;
+    int op, method, N, n = 0, rc = 0;
+    double c, umax, tol, p0 = NAN, p1 = NAN, *xc = NULL, *out = NULL, *eo = NULL;
+    design_arg a;
+    dfl_det_opts o;
+    char err[ERRLEN] = "";
+    warn_t w = {"", ""};
+    if (!PyArg_ParseTuple(args, "iOOdOiidd|dd:det_x", &op, &dt, &xb, &c, &ot, &method, &N, &umax, &tol, &p0, &p1)) return NULL;
+    if (detopts_in(ot, &o)) return NULL;
+    if (design_in(dt, &a)) return NULL;
+    const double *x = in_doubles(xb, "x", &n, &xc);
+    if (x == NULL || (out = scratch(n + 2, sizeof(double))) == NULL || (eo = scratch(n + 2, sizeof(double))) == NULL) goto done;
+    for (int k = 0; k < n + 2; k++) eo[k] = NAN;
+    int nout = op == DET_PT_POW ? 2 : n;
+    switch (op) {
+    case DET_PT_CDF: case DET_PT_PDF: WARN_CALL(rc = dfl_det_pt_x(op == DET_PT_CDF ? 2 : 1, &a.D, n, x, p0, c, method, N, umax, tol, out, eo, err, sizeof err), &w); break;
+    case DET_PT_Q:
+        ENGINE_CALL(warn_reset(); for (int k = 0; k < n && !rc; k++) { rc = dfl_det_pt_quantile_x(&a.D, x[k], p0, method, N, umax, tol, &out[k], &eo[k], err, sizeof err); warn_take(&w); });
+        break;
+    case DET_PT_POW: WARN_CALL(rc = dfl_det_pt_power_x(&a.D, p0, c, p1, method, N, umax, tol, &out[0], &out[1], err, sizeof err), &w); break;
+    case DET_PT_ENV: WARN_CALL(rc = dfl_det_pt_envelope_x(&a.D, n, x, p0, method, N, umax, tol, out, err, sizeof err), &w); break;
+    case DET_COEF_GP: WARN_CALL(rc = dfl_det_coef_cdf_gp_x(&a.D, n, x, c, &o, method, N, umax, tol, out, eo, err, sizeof err), &w); break;
+    default: PyErr_Format(PyExc_ValueError, "unknown operation %d of det_x", op); goto done;
+    }
+    if (check(rc, err)) goto done;
+    res = Py_BuildValue("(NNs)", out_bytes(out, nout, sizeof(double)), out_bytes(eo, nout, sizeof(double)), w.det);
+done:
+    PyMem_Free(out); PyMem_Free(eo); PyMem_Free(xc); design_release(&a);
+    return res;
+}
 /* autoengine(f, model, stat, g0, gls, c, c0, x) -> bytearray of C ints (1: the general engine) at the points x:
  * dfl_autoengine */
 static PyObject *py_autoengine(PyObject *self, PyObject *args)
@@ -766,6 +848,8 @@ static PyMethodDef METHODS[] = {
     {"route", py_route, METH_VARARGS, "route(op, spec, x, c, c0, engine, method, verified, tol) -> (out, warning, warning): dfl_engine_*"},
     {"route_lin", py_route_lin, METH_VARARGS, "route_lin(b, a, model, c, cbar, engine) -> (out, warning, warning): dfl_engine_lincdf"},
     {"route_env", py_route_env, METH_VARARGS, "route_env(c, model, alpha, engine) -> (out, warning, warning): dfl_engine_envelope"},
+    {"route_x", py_route_x, METH_VARARGS, "route_x(op, spec, x, c, c0, engine, imethod, tol, verified, p0, p1, p2) -> (out, errest, warning, warning): the devices of Bao and Kan through the router"},
+    {"det_x", py_det_x, METH_VARARGS, "det_x(op, design, x, c, opts, method, N, umax, tol, p0, p1) -> (out, errest, warning): the point-optimal statistic and coef_cdf_gp with the single inversion"},
     {"autoengine", py_autoengine, METH_VARARGS, "autoengine(f, model, stat, g0, gls, c, c0, x) -> engines (1 general): dfl_autoengine"},
     {"automethod", py_automethod, METH_VARARGS, "automethod(model, c, c0, g0, stat, x) -> methods: dfl_automethod"},
     {"check_args", py_check_args, METH_VARARGS, "check_args(model, c, c0, g0, stat) -> message or '': dfl_check_args"},
