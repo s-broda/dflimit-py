@@ -184,7 +184,11 @@ void det_sigma(det_work *W, cdouble th)
     }
 }
 
-/* M = I - 2 (s A + t B + gamma E11) Sigma with the (1,1) entry without cancellation (buildM!), into W->M */
+/* M = I - 2 (s A + t B + gamma E11) Sigma with the (1,1) entry without cancellation (buildM!), into W->M.  The (1,1)
+ * entry is m011 - 2 ((s A + t B) Sigma)_11, formed from these two terms alone: above the unit root it is of the order
+ * e^{-2c} where the transform matters (the moments, the inversion of Gil-Pelaez), and the earlier form, 1 plus the
+ * product term minus 2 gamma Sigma_11 plus (m011 - (1 - 2 gamma Sigma_11)), carried an absolute rounding error of 1e-16,
+ * which put the moments off by 6e-4 relative at c = 15 and by 0.95 at c = 20 */
 static void buildM(det_work *W, double c, cdouble s, cdouble t, cdouble th)
 {
     const det_model *Mo = W->Mo;
@@ -198,10 +202,11 @@ static void buildM(det_work *W, double c, cdouble s, cdouble t, cdouble th)
         cdouble q = cscale(-2, cadd(cscale(ar, s), cscale(br, t)));
         for (int j = 0; j < N; j++) M[i + j * N] = cadd(M[i + j * N], cmul(q, S[k + j * N]));
     }
+    cdouble q11 = M[0];
     for (int i = 0; i < N; i++) M[i + i * N] = caddr(M[i + i * N], 1);
     cdouble g2 = cscale(2, ga);
     for (int j = 0; j < N; j++) M[0 + j * N] = csub(M[0 + j * N], cmul(g2, S[0 + j * N]));
-    M[0] = cadd(M[0], csub(m011(c, t, th), csub(DONE, cmul(g2, S[0]))));
+    M[0] = cadd(m011(c, t, th), q11);
 }
 /* the stationary start: I - 2 (s A + t B + gamma (E11 - ENN)) Sigma_ext (buildMx!), with Sigma_ext in W->Sx */
 static void buildMx(det_work *W, double c, cdouble s, cdouble t, cdouble th)

@@ -94,6 +94,9 @@ int dfl_autoengine(int f, int model, int stat, double g0, double gls, double c, 
 {
     int fixed = g0 != 0 && !stat;
     int DK = model == 1 && !stat, DU = model == 2 && !stat, DT = model == 3 && !stat, SU = model == 2 && stat, ST = model == 3 && stat, DG = model == 4;
+    /* (above the range of the general engine, dfl_det_cmax: 20 without deterministic terms, 16 with them, 10 with them and
+     * a fixed start, where it refuses, the classical engine; below, the rule) */
+    if (c > (model == 1 ? DFL_DET_CMAX0 : fixed ? DFL_DET_CMAX_FIXED : DFL_DET_CMAX)) return DFL_ENGINE_CLASSICAL;
     switch (f) {
     case DFL_F_DIST:
         /* the t-ratio: the faster engine where the two agree to 1e-10, the more accurate one where they do not */

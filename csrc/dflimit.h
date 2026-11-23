@@ -436,6 +436,17 @@ typedef struct {
 #define DFL_DET_LINE 1
 #define DFL_DET_PATHS 2
 void dfl_det_defaults(dfl_det_opts *o);
+/* the largest c at which the general engine computes: DFL_DET_CMAX0 = 20 without deterministic terms (K = 0), with any
+ * start; with them DFL_DET_CMAX = 16, and DFL_DET_CMAX_FIXED = 10 with a fixed start (dfl_det_cmax); above, every function
+ * of the general engine refuses with an error that names the statistic, and the router (dfl_autoengine) takes the
+ * classical engine.  Above the unit root the transform has one root of the order 2c e^{-2c}, and the reciprocal roots, the
+ * eigenvalues of a small matrix, span e^{2c}: with deterministic terms the others are lost in double precision from about
+ * c = 17, and with a fixed start the coefficient statistic was off by 3e-5 at c = 12 (the range in which the engine is
+ * checked against the classical engine and DFKan of DFLimit.jl; GEN_CMAX0, GEN_CMAX, GEN_CMAX_FIXED of DFDet.jl) */
+#define DFL_DET_CMAX0 20.0
+#define DFL_DET_CMAX 16.0
+#define DFL_DET_CMAX_FIXED 10.0
+double dfl_det_cmax(const dfl_design *D, int start, double gamma0);
 /* the warnings of the last call on this thread, or NULL: every user-level function of the general engine, every
  * dfl_engine_* function and dfl_design_from_matrix clear them at their start (a composite call keeps those of its parts);
  * dfl_det_warning_clear clears them (a wrapper calls it before a call whose warning it reads) */

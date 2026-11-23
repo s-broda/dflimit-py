@@ -269,7 +269,11 @@ static void seg_panels(panv *out, double st, double en, double h0)
     }
 }
 typedef struct { double pos, h; } foc_t;
-/* panels of [A, B] graded toward the focus points (graded_panels) */
+/* panels of [A, B] graded toward the focus points (graded_panels).  Points within 1e-12 (B - A) of each other or of an
+ * end are merged with it, a tolerance relative to the length of the interval: far above the unit root the segments of
+ * the U-shapes are tiny (the positive root lies within about 2c e^{-2c} of the branch point -t/c0 of the coefficient
+ * statistic, 1e-16 at c = 20), and with the tolerance 1e-12 max(B - A, 1) used before a segment shorter than 1e-12 got
+ * no panel at all (from c = 16 on the coefficient statistic was off by up to 0.2) */
 static void graded_panels(double A, double B, const foc_t *foc, int nf, panv *out)
 {
     out->n = 0;
@@ -285,7 +289,7 @@ static void graded_panels(double A, double B, const foc_t *foc, int nf, panv *ou
     }
     for (int i = 0; i < nk; i++) ord[i] = i;
     for (int i = 1; i < nk; i++) { int k = ord[i], j = i - 1; while (j >= 0 && kl[ord[j]] > kl[k]) { ord[j + 1] = ord[j]; j--; } ord[j + 1] = k; }
-    double tol = 1e-12 * dmax(B - A, 1.0);
+    double tol = 1e-12 * (B - A);
     double *pp = malloc((nk + 2) * sizeof(double)), *ph = malloc((nk + 2) * sizeof(double)); int np = 0;
     pp[np] = A; ph[np] = INFINITY; np++;
     for (int ii = 0; ii < nk; ii++) {
@@ -387,7 +391,7 @@ static int ushape(cvec *S, cvec *W, const cdouble *grp, int ng, const cdouble *o
     return 0;
 }
 /* place: the abscissa of the U-shape of the fixed start in (lo, hi) */
-typedef struct { const logmt_t *L; const cdouble *grp; int ng; const cdouble *oth; int no; int side; double A, xq, tr, c0p, foc[2]; int nfoc; } place_ctx;
+typedef struct { const logmt_t *L; const cdouble *grp; int ng; const cdouble *oth; int no; int side; double A, xq, tr, c0p, foc[3]; int nfoc; } place_ctx;
 static double place_obj(const place_ctx *P, double sig)
 {
     int side = P->side;
@@ -411,12 +415,17 @@ static double place(const logmt_t *L, const cdouble *grp, int ng, const cdouble 
 {
     double edge = side == 1 ? INFINITY : -INFINITY;
     for (int i = 0; i < ng; i++) edge = side == 1 ? dmin(edge, creal(grp[i])) : dmax(edge, creal(grp[i]));
-    place_ctx P = {L, grp, ng, oth, no, side, A, xq, tr, c0p, {0, 0}, 1};
+    place_ctx P = {L, grp, ng, oth, no, side, A, xq, tr, c0p, {0, 0, 0}, 1};
     if (no > 0) {
         double e = side == 1 ? -INFINITY : INFINITY;
         for (int i = 0; i < no; i++) e = side == 1 ? dmax(e, creal(oth[i])) : dmin(e, creal(oth[i]));
         P.foc[1] = e; P.nfoc = 2;
     }
+    /* (above the unit root with c0 > 0 the branch point -Re(t)/c0 of the v-kernels, the left end of the admissible interval
+     * of G+, is a focus of the grading cost too: the kernel of the density of the coefficient statistic has a double pole
+     * there, (t + c0 s)^{-2}, which the objective did not see, and with a fixed start at c from 1 to 5 the density was off
+     * by up to 0.12 (case DU, c = 5, g0 = 0.5, at the 90% point) without a warning; as place of DFDet.jl) */
+    if (side == 1 && c0p > 0) P.foc[P.nfoc++] = -tr / c0p;
     double D = side == 1 ? edge - lo : hi - edge, m = 1e-3 * D, ds[24];
     const int nh = 12; int ng2 = 0;
     double g1[12];

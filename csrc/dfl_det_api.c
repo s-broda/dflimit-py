@@ -11,10 +11,24 @@ void dfl_det_defaults(dfl_det_opts *o)
     o->method = DFL_DET_AUTO;
 }
 static const dfl_det_opts *opts_or_default(const dfl_det_opts *o, dfl_det_opts *d) { if (o) return o; dfl_det_defaults(d); return d; }
-static int check_common(const dfl_design *D, double c, const dfl_det_opts *o, char *err, size_t errlen)
+/* the largest c at which the general engine computes (gen_cmax of DFDet.jl): DFL_DET_CMAX0 without deterministic terms,
+ * DFL_DET_CMAX with them, DFL_DET_CMAX_FIXED with them and a fixed start (dflimit.h) */
+double dfl_det_cmax(const dfl_design *D, int start, double gamma0)
+{
+    if (D && D->K == 0) return DFL_DET_CMAX0;
+    return start == DFL_START_FIXED && gamma0 != 0 ? DFL_DET_CMAX_FIXED : DFL_DET_CMAX;
+}
+/* the common checks of the arguments; what names the statistic in the refusal above dfl_det_cmax */
+static int check_common(const dfl_design *D, double c, const dfl_det_opts *o, const char *what, char *err, size_t errlen)
 {
     if (!D) { snprintf(err, errlen, "no design"); return 1; }
     if (!isfinite(c)) { snprintf(err, errlen, "c must be a finite real scalar"); return 1; }
+    double cb = dfl_det_cmax(D, o->start, o->gamma0);
+    if (c > cb) {
+        snprintf(err, errlen, "%s at c = %g: the general engine computes up to c = %g for this design and start (%g without deterministic terms; with them %g, and %g with a fixed start; above, the roots of its transform are no longer resolved in double precision); the classical cases DK, DU, DT are available with the engine \"classical\" or the default engine \"auto\"",
+                 what, c, cb, DFL_DET_CMAX0, DFL_DET_CMAX, DFL_DET_CMAX_FIXED);
+        return 1;
+    }
     if (!isfinite(o->c0)) { snprintf(err, errlen, "c0 must be a finite real scalar"); return 1; }
     if (o->start < 0 || o->start > 2) { snprintf(err, errlen, "start must be zero (0), fixed (1) or stationary (2)"); return 1; }
     if (!isfinite(o->gamma0)) { snprintf(err, errlen, "gamma0 must be a finite real scalar"); return 1; }
@@ -162,7 +176,7 @@ int dfl_det_dist(int kind, const dfl_design *D, int n, const double *x, double c
     dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
     det_warn_clear();
     if (kind != 1 && kind != 2) { snprintf(err, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
-    if (check_common(D, c, o, err, errlen)) return 1;
+    if (check_common(D, c, o, kind == 2 ? "the t-ratio (dist_cdf)" : "the t-ratio (dist_pdf)", err, errlen)) return 1;
     dfl_prov *pv;
     if (det_line_select(D, c, o, &pv, err, errlen)) return 1;
     det_path *CP = NULL;
@@ -255,7 +269,7 @@ int dfl_det_quantile(const dfl_design *D, int n, const double *p, double c, doub
 {
     dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
     det_warn_clear();
-    if (check_common(D, c, o, err, errlen)) return 1;
+    if (check_common(D, c, o, "the quantiles of the t-ratio (dist_quantile)", err, errlen)) return 1;
     for (int k = 0; k < n; k++) if (!(p[k] > 0 && p[k] < 1)) { snprintf(err, errlen, "dist_quantile: p must lie in (0, 1)"); return 1; }
     if (isnan(x0)) x0 = -2.0;
     if (start_tol_check("dist_quantile", "x0", x0, tol, err, errlen)) return 1;
@@ -299,7 +313,7 @@ int dfl_det_coef(int kind, const dfl_design *D, int n, const double *y, double c
     dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
     det_warn_clear();
     if (kind != 1 && kind != 2) { snprintf(err, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
-    if (check_common(D, c, o, err, errlen)) return 1;
+    if (check_common(D, c, o, kind == 2 ? "the coefficient statistic (coef_cdf)" : "the coefficient statistic (coef_pdf)", err, errlen)) return 1;
     det_path *CP = user_path(D, c, o, err, errlen);
     if (!CP) return 1;
     double *yf = malloc((n + 1) * sizeof(double)); int *ix = malloc((n + 1) * sizeof(int));
@@ -318,7 +332,7 @@ int dfl_det_coef_quantile(const dfl_design *D, int n, const double *p, double c,
 {
     dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
     det_warn_clear();
-    if (check_common(D, c, o, err, errlen)) return 1;
+    if (check_common(D, c, o, "the coefficient statistic (coef_quantile)", err, errlen)) return 1;
     for (int k = 0; k < n; k++) if (!(p[k] > 0 && p[k] < 1)) { snprintf(err, errlen, "coef_quantile: p must lie in (0, 1)"); return 1; }
     if (isnan(y0)) y0 = -10.0;
     if (start_tol_check("coef_quantile", "y0", y0, tol, err, errlen)) return 1;
@@ -352,11 +366,47 @@ static void gpgrid(int N, double umax, double *u, double *w)
     for (int k = 0; k <= N; k++) { double v = k * h; u[k] = sinh(v); w[k] = cosh(v) * h; }
     u[0] = 1e-7; w[0] /= 2;
 }
+/* the distance from the origin of the nearest singularity of phi(u) = E exp(iu (U - aV)) (gp_edge): U - aV is a quadratic
+ * form, whose transform M(s, -a s) is singular on the real line only, at the first zeros s_+ > 0 and s_- < 0 of the entire
+ * function e^{c + theta} det(...) along s, scanned by factors of 1.1 from 1e-10 to 1e4 and bisected; the smaller of s_+
+ * and |s_-| (-1: out of memory).  (The phase of the determinant alone is -Im theta on the real line where -a s > c^2/2, so
+ * that the sign change is read off the entire function.) */
+static int gp_bad(det_work *W, det_fixt *fx, double c, double a, double s)
+{
+    cdouble t = CPX(-a * s, 0), th, l0, ld;
+    if (det_logmgf_tpart(W, c, t, &th, fx)) return 1;
+    det_logmgf_spart(W, c, CPX(s, 0), t, th, fx, &l0, &ld);
+    cdouble L = cadd(ld, caddr(th, c));
+    return !(isfinite(creal(L)) && fabs(cimag(L)) < 1.0);
+}
+static double gp_edge(const det_model *Mo, double a, double c)
+{
+    char buf[DET_WORK_STACK]; det_work W;
+    if (det_work_init(&W, Mo, buf, sizeof buf)) return -1;
+    det_fixt *fx = Mo->start == 1 ? det_fixt_alloc(Mo->r) : NULL;
+    double e = INFINITY;
+    for (int side = 0; side < 2; side++) {
+        double sg = side ? -1.0 : 1.0, s = 1e-10;
+        while (s < 1e4 && !gp_bad(&W, fx, c, a, sg * 1.1 * s)) s *= 1.1;
+        if (!(s < 1e4)) continue;
+        double lo = s, hi = 1.1 * s;
+        for (int it = 0; it < 40; it++) { double m = sqrt(lo * hi); if (gp_bad(&W, fx, c, a, sg * m)) hi = m; else lo = m; }
+        e = dmin(e, lo);
+    }
+    free(fx); det_work_free(&W);
+    return e;
+}
+/* the smallest ratio of the distance d of the singularity of phi (gp_edge) to the step h = asinh(umax)/N of the grid near
+ * the origin, below which coef_cdf_gp refuses (GP_EDGE of DFDet.jl): the error of the trapezoidal rule is about
+ * 0.16 exp(-2 pi d/h) (case DK against the classical engine: 4.5e-4 at d/h = 0.98, 8.4e-6 at 1.57, below 6e-8 from 3.06
+ * on); above the unit root d shrinks like 2c e^{-c}, so that with the default grid the 30% point of case DK has d/h = 3.1
+ * at c = 10 and 0.5 at c = 12 (off by 1.1e-2) */
+#define GP_EDGE 3.3
 int dfl_det_coef_cdf_gp(const dfl_design *D, int n, const double *y, double c, const dfl_det_opts *o0, int N, double umax, double *out, char *err, size_t errlen)
 {
     dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
     det_warn_clear();
-    if (check_common(D, c, o, err, errlen)) return 1;
+    if (check_common(D, c, o, "the coefficient statistic (coef_cdf_gp)", err, errlen)) return 1;
     if (N <= 0) N = 60000;
     if (!(umax > 0)) umax = 4000;
     if (umax == INFINITY) { snprintf(err, errlen, "coef_cdf_gp: umax must be a positive finite number (NaN or <= 0: the default 4000)"); return 1; }
@@ -371,7 +421,14 @@ int dfl_det_coef_cdf_gp(const dfl_design *D, int n, const double *y, double c, c
     for (int j = 0; j < n && !rc; j++) {
         /* (1, 0, NaN at Inf, -Inf, NaN, without the sum: at Inf the transform at t = -i Inf u did not return) */
         if (!isfinite(y[j])) { out[j] = nonfinite1(1, y[j]); continue; }
-        gp_ctx g = {&Mo, c, o->c0 + y[j], u, L0, LD, {0, ""}};
+        double a = o->c0 + y[j], d = gp_edge(&Mo, a, c), hgp = asinh(umax) / N;
+        if (d < 0) { snprintf(err, errlen, "out of memory"); rc = 1; break; }
+        if (!(d / hgp >= GP_EDGE)) {
+            snprintf(err, errlen, "coef_cdf_gp at c = %g, y = %g: the transform of U - (c0 + y) V has a singularity at %.3g from the real line, which the grid of the inversion (step %.3g near the origin) does not resolve (above the unit root the law widens like e^{2c}); it needs N >= %.0f, or coef_cdf (the contour integral)",
+                     c, y[j], d, hgp, ceil(GP_EDGE * asinh(umax) / d));
+            rc = 1; break;
+        }
+        gp_ctx g = {&Mo, c, a, u, L0, LD, {0, ""}};
         dfl_parfor(N + 1, gp_body, &g);
         if (det_failed(&g.st)) { snprintf(err, errlen, "%s", g.st.msg); rc = 1; break; }
         double ph = cimag(LD[0]), acc = 0;
@@ -426,10 +483,18 @@ static void mom_body(int i, void *v)
     for (int att = 0; att < 8; att++) {
         cdouble thk; cdouble U0 = CPX(rad, 0);
         if (det_logmgf_tpart(&W, c, csub(CPX(-s, 0), cscale(c0, U0)), &thk, fx)) { det_fail(&o->st, "the eigenvalues of the reciprocal roots did not converge"); break; }
+        int cut = c0 != 0 && -s + fabs(c0) * rad > c * c / 2;   /* (whether the circle in t = -s - c0 u reaches the cut of theta) */
         for (int k = 0; k < Nu; k++) {
             cdouble Uk = cscale(rad, cis_(2 * M_PI * k / Nu)), tk = csub(CPX(-s, 0), cscale(c0, Uk));
             if (c0 != 0 && k > 0) det_logmgf_tpart(&W, c, tk, &thk, fx);
             det_logmgf_spart(&W, c, Uk, tk, thk, fx, &L0[k], &LD[k]);
+            /* (where the circle reaches the cut, the logarithm continued around it is that of the entire function
+             * e^{c + theta} det(...), real and positive at the real point u = r, and not that of the determinant alone,
+             * whose phase jumps with theta across the cut: where -s - c0 r > c^2/2, as at c = 0 with c0 < 0 for every s
+             * below |c0| r, theta is imaginary at the real point, the check of the real start failed on every circle, and
+             * the moments refused (case DT at c = 0, c0 = -2); elsewhere the logarithm of the determinant, as before, bit
+             * for bit, as dist_moments of DFDet.jl) */
+            if (cut) { cdouble e = caddr(thk, c); LD[k] = cadd(LD[k], e); L0[k] = cadd(L0[k], cscale(0.5, e)); }
         }
         double r0 = creal(LD[0]);
         for (int k = 0; k < Nu; k++) Z[k] = cexp(caddr(LD[k], -r0));
@@ -461,7 +526,7 @@ int dfl_det_moments(const dfl_design *D, double c, int pmax, const dfl_det_opts 
 {
     dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
     det_warn_clear();
-    if (check_common(D, c, o, err, errlen)) return 1;
+    if (check_common(D, c, o, "the moments of the t-ratio (dist_moments)", err, errlen)) return 1;
     if (D->first) { snprintf(err, errlen, "the moments of the statistic that detrends first (detrend_first) are not implemented (not validated)"); return 1; }
     if (pmax < 1) { snprintf(err, errlen, "pmax >= 1"); return 1; }
     det_prep *P = det_prep_cached(D, o->gls, err, errlen);
@@ -550,7 +615,7 @@ int dfl_det_lin(int kind, const dfl_design *D, int n, const double *b, double a,
     dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
     det_warn_clear();
     if (kind != 1 && kind != 2) { snprintf(err, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
-    if (check_common(D, c, o, err, errlen)) return 1;
+    if (check_common(D, c, o, isnan(a) ? "the law of V (v_cdf, v_pdf)" : kind == 2 ? "the linear form U - aV (lin_cdf)" : "the linear form U - aV (lin_pdf)", err, errlen)) return 1;
     if (isnan(a)) return vlaw(kind, D, n, b, c, o, out, err, errlen);
     if (!isfinite(a)) { snprintf(err, errlen, "%s: a must be a finite real scalar (NaN: the law of V)", kind == 2 ? "lin_cdf" : "lin_pdf"); return 1; }
     det_path *CP = user_path(D, c, o, err, errlen);
@@ -592,7 +657,7 @@ int dfl_det_lin_quantile(const dfl_design *D, double p, double a, double c, doub
 {
     dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
     det_warn_clear();
-    if (check_common(D, c, o, err, errlen)) return 1;
+    if (check_common(D, c, o, "the quantiles of the linear form U - aV (lin_quantile)", err, errlen)) return 1;
     if (!(p > 0 && p < 1)) { snprintf(err, errlen, "lin_quantile: p must lie in (0, 1)"); return 1; }
     if (!isfinite(a)) { snprintf(err, errlen, "lin_quantile: a must be a finite real scalar"); return 1; }
     if (isnan(b0)) b0 = 0;
@@ -659,7 +724,7 @@ int dfl_det_adfmax(int kind, const dfl_design *D, int n, const double *x, double
     dfl_det_opts o = *o1;
     det_warn_clear();
     if (kind != 1 && kind != 2) { snprintf(err, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
-    if (adf_opts_check(&o, err, errlen) || check_common(D, c, &o, err, errlen)) return 1;
+    if (adf_opts_check(&o, err, errlen) || check_common(D, c, &o, kind == 2 ? "ADFmax (adfmax_cdf)" : "ADFmax (adfmax_pdf)", err, errlen)) return 1;
     double *xf = malloc((n + 1) * sizeof(double)); int *ix = malloc((n + 1) * sizeof(int));
     int m = split_finite(n, x, kind == 2, out, xf, ix), rc = 0;
     if (m > 0) {
@@ -685,7 +750,7 @@ int dfl_det_adfmax_quantile(const dfl_design *D, double p, double c, double x0, 
     dfl_det_opts od; const dfl_det_opts *o1 = opts_or_default(o0, &od);
     dfl_det_opts o = *o1;
     det_warn_clear();
-    if (adf_opts_check(&o, err, errlen) || check_common(D, c, &o, err, errlen)) return 1;
+    if (adf_opts_check(&o, err, errlen) || check_common(D, c, &o, "the quantiles of ADFmax (adfmax_quantile)", err, errlen)) return 1;
     if (!(p > 0 && p < 1)) { snprintf(err, errlen, "adfmax_quantile: p must lie in (0, 1)"); return 1; }
     if (isnan(x0)) x0 = -2.0;
     if (start_tol_check("adfmax_quantile", "x0", x0, tol, err, errlen)) return 1;
