@@ -168,53 +168,54 @@ static int route_double(int kind, double x, int model, double c, double c0, doub
     *out = F;
     return 0;
 }
-/* Case DK far above the unit root (method 0, a zero start, c > DFL_DKFAR_C): at large x (x > DFL_DKFAR_X) and, with c0 > c,
- * in the lower tail (x < -DFL_DKFAR_XNEG) the conditional integral with its checks (route_double), as at the points where
- * the line integral exceeds the bounds of the engine.  At large x the cost of the line integral grows like x^4 with
- * c0 != 0 (the phase of the saddle factor of its inner integrals grows like x^2, and the outer panels follow it) until its
- * rule exceeds DFL_RULEMAX: in the Julia engine at c = 10, c0 = -2 it took 0.9 s at x = 200, 3.2 s at 400, 10 s at 700,
- * 35 s at 1300 and more than three minutes at 2350, where the conditional integral with its checks takes 0.1 to 0.4 s at
- * every x and agrees with it to 1e-14; x = 300 is where the line integral's time passes the conditional integral's at
- * c = 5 to 10.  With c0 > c the bulk lies at x < 0, where X(v) has two positive roots and the far one, |x|/c0, lies inside
- * the range of sqrt(V): there the line integral is off by up to 9.8e-6 at c = 5 (c0 = 5.5, x = -30), 5.5e-5 at c = 7
- * (c0 = 9, x = -300; a negative value at x = -627), 1.5e-3 at c = 10 (c0 = 10.5, x = -400) and 2.9e-4 at c = 13, without a
- * warning, and within 5e-7 of the independent computation at x >= -20; the conditional integral with its checks within
- * 3e-10 of it at x from -30 to -400 (dk_far of DFExact.jl). */
-static bool dk_far(int model, bool stat, double g0, double c, double c0, double x)
+/* Far above the unit root at large |x| (method 0, a zero start, c > DFL_FAR_C): at x > DFL_FAR_X in models 1, 2, 3, and in
+ * model 1 with c0 > c at x < -DFL_FAR_XNEG, the conditional integral as route_double gives it (in model 1 the checked value,
+ * in models 2, 3 the checked value where its status is 0 and one path otherwise), as at the points where the line integral
+ * exceeds the bounds of the engine; these points are taken before the rule's representations (dist_impl).  At large x the
+ * line integral's cost grows like x^4 (the phase of the saddle factor of its inner integrals grows like x^2, and the panels
+ * of the outer rule follow it): in the Julia engine, case DK at c = 10, c0 = -2, 0.9 s at x = 200, 3.2 s at 400, 10 s at
+ * 700, 35 s at 1300, more than three minutes at 2350, and cases DU, DT at c = 16, c0 = 0, 10 to 20 s and some 2 GB at
+ * x = 1.3e6 and more than 8 GB at x = 4.4e6 (the median; here the size of the outer rule overflowed an int), where the
+ * conditional integral takes 0.1 to 0.4 s at every x.  With c0 > c the bulk of case DK lies at x < 0, where the line
+ * integral is off by up to 9.8e-6 at c = 5, 5.5e-5 at c = 7 (a negative value at c0 = 9, x = -627), 1.5e-3 at c = 10 and
+ * 2.9e-4 at c = 13 without a warning, and within 5e-7 at x >= -20.  The values: in case DK within 1.3e-8 of an independent
+ * computation up to c = 14; in cases DU, DT within 1e-14 of the general engine up to c = 13 (x up to 3e4) and within 5e-7
+ * of the large-c law at c = 13 and 14 (far_tail of DFExact.jl). */
+static bool far_tail(int model, bool stat, double g0, double c, double c0, double x)
 {
-    return model == 1 && !stat && g0 == 0 && c > DFL_DKFAR_C && (x > DFL_DKFAR_X || (c0 > c && x < -DFL_DKFAR_XNEG));
+    return model >= 1 && model <= 3 && !stat && g0 == 0 && c > DFL_FAR_C && (x > DFL_FAR_X || (model == 1 && c0 > c && x < -DFL_FAR_XNEG));
 }
-/* the largest c at which case DK is computed at large x above the unit root (dk_far, or where the line integral exceeds
- * its bounds): DFL_DKFAR_CMAX = 14.  Against an independent computation (the law of V given J(1) by Girsanov's theorem,
- * inverted on a line through its saddle point and integrated over J(1)) at c0 in {-2, 2, c - 1, c + 2} and x at the 24% to
- * 99.99994% points, the checked conditional integral is within 1.3e-8 at c = 13 and 14, and off by up to 7.7e-5 at c = 16
- * (from the 99.7% point on), 5.5e-3 at c = 18 and by orders of magnitude at c = 20; the general engine's line exceeds its
- * bounds there.  Above, such a point is an error (dk_far_check of DFExact.jl) */
-static int dk_far_check(int kind, double c, double c0, double x, char *err, size_t errlen)
+/* the largest c at which the classical engine computes far above the unit root at large |x| (far_tail, or where the line
+ * integral exceeds its bounds): DFL_FAR_CMAX = 14.  In case DK the checked conditional integral is off by up to 7.7e-5 at
+ * c = 16, 5.5e-3 at c = 18 and by orders of magnitude at c = 20 against an independent computation (within 1.3e-8 at c = 13
+ * and 14); in case DT at c = 16 one path gives values of 1e44 and more at the 95% and 99.7% points; in case DU its line
+ * integral at c0 = 0 exhausts the memory there.  Above, such a point is an error, before anything is computed (far_check of
+ * DFExact.jl) */
+static int far_check(int kind, int model, double c, double c0, double x, char *err, size_t errlen)
 {
-    if (!(c > DFL_DKFAR_CMAX)) return 0;
+    if (!(c > DFL_FAR_CMAX)) return 0;
     char cc0[48] = ""; if (c0 != 0) snprintf(cc0, sizeof cc0, ", c0 = %g", c0);
-    snprintf(err, errlen, "%s: case DK, c = %g%s, x = %g: case DK far above the unit root at large |x| (for c > %g at x > %g, with c0 > c at x < -%g, and where the line integral exceeds the bounds of the engine) is computed for c <= %g only: beyond, the conditional integral that takes these points is off by up to 7.7e-5 at c = 16 and 5.5e-3 at c = 18, and the general engine's line exceeds its bounds",
-             kind == 2 ? "ltratio_cdf" : "ltratio_pdf", c, cc0, x, DFL_DKFAR_C, DFL_DKFAR_X, DFL_DKFAR_XNEG, DFL_DKFAR_CMAX);
+    snprintf(err, errlen, "%s: case %s, c = %g%s, x = %g: far above the unit root at large |x| (for c > %g at x > %g, in case DK with c0 > c at x < -%g, and where the line integral exceeds the bounds of the engine) the classical engine computes for c <= %g only: beyond, the conditional integral that takes these points is off by up to 7.7e-5 in case DK at c = 16 and gives values of 1e44 and more in case DT, the line integral exhausts the memory, and the general engine's line exceeds its bounds",
+             kind == 2 ? "ltratio_cdf" : "ltratio_pdf", model == 1 ? "DK" : model == 2 ? "DU" : "DT", c, cc0, x, DFL_FAR_C, DFL_FAR_X, DFL_FAR_XNEG, DFL_FAR_CMAX);
     return 1;
+}
+/* a point of far_tail: the conditional integral as route_double gives it */
+static int far_point(int kind, double x, int model, double c, double c0, double g0, bool stat, const dfl_double_opts *dopt, double *out, char *err, size_t errlen)
+{
+    dfl_bound_t bd; bd.bound = DFL_BOUND_RULE; bd.need = 0; bd.what = "the line integral far above the unit root";
+    int fl = 0;
+    return route_double(kind, x, model, c, c0, g0, stat, dopt, &bd, out, &fl, err, errlen);
 }
 /* the line integral at a point chosen for it: where its paths exceed the bounds of the engine (refused before its inner
  * integrals are evaluated), with method 0 the conditional integral (route_double; *nflag counts its flagged values), with
- * method 1 and in model 4 (which has the line integral only) an error that names the arguments (dfl_bound_msg); case DK far
- * above the unit root at large x with method 0 the conditional integral at once (dk_far) */
+ * method 1 and in model 4 (which has the line integral only) an error that names the arguments (dfl_bound_msg) */
 static int single_route(int kind, double x, int model, double c, double c0, double g0, bool stat, int method, const dfl_single_opts *so,
                         const dfl_double_opts *dopt, double *out, int *nflag, char *err, size_t errlen)
 {
     dfl_bound_t bd;
-    if (method == 0 && dk_far(model, stat, g0, c, c0, x)) {
-        if (dk_far_check(kind, c, c0, x, err, errlen)) return 1;
-        bd.bound = DFL_BOUND_RULE; bd.need = 0; bd.what = "the line integral far above the unit root";
-        int fl0 = 0;
-        return route_double(kind, x, model, c, c0, g0, stat, dopt, &bd, out, &fl0, err, errlen);
-    }
     if (single_point(kind, x, model, c, c0, g0, stat, so, out, &bd) == 0) return 0;
     if (method != 0 || model == 4) { dfl_bound_msg(err, errlen, kind, model, c, c0, g0, stat, x, &bd); return 10 + bd.bound; }
-    if (model == 1 && bd.bound == DFL_BOUND_RULE && dk_far_check(kind, c, c0, x, err, errlen)) return 1;
+    if (bd.bound == DFL_BOUND_RULE && !stat && g0 == 0 && far_check(kind, model, c, c0, x, err, errlen)) return 1;
     int fl = 0;
     if (route_double(kind, x, model, c, c0, g0, stat, dopt, &bd, out, &fl, err, errlen)) return 1;
     *nflag += fl;
@@ -258,10 +259,9 @@ static int dist_impl(int kind, int n, const double *x, int model, double c, doub
     dfl_single_opts sd; if (so == NULL) { dfl_single_defaults(&sd); so = &sd; }
     dfl_double_opts dd; if (dopt == NULL) { dfl_double_defaults(&dd); dopt = &dd; }
     if (nstatus) *nstatus = 0;
-    /* (case DK far above the unit root above c = 14: refused before anything is computed, whichever representation the rule
-     * names, with verified too; dk_far_check) */
-    if (method == 0 && c > DFL_DKFAR_CMAX)
-        for (int k = 0; k < n; k++) if (isfinite(x[k]) && dk_far(model, stat, g0, c, c0, x[k]) && dk_far_check(kind, c, c0, x[k], err, errlen)) return 1;
+    /* (far above the unit root at large |x|, far_tail: refused above c = 14 before anything is computed, with verified too) */
+    if (method == 0 && c > DFL_FAR_CMAX)
+        for (int k = 0; k < n; k++) if (isfinite(x[k]) && far_tail(model, stat, g0, c, c0, x[k]) && far_check(kind, model, c, c0, x[k], err, errlen)) return 1;
     if (!dopt->verified) {
         /* the default: one evaluation by one method at each point (no second evaluation, no refinement driven by an
          * estimate, no fallback, no recomputation of the tails); no status (ltratio_dist of DFExact.jl).  A point that the
@@ -272,6 +272,7 @@ static int dist_impl(int kind, int n, const double *x, int model, double c, doub
         int *id1 = malloc((n + 1) * sizeof(int)), *ic1 = malloc((n + 1) * sizeof(int));
         for (int k = 0; k < n && rc1 == 0; k++) {
             if (!isfinite(x[k])) { out[k] = nonfinite(kind, x[k]); continue; }
+            if (method == 0 && far_tail(model, stat, g0, c, c0, x[k])) { rc1 = far_point(kind, x[k], model, c, c0, g0, stat, dopt, &out[k], err, errlen); continue; }
             int m = method == 0 ? automethod_one(model, c, c0, g0, stat, x[k]) : method;
             if (m == 2) { xd1[nd1] = x[k]; id1[nd1++] = k; }
             else if (m == 3) { xc1[nc1] = x[k]; ic1[nc1++] = k; }
@@ -303,6 +304,7 @@ static int dist_impl(int kind, int n, const double *x, int model, double c, doub
     for (int k = 0; k < n; k++) {
         meth[k] = 0;
         if (!isfinite(x[k])) { out[k] = nonfinite(kind, x[k]); continue; }
+        if (method == 0 && far_tail(model, stat, g0, c, c0, x[k])) { meth[k] = -1; if (rc == 0) rc = far_point(kind, x[k], model, c, c0, g0, stat, dopt, &out[k], err, errlen); continue; }
         int m = method == 0 ? automethod_verified(model, c, c0, g0, stat, x[k]) : method;
         meth[k] = m;
         if (m == 2) { xd[nd] = x[k]; id[nd] = k; tosingle[nd] = 1; nd++; }
@@ -340,9 +342,7 @@ static int dist_impl(int kind, int n, const double *x, int model, double c, doub
         rc = dfl_double(kind, nd, xd, model, c, c0, g0, stat, dopt, Fd, info, err, errlen);
         if (rc == 0) for (int j = 0; j < nd; j++) {
             int k = id[j];
-            /* (case DK far above the unit root, dk_far: the flag is a false alarm and the line integral is off there, the
-             * double integral's value stays) */
-            if (info[j].status == 0 || method == 2 || (method == 0 && dk_far(model, stat, g0, c, c0, x[k]))) out[k] = Fd[j];
+            if (info[j].status == 0 || method == 2) out[k] = Fd[j];
             else if (tosingle[j]) {
                 /* a flagged point chosen by the rule or flagged by the contour integral: the single integral's value, or, where
                  * its paths exceed the bounds of the engine, the flagged value (the contour integral's in out[k], the double

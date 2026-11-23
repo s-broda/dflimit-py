@@ -338,8 +338,8 @@ int dfl_check_args(int model, double c, double c0, double g0, bool stat, char *e
  * x > 0, and large x above the unit root) is refused before it is evaluated: method 0 then takes the conditional integral
  * there, with its checks (verified, whatever dopt->verified; at large x above the unit root in models 2, 3 its one
  * evaluation where the checked value is flagged, in model 1 the checked value whatever its flag), and dfl_warning names the
- * call where such a value near c0 = 0 is flagged; model 1 far above the unit root (c > 4) takes the conditional integral
- * with its checks at x > 300 and, with c0 > c, at x < -20 as well, and refuses these points above c = 14 (dk_far in
+ * call where such a value near c0 = 0 is flagged; models 1, 2, 3 far above the unit root (c > 4) take the conditional
+ * integral at x > 300 too, model 1 with c0 > c also at x < -20, and these points are refused above c = 14 (far_tail in
  * dfl_api.c); kind 2 ends with dfl_cdf_range_check; method 1, and
  * method 0 in model 4, which has the line integral only, return the error code 10 + the bound (DFL_BOUND_RULE,
  * DFL_BOUND_PATH) with a message that names the arguments (dfl_bound_msg; other errors return 1).  With
@@ -358,14 +358,14 @@ int dfl_dist(int kind, int n, const double *x, int model, double c, double c0, d
  * that failed, never rounding; the check costs nothing and recomputes nothing.  dfl_dist (kind 2), dfl_det_dist (kind 2)
  * and dfl_det_coef (kind 2) apply it to every value they return. */
 #define DFL_CDF_RANGE_TOL 1e-8
-/* case DK far above the unit root (dfl_api.c, dk_far): with method 0, a zero start and c > DFL_DKFAR_C, at x > DFL_DKFAR_X
- * and, with c0 > c, at x < -DFL_DKFAR_XNEG the conditional integral with its checks, as where the line integral exceeds the
- * bounds of the engine; there and at those points, above c = DFL_DKFAR_CMAX an error (the conditional integral is off by up
- * to 7.7e-5 at c = 16) */
-#define DFL_DKFAR_C 4.0
-#define DFL_DKFAR_X 300.0
-#define DFL_DKFAR_XNEG 20.0
-#define DFL_DKFAR_CMAX 14.0
+/* far above the unit root at large |x| (dfl_api.c, far_tail): with method 0, a zero start and c > DFL_FAR_C, at
+ * x > DFL_FAR_X in models 1, 2, 3 and in model 1 with c0 > c at x < -DFL_FAR_XNEG the conditional integral as at the points
+ * where the line integral exceeds the bounds of the engine; there and at those points, above c = DFL_FAR_CMAX an error (the
+ * conditional integral is off by up to 7.7e-5 in case DK at c = 16 and gives 1e44 in case DT) */
+#define DFL_FAR_C 4.0
+#define DFL_FAR_X 300.0
+#define DFL_FAR_XNEG 20.0
+#define DFL_FAR_CMAX 14.0
 int dfl_cdf_range_check(const char *fn, const char *args, const char *xname, int n, const double *x, const double *F, char *err, size_t errlen);
 /* the warning of the last call of dfl_dist, dfl_icdf or a function of the router (dfl_engine_*) on the calling thread, or
  * NULL: points that the line integral refused and whose values from the conditional integral are flagged (route_warn of
