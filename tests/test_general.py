@@ -512,3 +512,24 @@ def test_line_integral_method():
     assert np.array_equal(d.ltratio_cdf(x, d.trend(0), -5, method="line"), d.ltratio_cdf(x, "DU", -5, method="single"))
     with pytest.raises(ValueError):
         d.ltratio_cdf(x, "DU", -5, method="paths")
+
+
+def test_above_the_unit_root():
+    """The coefficient statistic at c = 20 (the segments of the paths around the roots shorter than 1e-12 got no panel: case
+    DK gave 0.3128 for the 30% point), the moments (case DT at c = 0, c0 = -2 failed on the default route; far above the
+    unit root the (1,1) entry of the matrix of the transform), the guard of coef_cdf_gp and the range of c (16 with
+    deterministic terms, 20 without)."""
+    assert abs(coef_cdf(19.999999940099205, "DK", 20, engine="general") - 0.3) < 2e-8
+    mc = np.asarray(ltratio_mom(4, "DT", 0, c0=-2, engine="classical"))
+    assert np.max(np.abs(np.asarray(ltratio_mom(4, "DT", 0, c0=-2)) - mc) / np.abs(mc)) < 1e-9
+    mc = np.asarray(ltratio_mom(4, "DK", 20, engine="classical"))
+    assert np.max(np.abs(np.asarray(dist_moments(trend(-1), 20)) - mc) / np.abs(mc)) < 1e-11
+    with pytest.raises(ValueError, match="needs N >="):
+        coef_cdf_gp(trend(-1), 11.999892584561692, 12)
+    with pytest.raises(ValueError, match="up to c = 16"):
+        coef_cdf(17, trend(0), 17, engine="general")
+    with pytest.raises(ValueError, match=r"the t-ratio \(dist_cdf\) at c = 18"):
+        dist_cdf(perron("A", 0.5), 0, 18, c0=2)
+    with pytest.raises(ValueError, match="up to c = 20"):
+        dist_moments(trend(-1), 21)
+    assert np.allclose(ltratio_mom(2, "DU", 18), ltratio_mom(2, "DU", 18, engine="classical"), rtol=0, atol=0)
