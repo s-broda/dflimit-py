@@ -115,7 +115,10 @@ Elliott, Rothenberg and Stock and the power envelope of any design), `lm_cdf`, `
 statistic of Schmidt and Phillips), `mza_cdf`, `mza_quantile` (MZ_alpha) and `msb_cdf`, `msb_quantile` (MSB), with
 the options `c0`, `start`, `gamma0` (the fixed start), `gls`, `method` (the t-ratio) and, for the distribution
 functions and densities, `verified` (the checked computation: two evaluations on different paths, a third where they differ by more than
-1e-9). Every value is one evaluation by default. The engine's warnings (where one evaluation may be inaccurate) are
+1e-9) and `rule` (the rule of one evaluation of the t-ratio's paths: `"auto"`, the default, the thinner rules of
+DFLimit.jl by regions of the start, the deterministic terms, `c` and `c0`, with the outer step 1.5 times as long and 16
+and 32 nodes on the paths around the roots where they hold; `"present"` the rule before November 2026). Every value is
+one evaluation by default. The engine's warnings (where one evaluation may be inaccurate) are
 `RuntimeWarning`s.
 
 ```python
