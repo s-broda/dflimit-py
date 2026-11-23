@@ -59,3 +59,5 @@ def test_the_upper_tail_above_the_unit_root():
                                rtol=0, atol=1e-10)
     with pytest.raises(ValueError, match="is computed for c <= 14 only"):
         ltratio_cdf(1e7, "DK", 16, c0=2)
+    with pytest.raises(ValueError, match="is computed for c <= 14 only"):
+        ltratio_cdf(1e7, "DK", 16, c0=-2, verified=True)
