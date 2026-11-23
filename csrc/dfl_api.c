@@ -144,11 +144,16 @@ static int check_method(int model, double g0, bool stat, int method, char *err, 
  * -0.1}, x in {0.05, 0.5, 1, 1.5}, within 5e-7 with the status flagged at most of the points, where one path is off by up
  * to 5e-5, but the density at c = c0 = -1e-3, x = 0.05 off by 1.2e-3 (flagged): dfl_warning names the call where a value
  * returned is flagged; case DK with a zero start (c in {-1, 0, 2}, c0 in {-1e-3, -1e-2, -0.1}) and a fixed start (g0 = 1,
- * c0 = -1e-2) within 1e-13.  (b) Large x above the unit root (DFL_BOUND_RULE): with its checks where its status is 0,
- * otherwise one path; against the newer engine at c = 7 (x up to 1000, cases DK, DU, DT) and c = 10 (case DT, x up to 1500)
- * within 1e-14, where in case DK one path is off by up to 5e-2 (its checked value has the status 0) and in case DT the
- * checked value by up to 3e-2 (with the status 2; one path is right).  The options of the conditional integral are those
- * of dopt, with its checks as stated. */
+ * c0 = -1e-2) within 1e-13.  (b) Large x above the unit root (DFL_BOUND_RULE): in case DK the checked value whatever its
+ * status, in cases DU, DT the checked value where its status is 0 and otherwise one path.  Against the newer engine at
+ * c = 7 (x up to 1000, cases DK, DU, DT) and c = 10 (case DT, x up to 1500) within 1e-14, where in case DT the checked value
+ * is off by up to 3e-2 with the status 2 and one path is right.  In case DK the status 2 is a false alarm and one path is
+ * far off: against an independent computation (the law of V given J(1) from Girsanov's theorem, inverted on a line
+ * through its saddle point and integrated over J(1)), at c = 7, 10 and 13 with c0 in {-2, 0, 2, c - 1, c + 2} from the 24%
+ * to the 99.7% point the checked value is within 1.2e-9 at every point (32 of 36 with the status 2), one path off by up to
+ * 8; before November 23, 2026 the flagged points of case DK got one path too, and the automatic method returned values
+ * outside [0, 1] there (route_double of DFExact.jl).  The options of the conditional integral are those of dopt, with its
+ * checks as stated. */
 static int route_double(int kind, double x, int model, double c, double c0, double g0, bool stat, const dfl_double_opts *dopt, const dfl_bound_t *bd,
                         double *out, int *flag, char *err, size_t errlen)
 {
@@ -157,21 +162,59 @@ static int route_double(int kind, double x, int model, double c, double c0, doub
     *flag = 0;
     if (dfl_double(kind, 1, &x, model, c, c0, g0, stat, &dv, &F, &info, err, errlen)) return 1;
     if (bd->bound == DFL_BOUND_PATH) { *out = F; *flag = info.status != 0; return 0; }
-    if (info.status == 0) { *out = F; return 0; }
+    if (info.status == 0 || model == 1) { *out = F; return 0; }
     dv.verified = 0;
     if (dfl_double(kind, 1, &x, model, c, c0, g0, stat, &dv, &F, &info, err, errlen)) return 1;
     *out = F;
     return 0;
 }
+/* Case DK far above the unit root (method 0, a zero start, c > DFL_DKFAR_C): at large x (x > DFL_DKFAR_X) and, with c0 > c,
+ * in the lower tail (x < -DFL_DKFAR_XNEG) the conditional integral with its checks (route_double), as at the points where
+ * the line integral exceeds the bounds of the engine.  At large x the cost of the line integral grows like x^4 with
+ * c0 != 0 (the phase of the saddle factor of its inner integrals grows like x^2, and the outer panels follow it) until its
+ * rule exceeds DFL_RULEMAX: in the Julia engine at c = 10, c0 = -2 it took 0.9 s at x = 200, 3.2 s at 400, 10 s at 700,
+ * 35 s at 1300 and more than three minutes at 2350, where the conditional integral with its checks takes 0.1 to 0.4 s at
+ * every x and agrees with it to 1e-14; x = 300 is where the line integral's time passes the conditional integral's at
+ * c = 5 to 10.  With c0 > c the bulk lies at x < 0, where X(v) has two positive roots and the far one, |x|/c0, lies inside
+ * the range of sqrt(V): there the line integral is off by up to 9.8e-6 at c = 5 (c0 = 5.5, x = -30), 5.5e-5 at c = 7
+ * (c0 = 9, x = -300; a negative value at x = -627), 1.5e-3 at c = 10 (c0 = 10.5, x = -400) and 2.9e-4 at c = 13, without a
+ * warning, and within 5e-7 of the independent computation at x >= -20; the conditional integral with its checks within
+ * 3e-10 of it at x from -30 to -400 (dk_far of DFExact.jl). */
+static bool dk_far(int model, bool stat, double g0, double c, double c0, double x)
+{
+    return model == 1 && !stat && g0 == 0 && c > DFL_DKFAR_C && (x > DFL_DKFAR_X || (c0 > c && x < -DFL_DKFAR_XNEG));
+}
+/* the largest c at which case DK is computed at large x above the unit root (dk_far, or where the line integral exceeds
+ * its bounds): DFL_DKFAR_CMAX = 14.  Against an independent computation (the law of V given J(1) by Girsanov's theorem,
+ * inverted on a line through its saddle point and integrated over J(1)) at c0 in {-2, 2, c - 1, c + 2} and x at the 24% to
+ * 99.99994% points, the checked conditional integral is within 1.3e-8 at c = 13 and 14, and off by up to 7.7e-5 at c = 16
+ * (from the 99.7% point on), 5.5e-3 at c = 18 and by orders of magnitude at c = 20; the general engine's line exceeds its
+ * bounds there.  Above, such a point is an error (dk_far_check of DFExact.jl) */
+static int dk_far_check(int kind, double c, double c0, double x, char *err, size_t errlen)
+{
+    if (!(c > DFL_DKFAR_CMAX)) return 0;
+    char cc0[48] = ""; if (c0 != 0) snprintf(cc0, sizeof cc0, ", c0 = %g", c0);
+    snprintf(err, errlen, "%s: case DK, c = %g%s, x = %g: case DK far above the unit root at large |x| (for c > %g at x > %g, with c0 > c at x < -%g, and where the line integral exceeds the bounds of the engine) is computed for c <= %g only: beyond, the conditional integral that takes these points is off by up to 7.7e-5 at c = 16 and 5.5e-3 at c = 18, and the general engine's line exceeds its bounds",
+             kind == 2 ? "ltratio_cdf" : "ltratio_pdf", c, cc0, x, DFL_DKFAR_C, DFL_DKFAR_X, DFL_DKFAR_XNEG, DFL_DKFAR_CMAX);
+    return 1;
+}
 /* the line integral at a point chosen for it: where its paths exceed the bounds of the engine (refused before its inner
  * integrals are evaluated), with method 0 the conditional integral (route_double; *nflag counts its flagged values), with
- * method 1 and in model 4 (which has the line integral only) an error that names the arguments (dfl_bound_msg) */
+ * method 1 and in model 4 (which has the line integral only) an error that names the arguments (dfl_bound_msg); case DK far
+ * above the unit root at large x with method 0 the conditional integral at once (dk_far) */
 static int single_route(int kind, double x, int model, double c, double c0, double g0, bool stat, int method, const dfl_single_opts *so,
                         const dfl_double_opts *dopt, double *out, int *nflag, char *err, size_t errlen)
 {
     dfl_bound_t bd;
+    if (method == 0 && dk_far(model, stat, g0, c, c0, x)) {
+        if (dk_far_check(kind, c, c0, x, err, errlen)) return 1;
+        bd.bound = DFL_BOUND_RULE; bd.need = 0; bd.what = "the line integral far above the unit root";
+        int fl0 = 0;
+        return route_double(kind, x, model, c, c0, g0, stat, dopt, &bd, out, &fl0, err, errlen);
+    }
     if (single_point(kind, x, model, c, c0, g0, stat, so, out, &bd) == 0) return 0;
     if (method != 0 || model == 4) { dfl_bound_msg(err, errlen, kind, model, c, c0, g0, stat, x, &bd); return 10 + bd.bound; }
+    if (model == 1 && bd.bound == DFL_BOUND_RULE && dk_far_check(kind, c, c0, x, err, errlen)) return 1;
     int fl = 0;
     if (route_double(kind, x, model, c, c0, g0, stat, dopt, &bd, out, &fl, err, errlen)) return 1;
     *nflag += fl;
@@ -293,7 +336,9 @@ static int dist_impl(int kind, int n, const double *x, int model, double c, doub
         rc = dfl_double(kind, nd, xd, model, c, c0, g0, stat, dopt, Fd, info, err, errlen);
         if (rc == 0) for (int j = 0; j < nd; j++) {
             int k = id[j];
-            if (info[j].status == 0 || method == 2) out[k] = Fd[j];
+            /* (case DK far above the unit root, dk_far: the flag is a false alarm and the line integral is off there, the
+             * double integral's value stays) */
+            if (info[j].status == 0 || method == 2 || (method == 0 && dk_far(model, stat, g0, c, c0, x[k]))) out[k] = Fd[j];
             else if (tosingle[j]) {
                 /* a flagged point chosen by the rule or flagged by the contour integral: the single integral's value, or, where
                  * its paths exceed the bounds of the engine, the flagged value (the contour integral's in out[k], the double
@@ -312,12 +357,29 @@ static int dist_impl(int kind, int n, const double *x, int model, double c, doub
     free(xd); free(xc); free(id); free(ic); free(tosingle); free(meth); free(flag);
     return rc;
 }
+int dfl_cdf_range_check(const char *fn, const char *args, const char *xname, int n, const double *x, const double *F, char *err, size_t errlen)
+{
+    for (int k = 0; k < n; k++) {
+        if (!(F[k] < -DFL_CDF_RANGE_TOL || F[k] > 1 + DFL_CDF_RANGE_TOL)) continue;
+        snprintf(err, errlen, "%s: %s, %s = %g: the computed distribution function is %.12g, outside [0, 1] by more than %g; the computation fails here and no value is returned",
+                 fn, args, xname, x[k], F[k], DFL_CDF_RANGE_TOL);
+        return 1;
+    }
+    return 0;
+}
 int dfl_dist(int kind, int n, const double *x, int model, double c, double c0, double g0, bool stat, int method,
              const dfl_single_opts *so, const dfl_double_opts *dopt, double *out, int *nstatus, char *err, size_t errlen)
 {
     int nflag = 0, nkeep = 0;
     WARN[0] = 0;
     int rc = dist_impl(kind, n, x, model, c, c0, g0, stat, method, so, dopt, out, nstatus, &nflag, &nkeep, err, errlen);
+    if (rc == 0 && kind == 2) {
+        /* the final check of the distribution function (dfl_cdf_range_check) */
+        char args[160]; int k = snprintf(args, sizeof args, "case %s, c = %g", case_name(model, stat), c);
+        if (c0 != 0 && k < (int) sizeof args) k += snprintf(args + k, sizeof args - k, ", c0 = %g", c0);
+        if (g0 != 0 && k < (int) sizeof args) snprintf(args + k, sizeof args - k, ", g0 = %g", g0);
+        rc = dfl_cdf_range_check("ltratio_cdf", args, "x", n, x, out, err, errlen);
+    }
     if (rc == 0) set_warning(model, c, c0, g0, stat, nflag, nkeep);
     return rc;
 }
