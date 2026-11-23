@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+- The devices of Bao and Kan (the C engine of dflimit-matlab, branch kan-devices, a port of the module DFKan of
+  DFLimit.jl): the numerical devices of Yong Bao and Raymond Kan, "Exact Finite-Sample Distribution and Moments of the
+  Least Squares Estimator in First-Order Autoregressions: O(1) Algorithms". By default the coefficient statistic
+  (`coef_cdf`, `coef_icdf`, `coef_pdf`, which now takes a case code, and the new `coef_mom`) in the cases DK, DU, DT
+  (zero or fixed start) and SK, SU, ST up to c = 20, the linear form (`ltratio_lincdf`) in case DK for a != 0 and
+  -100 <= c <= 4 and for the designs of the six cases (any start, also case DK with a fixed start `g0`) for
+  -100 <= c <= 2, and the power envelope (`power_envelope`) in case DK for c <= -1e-4 are one inversion of the
+  closed-form joint characteristic function along the ray of the half-plane, and the moments of the t-ratio
+  (`ltratio_mom`) come from one jet per node, up to c = 20; the point-optimal statistic (`pt_cdf`, `pt_pdf`,
+  `pt_quantile`, `pt_power`, `pt_envelope`) up to c = 4 and `coef_cdf_gp` (zero or stationary start) up to c = 5 are
+  the single inversion of the general engine's transform, with the branch of the square root of its determinant from
+  the pivots at each point (their `N` and `umax` now default to `None`; given, they choose the fixed grid of before).
+  New keywords `method` (`"inversion"` or `"jets"` forces the devices, `"engine"` the computation of before, which
+  reproduces those values, `"grid"` the fixed grid of the point-optimal functions and `coef_cdf_gp`), `tol`,
+  `verified` and `err` (the tuple of the values and their error estimates); a `RuntimeWarning` names the values whose
+  estimate exceeds the tolerance. Within 6e-15 of DFLimit.jl; against the computation of before the values move by up
+  to 5.5e-13 for the coefficient statistic, 3.3e-10 for the envelope (the bisection of before to 1e-9) and 3.7e-11 for
+  the point-optimal statistic, and the quantiles of the coefficient statistic by up to the width 1e-9 at which the
+  search of before stopped; with a fixed start above the unit root the engines' moments were off (0.39 relative at
+  c = 2, c0 = -2, g0 = 1 in case DK). Warm time per value against the computation of before: 0.005 to 0.24 for the
+  half-plane statistics, 0.013 to 0.23 for the moments, 0.08 to 0.4 for the point-optimal statistic. The branches of
+  P(t), M_0(t) and the roots inside the engines are fixed at each point the same way (the values move by at most
+  4.2e-13, at the same cost). The gateway has two new entry points, `route_x` and `det_x`.
+
 ## 0.5.0
 
 - The C engine of dflimit-matlab a3c8e33: the upper tail above the unit root. Above the unit root the t-ratio with

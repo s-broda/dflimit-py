@@ -27,7 +27,7 @@ arguments, exist in R, MATLAB and Julia.
 | `ltratio_pdf(x, cas, c=0, c0=0, g0=0, method="auto")` | its density |
 | `ltratio_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-10)` | quantiles (asymptotic critical values) |
 | `ltratio_mom(p, cas, c=0, c0=0, g0=0)` | moments E[t^j], j = 1..p |
-| `coef_cdf(y, cas, c, c0, g0, method)`, `coef_icdf(p, ...)` | the coefficient statistic n(phi^ - phi0) |
+| `coef_cdf(y, cas, c, c0, g0, method)`, `coef_icdf(p, ...)`, `coef_pdf(cas, y, ...)`, `coef_mom(p, cas, ...)` | the coefficient statistic n(phi^ - phi0) |
 | `adfmax_cdf`, `adfmax_pdf`, `adfmax_icdf` | the ADFmax statistic (cases DU, DT, SU, ST) |
 | `ltratio_region(bnd, "DK", c)` | P{U <= g(V)} for a line, the parabola of the t-ratio, the WAP boundary |
 | `ltratio_lincdf(b, a, cas, c=0, cbar=-13.5)` | P(U - aV <= b), cases DK and DG (a = nan: P(V <= b)) |
@@ -52,11 +52,13 @@ has the details of the R help pages. Arguments of the wrong type raise `TypeErro
 `ValueError` (outside the ranges in which the programs are checked, with the engine's message), and the warnings of
 the R package are `RuntimeWarning`s.
 
-All numbers come from the C engine. `coef_cdf`, `coef_icdf` and `adfmax_icdf` have no entry point of their own
-there: as in the MATLAB programs and the R package, they are short Python-level wrappers (the distribution function
-of the t-ratio at 0 with a shifted local null value, and root searches on the engine's distribution functions). Not
-in the package, because the C engine does not have it: the boundary type `"fun"` (any function g) of
-`ltratio_region`.
+All numbers come from the C engine. The half-plane statistics of the six classical cases (the coefficient statistic,
+the linear form, the power envelope) and the moments of the t-ratio come by default from the devices of Bao and Kan
+(see "The devices of Bao and Kan" below); `adfmax_icdf` and, with `method="engine"` or a representation of the t-ratio,
+`coef_cdf` and `coef_icdf` are short Python-level wrappers, as in the MATLAB programs and the R package (the
+distribution function of the t-ratio at 0 with a shifted local null value, and root searches on the engine's
+distribution functions). Not in the package, because the C engine does not have it: the boundary type `"fun"` (any
+function g) of `ltratio_region`.
 
 ## The general engine
 
@@ -138,8 +140,8 @@ has the zero and the stationary start only there, and refuses a fixed start. It 
 why: probabilities and levels outside (0, 1); every function of the general engine above c = 16 with deterministic terms
 (10 with them and a fixed start) and above c = 20 without them (the range in which it is checked above the unit root;
 there the roots of its transform are no longer resolved in double precision, and `engine="auto"` takes the classical
-engine for the classical cases); the LM statistic above c = 10; the point-optimal statistic and `coef_cdf_gp` where the
-grid of their inversion does not resolve the transform (far above the unit root; the message names the grid size `N`
+engine for the classical cases); the LM statistic above c = 10; the point-optimal statistic and `coef_cdf_gp` on their
+fixed grid where the grid does not resolve the transform (far above the unit root; the message names the grid size `N`
 that serves), the point-optimal statistic also at |q| beyond 0.15 N/asinh(umax) (1000 with the default grid); and a
 design whose roots run off on the vertical line, where the paths around them would need more than a million nodes (such
 as (1 + r, 1{r < 0.4}), which has no proper intercept); the classical cases far above the unit root at large |x| (x > 300,
@@ -151,6 +153,40 @@ b <= 0.
 
 Points of one call share the paths of the inversion, so pass a whole vector in one call. The engine caches up to 64
 prepared designs, paths and refined lines; `empty_caches()` frees them.
+
+## The devices of Bao and Kan
+
+The half-plane statistics of the six classical cases and the moments of the t-ratio are computed by default with the
+numerical devices of Yong Bao and Raymond Kan, "Exact Finite-Sample Distribution and Moments of the Least Squares
+Estimator in First-Order Autoregressions: O(1) Algorithms", as in the Julia package (its module `DFKan`), the MATLAB
+programs and the R package (the C engine's `dfl_kan.c` and `dfl_det_kan.c`). The joint characteristic function of the
+limit pair comes in closed forms that are free of cancellation on both sides of the unit root, with the branch of the
+square root fixed at each point, and in Taylor-mode arithmetic (jets), so that its derivatives come out of the same
+assembly. A statistic that rejects on a half-plane is one inversion along a ray, by adaptive quadrature over decades with
+the tail completed by repeated integration by parts; the moments of the t-ratio are one-dimensional integrals of the
+j-th derivative of the moment generating function, which one jet of order j gives at each node.
+
+| function | the default | warm time in C against `method="engine"` |
+|---|---|---|
+| `coef_cdf`, `coef_icdf`, `coef_pdf`, `coef_mom` | the cases DK, DU, DT (zero or fixed start), SK, SU, ST, c <= 20 | 0.005 to 0.18 (quantiles 0.02; the density 0.03 against the general engine's) |
+| `ltratio_lincdf` | case DK, a != 0, -100 <= c <= 4; the six cases through their designs, -100 <= c <= 2 | 0.07 to 0.24 |
+| `power_envelope` | case DK (DU), c <= -1e-4 | 0.13 to 0.16 |
+| `ltratio_mom` | the six cases, any c0 and fixed start, c <= 20, up to 31 moments | 0.013 to 0.23 |
+| `pt_cdf`, `pt_pdf`, `pt_quantile`, `pt_power`, `pt_envelope` | any design, c <= 4 | 0.08 to 0.15 (quantiles 0.3 to 0.4, envelopes 0.2) |
+| `coef_cdf_gp` | zero or stationary start, c <= 5 | 0.05 to 0.1 |
+
+`method="inversion"` (`"jets"` for the moments) forces them, `method="engine"` is the computation of before, which
+reproduces those values (`method="grid"` the fixed grid of the point-optimal functions and of `coef_cdf_gp`, also taken
+where `N` or `umax` is given); `tol` is the tolerance (1e-12; 1e-10 relative for the moments), `verified=True`
+recomputes by the engines the values whose error estimate exceeds it, `err=True` returns the tuple of the values and
+their estimates (`info=True` for the moments), and a `RuntimeWarning` names the values whose estimate exceeds the
+tolerance. The regions, the tolerances and the warnings are those of the Julia package, whose README lists the
+comparisons behind them and the cases where the engines' one evaluation was wrong (the coefficient statistic of case DU
+with a fixed start far from the unit root, the linear form and the moments with a fixed start above the unit root). The
+values agree with DFLimit.jl to 6e-15 in the single inversions and the moments (`tests/test_kan.py`). The same devices
+fix the branches inside the engines: P(t), M_0(t) and the labels of the roots of the classical line and contour
+integrals and the argument of log P(t) in the general engine's line integral are determined at each point instead of
+being continued along the grids, to 4e-13 the values of before, at the same cost.
 
 ## Example
 
