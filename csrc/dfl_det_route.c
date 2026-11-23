@@ -7,6 +7,7 @@
  * is that of merged.jl (measured on the Julia engines) adjusted to the timings of the two C engines (c/test/engine_table.c,
  * c/test/engine_table_c.txt): see the comments in dfl_autoengine. */
 #include "dfl_det_int.h"
+#include "dfl_kan_int.h"
 
 /* ---------------------------------------------------------------------------------------------------------------- */
 /* the classical case of a computation: model 1..4 and stat, or 0 */
@@ -337,69 +338,235 @@ int dfl_engine_icdf(int n, const double *p, const dfl_spec *S, double c, double 
     return rc;
 }
 
-int dfl_engine_mom(int pmax, const dfl_spec *S, double c, double c0, int engine, double *m, char *err, size_t errlen)
+/* ---------------------------------------------------------------------------------------------------------------- */
+/* The single inversion of Bao and Kan for the half-plane statistics and the moments from jets (the functions inv_* of
+ * merged.jl): Yong Bao and Raymond Kan, "Exact Finite-Sample Distribution and Moments of the Least Squares Estimator in
+ * First-Order Autoregressions: O(1) Algorithms" (dfl_kan.c).  One inversion of the closed-form joint characteristic
+ * function along the ray of the half-plane, adaptive quadrature over decades and the tail completed by integration by
+ * parts; the default in the six classical cases where it was compared with the engines (the rules below), each value
+ * with its error estimate. */
+void dfl_inv_defaults(dfl_inv_opts *o) { o->method = 0; o->tol = NAN; o->verified = 0; }
+static const dfl_inv_opts *inv_opts_or_default(const dfl_inv_opts *o, dfl_inv_opts *d) { if (o) return o; dfl_inv_defaults(d); return d; }
+/* the methods of a function with the single inversion: 0, DFL_METHOD_INVERSION, DFL_METHOD_ENGINE, and the representations
+ * of the t-ratio where extra (the coefficient statistic, through the t-ratio's distribution function at zero; inv_method) */
+static int inv_method_ok(const char *fn, int method, int extra, char *err, size_t errlen)
 {
-    warn_entry();
-    spec_t R; if (resolve(S, &R, err, errlen)) return 1;
-    dfl_det_opts o; det_opts_of(&R, c0, 0, &o);
+    if (method == 0 || method == DFL_METHOD_INVERSION || method == DFL_METHOD_ENGINE) return 1;
+    if (extra && method >= 1 && method <= DFL_METHOD_PATHS) return 1;
+    snprintf(err, errlen, "%s: method must be 0 (automatic), %d (the single inversion of Bao and Kan) or %d (the engines' computation)%s", fn,
+             DFL_METHOD_INVERSION, DFL_METHOD_ENGINE, extra ? ", or a representation of the t-ratio (1 the line integral, 2 the conditional integral, 3 the contour integral, 4 the general engine's paths)" : "");
+    return 0;
+}
+/* the tolerance: NaN or 0 the default, otherwise a positive finite number */
+static int inv_tol(const char *fn, const dfl_inv_opts *io, double dflt, double *tol, char *err, size_t errlen)
+{
+    double t = io->tol;
+    if (isnan(t) || t == 0) { *tol = dflt; return 0; }
+    if (!(t > 0 && isfinite(t))) { snprintf(err, errlen, "%s: tol must be a positive finite number (NaN or 0: the default %g)", fn, dflt); return 1; }
+    *tol = t; return 0;
+}
+/* whether the single inversion computes (inv_take): with method DFL_METHOD_INVERSION always (an error with engine general,
+ * or for a case it does not have), with method 0 under engine auto in the cases DK, DU, DT, SK, SU, ST for c up to
+ * DFL_INV_CMAX; otherwise the engines (method DFL_METHOD_ENGINE, a representation of the engines, engine classical or
+ * general, case DG).  1, 0, or -1 with the error in err */
+static int inv_take(const char *fn, int method, int engine, const spec_t *R, double c, char *err, size_t errlen)
+{
+    int ic = R->model >= 1 && R->model <= 3;
+    if (method == DFL_METHOD_INVERSION) {
+        if (engine == DFL_ENGINE_GENERAL) { snprintf(err, errlen, "%s: method %d (the devices of Bao and Kan) does not apply with engine general", fn, method); return -1; }
+        if (!ic) { snprintf(err, errlen, "%s: method %d (the devices of Bao and Kan) applies to the cases DK, DU, DT, SK, SU, ST", fn, method); return -1; }
+        return 1;
+    }
+    return method == 0 && engine == DFL_ENGINE_AUTO && ic && c <= DFL_INV_CMAX;
+}
+int dfl_inv_takes(const dfl_spec *S, double c, double c0, int engine, int method)
+{
+    char e[256]; spec_t R;
+    if (resolve(S, &R, e, sizeof e)) return 0;
+    int t = (!S->D || classical_valid(&R, c, c0, 0)) && engine != DFL_ENGINE_GENERAL ? inv_take("", method, engine, &R, c, e, sizeof e) : 0;
+    spec_free(&R);
+    return t > 0;
+}
+static int lim_of(const spec_t *R, double c, dfl_limcf *F, char *err, size_t errlen) { return dfl_limcf_init(F, R->model, R->stat, c, R->start == 1 ? R->g0 : 0.0, err, errlen); }
+/* the values at the points x by the single inversion, on the workers where n > 1 (the transform is immutable): kind 1 the
+ * coefficient statistic's distribution function, 2 its density (ftol: the absolute tolerance of each), 3 the linear form
+ * (a), 4 the power envelope (a = alpha), 5 the coefficient statistic's quantiles (a = the width) */
+typedef struct { int kind; const dfl_limcf *F; const double *x; double a, c0, tol; double *v, *e, *ft; int *rc; } imap_t;
+static void imap_body(int k, void *vp)
+{
+    imap_t *m = vp; double ft = m->tol; char e[256];
+    switch (m->kind) {
+    case 1: m->rc[k] = dfl_kan_coef_cdf1(m->F, m->x[k], m->c0, m->tol, &m->v[k], &m->e[k]); break;
+    case 2: m->rc[k] = dfl_kan_coef_pdf1(m->F, m->x[k], m->c0, m->tol, &m->v[k], &m->e[k], &ft); break;
+    case 3: m->rc[k] = dfl_kan_lin_cdf1(m->F, m->x[k], m->a, m->tol, &m->v[k], &m->e[k]); break;
+    case 4: m->rc[k] = dfl_kan_envelope1(m->x[k], m->a, m->tol, &m->v[k], &m->e[k], e, sizeof e); break;
+    case 5: m->rc[k] = dfl_kan_coef_icdf1(m->F, m->x[k], m->c0, m->a, m->tol, &m->v[k], &m->e[k], e, sizeof e); break;
+    }
+    if (m->ft) m->ft[k] = ft;
+}
+static int imap(imap_t *m, int n, const char *fn, char *err, size_t errlen)
+{
+    m->rc = calloc(n + 1, sizeof(int));
+    if (n == 1) imap_body(0, m); else if (n > 1) dfl_parfor(n, imap_body, m);
+    int bad = -1; for (int k = 0; k < n && bad < 0; k++) if (m->rc[k]) bad = k;
+    if (bad >= 0) snprintf(err, errlen, "%s: the single inversion failed at %g (the quadrature produced a value that is not finite, or no bracket of the quantile was found)", fn, m->x[bad]);
+    free(m->rc); m->rc = NULL;
+    return bad >= 0;
+}
+/* the warning of the single inversion where error estimates exceed the tolerance, one per call (inv_warn) */
+static void inv_warn(const char *fn, int n, const double *E, const double *T, double tol)
+{
+    int bad = 0; double mx = 0;
+    for (int k = 0; k < n; k++) if (!(E[k] <= (T ? T[k] : tol))) { bad++; mx = isnan(E[k]) || E[k] > mx ? E[k] : mx; }
+    if (bad) det_warn("%s: the error estimate of the single inversion exceeds %s %g at %d of %d points (largest %g); verified recomputes them by the engines' checked computation",
+                      fn, T ? "its tolerance" : "the tolerance", tol, bad, n, mx);
+}
+static void nanfill(double *e, int n) { if (e) for (int k = 0; k < n; k++) e[k] = NAN; }
+
+/* ---- the moments of the t-ratio ---- */
+static int mom_engine(int pmax, const spec_t *R, const dfl_spec *S, double c, double c0, int engine, double *m, char *err, size_t errlen)
+{
+    dfl_det_opts o; det_opts_of(R, c0, 0, &o);
     double me[64];
-    int rc, gen;
+    int gen;
     if (engine == DFL_ENGINE_GENERAL) gen = 1;
     else if (engine == DFL_ENGINE_CLASSICAL) {
-        if (R.model == 0 || R.model == 4) { snprintf(err, errlen, R.model == 4 ? "the moments are not available for case DG" : "engine classical: the classical engine has the cases DK, DU, DT, SK, SU, ST only"); spec_free(&R); return 1; }
+        if (R->model == 0 || R->model == 4) { snprintf(err, errlen, R->model == 4 ? "the moments are not available for case DG" : "engine classical: the classical engine has the cases DK, DU, DT, SK, SU, ST only"); return 1; }
         gen = 0;
-    } else if (S->D) gen = !(classical_valid(&R, c, c0, 0) && R.model != 4) || dfl_autoengine(DFL_F_MOM, R.model, R.stat, R.g0, R.gls, c, c0, 0.0) == DFL_ENGINE_GENERAL;
+    } else if (S->D) gen = !(classical_valid(R, c, c0, 0) && R->model != 4) || dfl_autoengine(DFL_F_MOM, R->model, R->stat, R->g0, R->gls, c, c0, 0.0) == DFL_ENGINE_GENERAL;
     else {
+        if (dfl_check_args(R->model, c, c0, R->g0, R->stat, err, errlen)) return 1;
+        if (R->model == 4) { snprintf(err, errlen, "the moments are not available for case DG"); return 1; }
+        gen = dfl_autoengine(DFL_F_MOM, R->model, R->stat, R->g0, R->gls, c, c0, 0.0) == DFL_ENGINE_GENERAL;
+    }
+    return gen ? dfl_det_moments(R->D, c, pmax, &o, m, NULL, err, errlen) : dfl_moments(R->model, c, c0, R->g0, R->stat, pmax, m, pmax <= 64 ? me : NULL, err, errlen);
+}
+/* the moments E t^k, k = 1..pmax: by default (method 0 with engine auto, a classical case, c <= DFL_INV_CMAX, pmax up to
+ * DFL_KAN_JMAX - 1) from one jet per node of an adaptive quadrature in log s (the moments from jets of Bao and Kan,
+ * tratio_mom1); tol (1e-10) the relative tolerance of the quadrature, the estimate of moment j relative to
+ * max(|m_j|, m_2^{j/2}); DFL_METHOD_INVERSION (the jets) forces them, DFL_METHOD_ENGINE the engines' circles (inv_mom) */
+int dfl_engine_mom_x(int pmax, const dfl_spec *S, double c, double c0, int engine, const dfl_inv_opts *io0, double *m, double *errest, char *err, size_t errlen)
+{
+    warn_entry();
+    dfl_inv_opts d; const dfl_inv_opts *io = inv_opts_or_default(io0, &d);
+    if (pmax < 1) { snprintf(err, errlen, "p must be a positive integer"); return 1; }
+    if (!(io->method == 0 || io->method == DFL_METHOD_INVERSION || io->method == DFL_METHOD_ENGINE)) {
+        snprintf(err, errlen, "ltratio_mom: method must be 0 (automatic), %d (the moments from jets, one jet per node after Bao and Kan) or %d (the engines' circles)", DFL_METHOD_INVERSION, DFL_METHOD_ENGINE); return 1;
+    }
+    double tol; if (inv_tol("ltratio_mom", io, 1e-10, &tol, err, errlen)) return 1;
+    if (engine == DFL_ENGINE_GENERAL && io->method == DFL_METHOD_INVERSION) { snprintf(err, errlen, "ltratio_mom: method %d (the jets of Bao and Kan) does not apply with engine general", DFL_METHOD_INVERSION); return 1; }
+    spec_t R; if (resolve(S, &R, err, errlen)) return 1;
+    int rc, t = 0;
+    if (engine != DFL_ENGINE_GENERAL && (!S->D || (classical_valid(&R, c, c0, 0) && R.model != 4))) {
         if (dfl_check_args(R.model, c, c0, R.g0, R.stat, err, errlen)) { spec_free(&R); return 1; }
         if (R.model == 4) { snprintf(err, errlen, "the moments are not available for case DG"); spec_free(&R); return 1; }
-        gen = dfl_autoengine(DFL_F_MOM, R.model, R.stat, R.g0, R.gls, c, c0, 0.0) == DFL_ENGINE_GENERAL;
+        t = inv_take("ltratio_mom", io->method, engine, &R, c, err, errlen);
+        if (t < 0) { spec_free(&R); return 1; }
+        if (t && io->method == 0 && !(dfl_kan_mom_ok(c) && pmax <= DFL_KAN_JMAX - 1)) t = 0;
+    } else if (io->method == DFL_METHOD_INVERSION) {
+        snprintf(err, errlen, "ltratio_mom: method %d (the jets of Bao and Kan) applies to the cases DK, DU, DT, SK, SU, ST", DFL_METHOD_INVERSION); spec_free(&R); return 1;
     }
-    rc = gen ? dfl_det_moments(R.D, c, pmax, &o, m, NULL, err, errlen) : dfl_moments(R.model, c, c0, R.g0, R.stat, pmax, m, pmax <= 64 ? me : NULL, err, errlen);
+    if (!t) { rc = mom_engine(pmax, &R, S, c, c0, engine, m, err, errlen); nanfill(errest, pmax); spec_free(&R); return rc; }
+    if (pmax > DFL_KAN_JMAX - 1) { snprintf(err, errlen, "ltratio_mom: the moments from jets go up to p = %d (method %d, the engines' circles, beyond)", DFL_KAN_JMAX - 1, DFL_METHOD_ENGINE); spec_free(&R); return 1; }
+    dfl_limcf F; int k = pmax < 2 ? 2 : pmax;
+    double mm[DFL_KAN_JMAX], ee[DFL_KAN_JMAX];
+    rc = lim_of(&R, c, &F, err, errlen) || dfl_kan_ratio_mom(&F, k, c0 - c, 0.5, tol, mm, ee, err, errlen);
+    if (!rc) {
+        /* (the tolerance relative to max(|m_j|, m_2^{j/2}): a mean near zero, as with c0 = c far above the unit root, has no
+         * relative accuracy to speak of) */
+        char list[256] = ""; int nbad = 0;
+        for (int j = 0; j < pmax; j++) {
+            double sc = fmax(fabs(mm[j]), pow(fabs(mm[1]), (j + 1) / 2.0));
+            if (!(ee[j] <= tol * sc)) { size_t l = strlen(list); if (l < 200) snprintf(list + l, sizeof list - l, "%s%d", nbad ? ", " : "", j + 1); nbad++; }
+        }
+        for (int j = 0; j < pmax; j++) { m[j] = mm[j]; if (errest) errest[j] = ee[j]; }
+        if (nbad) {
+            if (io->verified) { rc = mom_engine(pmax, &R, S, c, c0, DFL_ENGINE_AUTO, m, err, errlen); }
+            else det_warn("ltratio_mom: the error estimate of the moments from jets exceeds the tolerance %g (relative) for the moments %s; verified recomputes them by the engines", tol, list);
+        }
+    }
     spec_free(&R);
     return rc;
 }
+int dfl_engine_mom(int pmax, const dfl_spec *S, double c, double c0, int engine, double *m, char *err, size_t errlen) { return dfl_engine_mom_x(pmax, S, c, c0, engine, NULL, m, NULL, err, errlen); }
 
-/* the coefficient statistic: the t-ratio at x = 0 with the null value c0 + y, routed as the t-ratio (the warnings of the
- * points collected) */
-int dfl_engine_coef(int n, const double *y, const dfl_spec *S, double c, double c0, int engine, double *out, char *err, size_t errlen)
+/* ---- the coefficient statistic ---- */
+/* the engines' computation: the t-ratio at x = 0 with the null value c0 + y, routed as the t-ratio with the method (0, or a
+ * representation) and verified (the warnings of the points collected) */
+static int coef_engine(int n, const double *y, const spec_t *R, double c, double c0, int engine, int method, int verified, double *out, char *err, size_t errlen)
+{
+    dfl_spec S2 = {NULL, R->model, R->start, R->g0, R->gls};
+    cwarn_t cw = {""};
+    int rc = 0;
+    det_warn_hold(1);
+    for (int k = 0; k < n && !rc; k++) {
+        if (!isfinite(y[k])) { out[k] = isnan(y[k]) ? NAN : y[k] > 0 ? 1.0 : 0.0; continue; }
+        double x0 = 0;
+        rc = dfl_engine_dist(2, 1, &x0, &S2, c, c0 + y[k], engine, method, verified, &out[k], err, errlen);
+        cwarn_take(&cw);
+    }
+    det_warn_hold(0);
+    cwarn_put(&cw);
+    return rc;
+}
+/* the distribution function of the coefficient statistic (U - c0 V)/V at y: by default (method 0 with engine auto, the cases
+ * DK, DU, DT with a zero or fixed start and SK, SU, ST, c <= DFL_INV_CMAX) the single inversion of Bao and Kan
+ * (coef_cdf1), tol (1e-12) its absolute tolerance; DFL_METHOD_INVERSION forces it, DFL_METHOD_ENGINE and the
+ * representations of the t-ratio take the computation of before (the t-ratio at 0 with the null value c0 + y), as do
+ * engine classical or general and case DG (inv_coef_cdf) */
+int dfl_engine_coef_x(int n, const double *y, const dfl_spec *S, double c, double c0, int engine, const dfl_inv_opts *io0, double *out, double *errest, char *err, size_t errlen)
 {
     warn_entry();
+    dfl_inv_opts d; const dfl_inv_opts *io = inv_opts_or_default(io0, &d);
+    if (!inv_method_ok("coef_cdf", io->method, 1, err, errlen)) return 1;
+    double tol; if (inv_tol("coef_cdf", io, DFL_KAN_TOL, &tol, err, errlen)) return 1;
     spec_t R; if (resolve(S, &R, err, errlen)) return 1;
     int gen = engine == DFL_ENGINE_GENERAL || (engine == DFL_ENGINE_AUTO && S->D && !classical_valid(&R, c, c0, 0));
     if (!gen && engine == DFL_ENGINE_CLASSICAL && R.model == 0) { snprintf(err, errlen, "engine classical: the classical engine has the cases DK, DU, DT, SK, SU, ST and DG only"); spec_free(&R); return 1; }
-    int rc = 0;
-    if (gen) { dfl_det_opts o; det_opts_of(&R, c0, 0, &o); rc = dfl_det_coef(2, R.D, n, y, c, &o, out, err, errlen); }
-    else {
-        dfl_spec S2 = {NULL, R.model, R.start, R.g0, R.gls};
-        cwarn_t cw = {""};
-        det_warn_hold(1);
-        for (int k = 0; k < n && !rc; k++) {
-            if (!isfinite(y[k])) { out[k] = isnan(y[k]) ? NAN : y[k] > 0 ? 1.0 : 0.0; continue; }
-            double x0 = 0;
-            rc = dfl_engine_dist(2, 1, &x0, &S2, c, c0 + y[k], engine, 0, 0, &out[k], err, errlen);
-            cwarn_take(&cw);
-        }
-        det_warn_hold(0);
-        cwarn_put(&cw);
+    int rc = 0, t = 0;
+    if (gen) {
+        if (io->method == DFL_METHOD_INVERSION) { inv_take("coef_cdf", io->method, engine == DFL_ENGINE_GENERAL ? engine : DFL_ENGINE_AUTO, &R, c, err, errlen); spec_free(&R); return 1; }
+        dfl_det_opts o; det_opts_of(&R, c0, io->verified, &o); rc = dfl_det_coef(2, R.D, n, y, c, &o, out, err, errlen);
+        nanfill(errest, n); spec_free(&R); return rc;
     }
-    spec_free(&R);
+    if (dfl_check_args(R.model, c, c0, R.g0, R.stat, err, errlen)) { spec_free(&R); return 1; }
+    t = inv_take("coef_cdf", io->method, engine, &R, c, err, errlen);
+    if (t < 0) { spec_free(&R); return 1; }
+    if (!t) {
+        int m = io->method == DFL_METHOD_ENGINE ? 0 : io->method;
+        rc = coef_engine(n, y, &R, c, c0, engine, m, io->verified, out, err, errlen);
+        nanfill(errest, n); spec_free(&R); return rc;
+    }
+    dfl_limcf F;
+    if (lim_of(&R, c, &F, err, errlen)) { spec_free(&R); return 1; }
+    double *E = malloc((n + 1) * sizeof(double));
+    imap_t mp = {1, &F, y, 0, c0, tol, out, E, NULL, NULL};
+    rc = imap(&mp, n, "coef_cdf", err, errlen);
+    if (!rc) {
+        if (io->verified) {
+            cwarn_t cw = {""};
+            for (int k = 0; k < n && !rc; k++) if (!(E[k] <= tol)) { rc = coef_engine(1, &y[k], &R, c, c0, DFL_ENGINE_AUTO, 0, 1, &out[k], err, errlen); cwarn_take(&cw); }
+            cwarn_put(&cw);
+        } else inv_warn("coef_cdf", n, E, NULL, tol);
+        if (errest) memcpy(errest, E, n * sizeof(double));
+    }
+    free(E); spec_free(&R);
     return rc;
 }
-/* its quantiles: the general engine's Newton search, or the Illinois variant of regula falsi of the classical engine on
- * the routed distribution function (coef_icdf) */
-int dfl_engine_coef_icdf(int n, const double *p, const dfl_spec *S, double c, double c0, int engine, double tol, double *q, char *err, size_t errlen)
+int dfl_engine_coef(int n, const double *y, const dfl_spec *S, double c, double c0, int engine, double *out, char *err, size_t errlen) { return dfl_engine_coef_x(n, y, S, c, c0, engine, NULL, out, NULL, err, errlen); }
+/* its quantiles: by default (as dfl_engine_coef_x) the Illinois variant of regula falsi on the single inversion's distribution
+ * function (tolerance DFL_KAN_TOL) from the bracket E[U - cV]/E[V] -/+ twice the scale of the ratio, to the width tol (1e-9);
+ * errest the estimate of the distribution function at the quantile divided by the density there.  Otherwise the general
+ * engine's Newton search, or the Illinois variant of regula falsi from [-40, 10] on the engines' distribution function
+ * (coef_icdf, inv_coef_icdf) */
+static int coef_icdf_engine(int n, const double *p, const spec_t *R, double c, double c0, int engine, int method, int verified, double tol, double *q, char *err, size_t errlen)
 {
-    warn_entry();
-    spec_t R; if (resolve(S, &R, err, errlen)) return 1;
-    if (!(tol > 0)) tol = 1e-9;
-    int gen = engine == DFL_ENGINE_GENERAL || (engine == DFL_ENGINE_AUTO && S->D && !classical_valid(&R, c, c0, 0));
-    int rc = 0;
-    if (gen) { dfl_det_opts o; det_opts_of(&R, c0, 0, &o); rc = dfl_det_coef_quantile(R.D, n, p, c, NAN, tol, &o, q, err, errlen); spec_free(&R); return rc; }
-    for (int k = 0; k < n; k++) if (!(p[k] > 0 && p[k] < 1)) { snprintf(err, errlen, "coef_icdf: p must lie in (0, 1)"); spec_free(&R); return 1; }
-    dfl_spec S2 = {NULL, R.model, R.start, R.g0, R.gls};
+    dfl_spec S2 = {NULL, R->model, R->start, R->g0, R->gls};
+    dfl_inv_opts eo = {method == 0 ? DFL_METHOD_ENGINE : method, NAN, verified};
     cwarn_t cw = {""};
+    int rc = 0;
     det_warn_hold(1);
-#define FX(xx, o) do { double y_ = (xx); rc = dfl_engine_coef(1, &y_, &S2, c, c0, engine, &(o), err, errlen); cwarn_take(&cw); if (rc) goto done; (o) -= pk; } while (0)
+#define FX(xx, o) do { double y_ = (xx); rc = dfl_engine_coef_x(1, &y_, &S2, c, c0, engine, &eo, &(o), NULL, err, errlen); cwarn_take(&cw); if (rc) goto done; (o) -= pk; } while (0)
     for (int k = 0; k < n; k++) {
         double pk = p[k];
         double lo = -40, hi = 10, flo, fhi, x, fx; FX(lo, flo); FX(hi, fhi);
@@ -419,22 +586,134 @@ int dfl_engine_coef_icdf(int n, const double *p, const dfl_spec *S, double c, do
 done:
     det_warn_hold(0);
     cwarn_put(&cw);
+    return rc;
+}
+int dfl_engine_coef_icdf_x(int n, const double *p, const dfl_spec *S, double c, double c0, int engine, double tol, const dfl_inv_opts *io0, double *q, double *errest, char *err, size_t errlen)
+{
+    warn_entry();
+    dfl_inv_opts d; const dfl_inv_opts *io = inv_opts_or_default(io0, &d);
+    if (!inv_method_ok("coef_icdf", io->method, 1, err, errlen)) return 1;
+    if (isnan(tol) || tol <= 0) tol = 1e-9;
+    if (!isfinite(tol)) { snprintf(err, errlen, "coef_icdf: tol must be a positive finite number (NaN or <= 0: the default 1e-9)"); return 1; }
+    spec_t R; if (resolve(S, &R, err, errlen)) return 1;
+    int gen = engine == DFL_ENGINE_GENERAL || (engine == DFL_ENGINE_AUTO && S->D && !classical_valid(&R, c, c0, 0));
+    int rc = 0, t;
+    if (gen) {
+        if (io->method == DFL_METHOD_INVERSION) { inv_take("coef_icdf", io->method, engine == DFL_ENGINE_GENERAL ? engine : DFL_ENGINE_AUTO, &R, c, err, errlen); spec_free(&R); return 1; }
+        dfl_det_opts o; det_opts_of(&R, c0, 0, &o); rc = dfl_det_coef_quantile(R.D, n, p, c, NAN, tol, &o, q, err, errlen);
+        nanfill(errest, n); spec_free(&R); return rc;
+    }
+    for (int k = 0; k < n; k++) if (!(p[k] > 0 && p[k] < 1)) { snprintf(err, errlen, "coef_icdf: p must lie in (0, 1)"); spec_free(&R); return 1; }
+    if (engine == DFL_ENGINE_CLASSICAL && R.model == 0) { snprintf(err, errlen, "engine classical: the classical engine has the cases DK, DU, DT, SK, SU, ST and DG only"); spec_free(&R); return 1; }
+    if (dfl_check_args(R.model, c, c0, R.g0, R.stat, err, errlen)) { spec_free(&R); return 1; }
+    t = inv_take("coef_icdf", io->method, engine, &R, c, err, errlen);
+    if (t < 0) { spec_free(&R); return 1; }
+    if (!t) {
+        rc = coef_icdf_engine(n, p, &R, c, c0, engine, io->method == DFL_METHOD_ENGINE ? 0 : io->method, io->verified, tol, q, err, errlen);
+        nanfill(errest, n); spec_free(&R); return rc;
+    }
+    dfl_limcf F;
+    if (lim_of(&R, c, &F, err, errlen)) { spec_free(&R); return 1; }
+    double *E = malloc((n + 1) * sizeof(double));
+    imap_t mp = {5, &F, p, tol, c0, DFL_KAN_TOL, q, E, NULL, NULL};
+    rc = imap(&mp, n, "coef_icdf", err, errlen);
+    if (!rc) {
+        if (io->verified) {
+            cwarn_t cw = {""};
+            for (int k = 0; k < n && !rc; k++) if (!(E[k] <= DFL_KAN_TOL)) { rc = coef_icdf_engine(1, &p[k], &R, c, c0, DFL_ENGINE_AUTO, 0, 1, tol, &q[k], err, errlen); cwarn_take(&cw); E[k] = NAN; }
+            cwarn_put(&cw);
+        } else inv_warn("coef_icdf", n, E, NULL, DFL_KAN_TOL);
+        if (errest && !rc) {
+            /* (in y: the estimate of the distribution function divided by the density) */
+            for (int k = 0; k < n; k++) { double f, e, ft; if (isnan(E[k]) || dfl_kan_coef_pdf1(&F, q[k], c0, DFL_KAN_TOL, &f, &e, &ft)) errest[k] = NAN; else errest[k] = E[k] / f; }
+        }
+    }
+    free(E); spec_free(&R);
+    return rc;
+}
+int dfl_engine_coef_icdf(int n, const double *p, const dfl_spec *S, double c, double c0, int engine, double tol, double *q, char *err, size_t errlen)
+{
+    return dfl_engine_coef_icdf_x(n, p, S, c, c0, engine, tol, NULL, q, NULL, err, errlen);
+}
+/* the density of the coefficient statistic: by default (as dfl_engine_coef_x; also with engine classical, which has no
+ * density of the coefficient statistic) the single inversion of Bao and Kan, the density of a ratio by the formula of
+ * Geary from jets (coef_pdf1), tol its tolerance relative to the scale max(1, E[V]/sd(U)) of the density; otherwise
+ * (DFL_METHOD_ENGINE, engine general, case DG, a design beyond the classical cases) the general engine's density, the kernel
+ * 2 v^3 of its contour integral (dfl_det_coef), with verified its checked computation */
+int dfl_engine_coef_pdf(int n, const double *y, const dfl_spec *S, double c, double c0, int engine, const dfl_inv_opts *io0, double *out, double *errest, char *err, size_t errlen)
+{
+    warn_entry();
+    dfl_inv_opts d; const dfl_inv_opts *io = inv_opts_or_default(io0, &d);
+    if (!inv_method_ok("coef_pdf", io->method, 0, err, errlen)) return 1;
+    if (engine < 0 || engine > 2) { snprintf(err, errlen, "engine must be auto (0), classical (1) or general (2)"); return 1; }
+    double tol; if (inv_tol("coef_pdf", io, DFL_KAN_TOL, &tol, err, errlen)) return 1;
+    spec_t R; if (resolve(S, &R, err, errlen)) return 1;
+    int rc = 0, t = 0;
+    if (S->D && engine != DFL_ENGINE_GENERAL && R.model == 0 && engine == DFL_ENGINE_CLASSICAL) {
+        snprintf(err, errlen, "engine classical: the classical engine has the cases DK, DU, DT, SK, SU, ST and DG only"); spec_free(&R); return 1;
+    }
+    int cls = engine != DFL_ENGINE_GENERAL && (!S->D || engine == DFL_ENGINE_CLASSICAL || classical_valid(&R, c, c0, 0));
+    if (cls) {
+        if (dfl_check_args(R.model, c, c0, R.g0, R.stat, err, errlen)) { spec_free(&R); return 1; }
+        t = inv_take("coef_pdf", io->method, engine == DFL_ENGINE_CLASSICAL ? DFL_ENGINE_AUTO : engine, &R, c, err, errlen);
+        if (t < 0) { spec_free(&R); return 1; }
+    } else if (io->method == DFL_METHOD_INVERSION) {
+        inv_take("coef_pdf", io->method, engine, &R, c, err, errlen);
+        if (engine != DFL_ENGINE_GENERAL) snprintf(err, errlen, "coef_pdf: method %d applies to the cases DK, DU, DT, SK, SU, ST", DFL_METHOD_INVERSION);
+        spec_free(&R); return 1;
+    }
+    dfl_det_opts o; det_opts_of(&R, c0, io->verified, &o);
+    if (!t) {
+        rc = dfl_det_coef(1, R.D, n, y, c, &o, out, err, errlen);
+        if (!rc) for (int k = 0; k < n; k++) if (out[k] < 0) out[k] = 0;
+        nanfill(errest, n); spec_free(&R); return rc;
+    }
+    dfl_limcf F;
+    if (lim_of(&R, c, &F, err, errlen)) { spec_free(&R); return 1; }
+    double *E = malloc((n + 1) * sizeof(double)), *T = malloc((n + 1) * sizeof(double));
+    imap_t mp = {2, &F, y, 0, c0, tol, out, E, T, NULL};
+    rc = imap(&mp, n, "coef_pdf", err, errlen);
+    if (!rc) {
+        if (io->verified) {
+            o.verified = 1;
+            for (int k = 0; k < n && !rc; k++) if (!(E[k] <= T[k])) { rc = dfl_det_coef(1, R.D, 1, &y[k], c, &o, &out[k], err, errlen); if (!rc && out[k] < 0) out[k] = 0; }
+        } else inv_warn("coef_pdf", n, E, T, tol);
+        if (errest) memcpy(errest, E, n * sizeof(double));
+    }
+    free(E); free(T); spec_free(&R);
+    return rc;
+}
+/* the moments E[{(U - c0 V)/V}^j], j = 1..pmax, of the coefficient statistic, the cases DK, DU, DT (zero or fixed start) and
+ * SK, SU, ST: Sawa's representation with the derivative from one jet per node (coef_mom1), tol (1e-10) the relative
+ * tolerance of the quadrature; up to c = DFL_INV_CMAX with method 0 (DFL_METHOD_INVERSION beyond); the engines have no
+ * moments of the coefficient statistic (coef_mom) */
+int dfl_engine_coef_mom(int pmax, const dfl_spec *S, double c, double c0, int engine, const dfl_inv_opts *io0, double *m, double *errest, char *err, size_t errlen)
+{
+    warn_entry();
+    dfl_inv_opts d; const dfl_inv_opts *io = inv_opts_or_default(io0, &d);
+    if (pmax < 1) { snprintf(err, errlen, "p must be a positive integer"); return 1; }
+    if (!(io->method == 0 || io->method == DFL_METHOD_INVERSION)) { snprintf(err, errlen, "coef_mom: method must be 0 (automatic: the jets of Bao and Kan) or %d", DFL_METHOD_INVERSION); return 1; }
+    if (engine == DFL_ENGINE_GENERAL) { snprintf(err, errlen, "coef_mom: the general engine has no moments of the coefficient statistic"); return 1; }
+    if (engine != DFL_ENGINE_AUTO && engine != DFL_ENGINE_CLASSICAL) { snprintf(err, errlen, "engine must be auto (0), classical (1) or general (2)"); return 1; }
+    double tol; if (inv_tol("coef_mom", io, 1e-10, &tol, err, errlen)) return 1;
+    spec_t R; if (resolve(S, &R, err, errlen)) return 1;
+    int ic = R.model >= 1 && R.model <= 3;
+    if (S->D && !ic) { snprintf(err, errlen, "coef_mom: the moments of the coefficient statistic are available for the cases DK, DU, DT, SK, SU, ST (trend(-1), trend(0), trend(1) with a zero, fixed or stationary start)"); spec_free(&R); return 1; }
+    if (dfl_check_args(R.model, c, c0, R.g0, R.stat, err, errlen)) { spec_free(&R); return 1; }
+    if (!ic) { snprintf(err, errlen, "coef_mom: the moments of the coefficient statistic are available for the cases DK, DU, DT, SK, SU, ST"); spec_free(&R); return 1; }
+    if (!(c <= DFL_INV_CMAX) && io->method == 0) { snprintf(err, errlen, "coef_mom: c must be at most %g (method %d beyond)", DFL_INV_CMAX, DFL_METHOD_INVERSION); spec_free(&R); return 1; }
+    if (pmax > DFL_KAN_JMAX - 1) { snprintf(err, errlen, "coef_mom: the moments from jets go up to p = %d", DFL_KAN_JMAX - 1); spec_free(&R); return 1; }
+    dfl_limcf F; double ee[DFL_KAN_JMAX];
+    int rc = lim_of(&R, c, &F, err, errlen) || dfl_kan_ratio_mom(&F, pmax, c0 - c, 1.0, tol, m, ee, err, errlen);
+    if (!rc && errest) memcpy(errest, ee, pmax * sizeof(double));
     spec_free(&R);
     return rc;
 }
 
-/* P(U - aV <= b) in case DK (spec of model 1 or 2) or DG (model 4, detrended at cbar); a = NaN: P(V <= b) */
-int dfl_engine_lincdf(int n, const double *b, double a, int model, double c, double cbar, int engine, double *out, char *err, size_t errlen)
+/* ---- the linear form U - aV ---- */
+/* the engines' computation for a case DK (model 1, zero start) or DG (model 4, detrended at cbar): the rule of the C router */
+static int lin_engine_case(int n, const double *b, double a, int model, double c, double cbar, int engine, double *out, char *err, size_t errlen)
 {
-    warn_entry();
-    if (model == 2) model = 1;
-    if (model != 1 && model != 4) { snprintf(err, errlen, "ltratio_lincdf: the case must be DK or DG"); return 1; }
-    if (isnan(cbar)) cbar = DFL_CBAR_GLS;
-    /* (a = +-Inf and an infinite cbar gave 0 in the classical code: refused, as by the general engine; a = NaN is the law
-     * of V) */
-    if (isinf(a)) { snprintf(err, errlen, "ltratio_lincdf: a must be a finite real scalar (NaN: the law of V)"); return 1; }
-    if (model == 4 && !isfinite(cbar)) { snprintf(err, errlen, "ltratio_lincdf: cbar must be a finite real scalar < 0 (NaN: the default -13.5)"); return 1; }
-    if (engine == DFL_ENGINE_AUTO && (!isfinite(c) || c < DFL_CMIN)) { snprintf(err, errlen, "ltratio_lincdf: %s", isfinite(c) ? DFL_CMIN_MSG : "c must be a finite real scalar"); return 1; }
     int gen = engine == DFL_ENGINE_GENERAL || (engine == DFL_ENGINE_AUTO && dfl_autoengine(DFL_F_LINCDF, model, 0, 0.0, cbar, c, 0.0, a) == DFL_ENGINE_GENERAL);
     if (!gen) return dfl_lincdf(n, b, a, model, c, cbar, NULL, out, err, errlen);
     dfl_design D; if (dfl_design_trend(model == 4 ? 1 : -1, &D, err, errlen)) return 1;
@@ -443,13 +722,120 @@ int dfl_engine_lincdf(int n, const double *b, double a, int model, double c, dou
     dfl_design_free(&D);
     return rc;
 }
-/* the power envelope of case DK (model 1 or 2) or DG (model 4) */
-int dfl_engine_envelope(int n, const double *cs, int model, double alpha, int engine, double *out, char *err, size_t errlen)
+/* the engines' computation of a classical case through its design (lin_engine): case DK with a zero start by the case code,
+ * the others by the general engine */
+static int lin_engine_spec(int n, const double *b, double a, const spec_t *R, double c, double *out, char *err, size_t errlen)
+{
+    if (R->model == 1 && !R->stat && R->start == 0) return lin_engine_case(n, b, a, 1, c, DFL_CBAR_GLS, DFL_ENGINE_AUTO, out, err, errlen);
+    dfl_det_opts o; det_opts_of(R, 0.0, 0, &o);
+    return dfl_det_lin(2, R->D, n, b, a, c, &o, out, err, errlen);
+}
+/* the single inversion where dfl_kan_lin_ok takes the points (all with method DFL_METHOD_INVERSION), the engines at the
+ * others; 0 or 1 (an error), *done 0 where no point is taken (inv_lin) */
+static int lin_inv(int n, const double *b, double a, const spec_t *R, double c, int engine, const dfl_inv_opts *io, double tol, double *out, double *errest, int *done, char *err, size_t errlen)
+{
+    *done = 0;
+    int t = inv_take("ltratio_lincdf", io->method, engine, R, c, err, errlen);
+    if (t < 0) return 1;
+    if (!t) return 0;
+    double g0 = R->start == 1 ? R->g0 : 0.0;
+    int *ok = malloc((n + 1) * sizeof(int)), nok = 0;
+    for (int k = 0; k < n; k++) { ok[k] = io->method == DFL_METHOD_INVERSION || dfl_kan_lin_ok(R->model, R->stat, c, g0, a); nok += ok[k]; }
+    if (nok == 0) { free(ok); return 0; }
+    dfl_limcf F;
+    if (lim_of(R, c, &F, err, errlen)) { free(ok); return 1; }
+    double *bx = malloc((n + 1) * sizeof(double)), *v = malloc((n + 1) * sizeof(double)), *E = malloc((n + 1) * sizeof(double)); int *ix = malloc((n + 1) * sizeof(int)), m = 0;
+    for (int k = 0; k < n; k++) if (ok[k]) { bx[m] = b[k]; ix[m++] = k; }
+    imap_t mp = {3, &F, bx, a, 0, tol, v, E, NULL, NULL};
+    int rc = imap(&mp, m, "ltratio_lincdf", err, errlen);
+    if (!rc) {
+        nanfill(errest, n);
+        for (int j = 0; j < m; j++) { out[ix[j]] = v[j]; if (errest) errest[ix[j]] = E[j]; }
+        if (m < n) {
+            int q = 0; for (int k = 0; k < n; k++) if (!ok[k]) bx[q++] = b[k];
+            rc = lin_engine_spec(q, bx, a, R, c, v, err, errlen);
+            q = 0; for (int k = 0; k < n && !rc; k++) if (!ok[k]) out[k] = v[q++];
+        }
+        if (!rc) {
+            if (io->verified) {
+                for (int j = 0; j < m && !rc; j++) if (!(E[j] <= tol)) rc = lin_engine_spec(1, &b[ix[j]], a, R, c, &out[ix[j]], err, errlen);
+            } else inv_warn("ltratio_lincdf", m, E, NULL, tol);
+        }
+    }
+    free(ok); free(bx); free(v); free(E); free(ix);
+    *done = !rc;
+    return rc;
+}
+/* P(U - aV <= b): a case code (S->D NULL: model 1 (or 2) case DK with the zero start, model 4 case DG detrended at cbar,
+ * NaN for -13.5) or a design (with its start, g0 and gls; cbar unused).  By default (method 0 with engine auto, a finite
+ * a != 0) the single inversion of Bao and Kan in case DK with a zero start for -100 <= c <= 4 and in the six classical
+ * cases through their designs (fixed and stationary starts included) for -100 <= c <= 2 (dfl_kan_lin_ok), tol (1e-12) its
+ * absolute tolerance; elsewhere, with DFL_METHOD_ENGINE, engine classical or general, case DG and a = NaN (the law of V),
+ * the engines as before (ltratio_lincdf of DFExact.jl and merged.jl) */
+int dfl_engine_lincdf_x(int n, const double *b, double a, const dfl_spec *S, double c, double cbar, int engine, const dfl_inv_opts *io0, double *out, double *errest, char *err, size_t errlen)
 {
     warn_entry();
-    if (model == 2) model = 1;
-    if (model != 1 && model != 4) { snprintf(err, errlen, "power_envelope: the case must be DK (or DU) or DG"); return 1; }
-    if (!(alpha > 0 && alpha < 1)) { snprintf(err, errlen, "power_envelope: the level must lie in (0, 1)"); return 1; }
+    dfl_inv_opts d; const dfl_inv_opts *io = inv_opts_or_default(io0, &d);
+    if (!inv_method_ok("ltratio_lincdf", io->method, 0, err, errlen)) return 1;
+    double tol; if (inv_tol("ltratio_lincdf", io, DFL_KAN_TOL, &tol, err, errlen)) return 1;
+    /* (a = +-Inf and an infinite cbar gave 0 in the classical code: refused, as by the general engine; a = NaN is the law
+     * of V) */
+    if (isinf(a)) { snprintf(err, errlen, "ltratio_lincdf: a must be a finite real scalar (NaN: the law of V)"); return 1; }
+    int rc, done = 0;
+    if (S->D == NULL) {
+        int model = S->model == 2 ? 1 : S->model;
+        if (model != 1 && model != 4) { snprintf(err, errlen, "ltratio_lincdf: the case must be DK or DG"); return 1; }
+        if (S->start != 0 || S->g0 != 0) { snprintf(err, errlen, "ltratio_lincdf: the case %s has the zero start here; a fixed or stationary start takes a design (trend(-1) with g0 or start)", model == 1 ? "DK" : "DG"); return 1; }
+        if (isnan(cbar)) cbar = DFL_CBAR_GLS;
+        if (model == 4 && !isfinite(cbar)) { snprintf(err, errlen, "ltratio_lincdf: cbar must be a finite real scalar < 0 (NaN: the default -13.5)"); return 1; }
+        if (engine == DFL_ENGINE_GENERAL) {
+            if (io->method == DFL_METHOD_INVERSION) { snprintf(err, errlen, "ltratio_lincdf: method %d (the single inversion of Bao and Kan) does not apply with engine general", DFL_METHOD_INVERSION); return 1; }
+            nanfill(errest, n);
+            return lin_engine_case(n, b, a, model, c, cbar, engine, out, err, errlen);
+        }
+        if (!isfinite(c) || c < DFL_CMIN) { snprintf(err, errlen, "ltratio_lincdf: %s", isfinite(c) ? DFL_CMIN_MSG : "c must be a finite real scalar"); return 1; }
+        if (io->method == DFL_METHOD_INVERSION) {
+            if (isnan(a)) { snprintf(err, errlen, "ltratio_lincdf: method %d needs a finite a (a = NaN, the law of V, is the general engine's)", DFL_METHOD_INVERSION); return 1; }
+            if (model == 4) { snprintf(err, errlen, "ltratio_lincdf: method %d applies to case DK (the designs of the six classical cases), not to case DG", DFL_METHOD_INVERSION); return 1; }
+        }
+        if (model == 1 && !isnan(a)) {
+            spec_t R; dfl_spec S1 = {NULL, 1, 0, 0.0, NAN};
+            if (resolve(&S1, &R, err, errlen)) return 1;
+            rc = lin_inv(n, b, a, &R, c, engine, io, tol, out, errest, &done, err, errlen);
+            spec_free(&R);
+            if (rc || done) return rc;
+        }
+        nanfill(errest, n);
+        return lin_engine_case(n, b, a, model, c, cbar, engine, out, err, errlen);
+    }
+    spec_t R; if (resolve(S, &R, err, errlen)) return 1;
+    int inv = engine != DFL_ENGINE_GENERAL && R.model >= 1 && R.model <= 3 && isfinite(a) && classical_valid(&R, c, 0.0, 0);
+    if (io->method == DFL_METHOD_INVERSION && !inv) {
+        snprintf(err, errlen, "ltratio_lincdf: method %d applies to the cases DK, DU, DT, SK, SU, ST (trend(-1), trend(0), trend(1)) within the classical engine's checks, a finite a and engine auto or classical", DFL_METHOD_INVERSION);
+        spec_free(&R); return 1;
+    }
+    if (inv) { rc = lin_inv(n, b, a, &R, c, engine, io, tol, out, errest, &done, err, errlen); if (rc || done) { spec_free(&R); return rc; } }
+    nanfill(errest, n);
+    /* (the classical linear form has the zero start only: no deterministic terms with a fixed start take the general engine) */
+    int cm = R.start != 0 ? 0 : R.model == 1 ? 1 : R.model == 4 ? 4 : 0;
+    if (engine != DFL_ENGINE_GENERAL && cm) { rc = lin_engine_case(n, b, a, cm, c, R.gls, engine, out, err, errlen); spec_free(&R); return rc; }
+    if (engine == DFL_ENGINE_CLASSICAL) { snprintf(err, errlen, "engine classical: the linear form of the classical engine has the cases DK and DG only"); spec_free(&R); return 1; }
+    dfl_det_opts o; det_opts_of(&R, 0.0, 0, &o);
+    rc = dfl_det_lin(2, R.D, n, b, a, c, &o, out, err, errlen);
+    spec_free(&R);
+    return rc;
+}
+int dfl_engine_lincdf(int n, const double *b, double a, int model, double c, double cbar, int engine, double *out, char *err, size_t errlen)
+{
+    dfl_spec S = {NULL, model, 0, 0.0, NAN};
+    return dfl_engine_lincdf_x(n, b, a, &S, c, cbar, engine, NULL, out, NULL, err, errlen);
+}
+/* the power envelope of case DK (model 1 or 2) or DG (model 4): by default (method 0 with engine auto) in case DK for
+ * c <= -1e-4 both the critical value (regula falsi to 1e-12) and the power by the single inversion of Bao and Kan
+ * (envelope1), errest the sum of the two estimates; elsewhere (DFL_METHOD_ENGINE, engine classical or general, case DG,
+ * -1e-4 < c < 0) the engines as before (inv_envelope) */
+static int env_engine(int n, const double *cs, int model, double alpha, int engine, double *out, char *err, size_t errlen)
+{
     dfl_design D; if (dfl_design_trend(model == 4 ? 1 : -1, &D, err, errlen)) return 1;
     int rc = 0;
     for (int k = 0; k < n && !rc; k++) {
@@ -460,6 +846,42 @@ int dfl_engine_envelope(int n, const double *cs, int model, double alpha, int en
     }
     dfl_design_free(&D);
     return rc;
+}
+int dfl_engine_envelope_x(int n, const double *cs, int model, double alpha, int engine, const dfl_inv_opts *io0, double *out, double *errest, char *err, size_t errlen)
+{
+    warn_entry();
+    dfl_inv_opts d; const dfl_inv_opts *io = inv_opts_or_default(io0, &d);
+    if (!inv_method_ok("power_envelope", io->method, 0, err, errlen)) return 1;
+    double tol; if (inv_tol("power_envelope", io, DFL_KAN_TOL, &tol, err, errlen)) return 1;
+    if (engine == DFL_ENGINE_GENERAL && io->method == DFL_METHOD_INVERSION) { snprintf(err, errlen, "power_envelope: method %d (the single inversion of Bao and Kan) does not apply with engine general", DFL_METHOD_INVERSION); return 1; }
+    if (model == 2) model = 1;
+    if (model != 1 && model != 4) { snprintf(err, errlen, "power_envelope: the case must be DK (or DU) or DG"); return 1; }
+    if (!(alpha > 0 && alpha < 1)) { snprintf(err, errlen, "power_envelope: the level must lie in (0, 1)"); return 1; }
+    if (io->method == DFL_METHOD_INVERSION && model == 4) { snprintf(err, errlen, "power_envelope: method %d applies to case DK (DU), not to case DG", DFL_METHOD_INVERSION); return 1; }
+    int take = model == 1 && (io->method == DFL_METHOD_INVERSION || (io->method == 0 && engine == DFL_ENGINE_AUTO));
+    nanfill(errest, n);
+    if (!take) return env_engine(n, cs, model, alpha, engine, out, err, errlen);
+    double *cx = malloc((n + 1) * sizeof(double)), *v = malloc((n + 1) * sizeof(double)), *E = malloc((n + 1) * sizeof(double)); int *ix = malloc((n + 1) * sizeof(int)), m = 0, q = 0, rc = 0;
+    for (int k = 0; k < n; k++) if (io->method == DFL_METHOD_INVERSION || dfl_kan_envelope_ok(cs[k])) { cx[m] = cs[k]; ix[m++] = k; }
+    imap_t mp = {4, NULL, cx, alpha, 0, tol, v, E, NULL, NULL};
+    rc = imap(&mp, m, "power_envelope", err, errlen);
+    for (int j = 0; j < m && !rc; j++) { out[ix[j]] = v[j]; if (errest) errest[ix[j]] = E[j]; }
+    if (!rc && m < n) {
+        for (int k = 0, j = 0; k < n; k++) { if (j < m && ix[j] == k) { j++; continue; } cx[q++] = cs[k]; }
+        rc = env_engine(q, cx, 1, alpha, DFL_ENGINE_AUTO, v, err, errlen);
+        for (int k = 0, j = 0, l = 0; k < n && !rc; k++) { if (j < m && ix[j] == k) { j++; continue; } out[k] = v[l++]; }
+    }
+    if (!rc) {
+        if (io->verified) {
+            for (int j = 0; j < m && !rc; j++) if (!(E[j] <= tol)) rc = env_engine(1, &cs[ix[j]], 1, alpha, DFL_ENGINE_AUTO, &out[ix[j]], err, errlen);
+        } else inv_warn("power_envelope", m, E, NULL, tol);
+    }
+    free(cx); free(v); free(E); free(ix);
+    return rc;
+}
+int dfl_engine_envelope(int n, const double *cs, int model, double alpha, int engine, double *out, char *err, size_t errlen)
+{
+    return dfl_engine_envelope_x(n, cs, model, alpha, engine, NULL, out, NULL, err, errlen);
 }
 /* ADFmax (kind 2 distribution function, 1 density) for a case DU, DT, SU, ST or a design.  The classical ADFmax has the
  * zero and the stationary start of cases DU, DT only: a fixed start (of a case code or of trend(0), trend(1)) takes the

@@ -13,9 +13,9 @@
  * or a stationary start (c <= -1e-4); least squares detrending.  Not covered: GLS detrending, a fixed start, designs with a
  * jump or a numerator of another rank, the statistic that detrends first with d(0) = 0, c below DFL_CMIN.
  *
- * Guards: the roots labelled by the sign of their real part (one root in each group), log P(t) continued along the line
- * with a predicted increment and the step walked through on 8 points, recursively up to 4 levels, where the prediction
- * fails (line_continue), the end of the line extended until |P| is small (line_end), the cap of the first piece of the edge
+ * Guards: the roots labelled by the sign of their real part (one root in each group), the argument of log P(t) at each
+ * point from the pivots of the precision matrix (line_point, after Bao and Kan; until November 2026 continued from the real
+ * point along the line), the end of the line extended until |P| is small (line_end), the cap of the first piece of the edge
  * segment and of the ray X < 0 by the root scale (dfl_k0first), and the bounds of the classical integrator's paths (DFL_BOUND_*: method auto
  * takes the inversion on paths at such a point, method line returns an error).  The classical integrator's fixed node layouts
  * (dfl_batch.c) take the inner integrals where they serve, as for the classical cases (the line moved off tau = 1 where the
@@ -35,7 +35,7 @@ struct dfl_prov {
     int refs;
 };
 static _Thread_local const dfl_prov *CUR;   /* the provider of DFL_MODEL_PROV on this thread */
-static _Thread_local int PROVFAIL;          /* 1: the transform failed, 2: the continuation of log P failed */
+static _Thread_local int PROVFAIL;          /* 1: the transform failed */
 #define PROV_MEMO_CAP0 (1 << 11)     /* the memo starts with this many slots and doubles while half full, up to */
 #define PROV_MEMO_CAP (1 << 16)      /* (65536 slots, 4.7 MB; then it is emptied: the values do not depend on it) */
 
@@ -56,12 +56,17 @@ static memo_ent *memo_find(const dfl_prov *pv, cdouble t)
     }
 }
 /* (log D_V(t), mu_+(t), mu_-(t)) at one point: mu_+ the reciprocal of the positive root, mu_- of the negative one (0 for rank
- * one); the groups by the sign of Re mu, which on the line is that of Re s (the roots stay on their side of the gap) */
-static void line_point(const dfl_prov *pv, det_work *W, cdouble t, cdouble *v)
+ * one); the groups by the sign of Re mu, which on the line is that of Re s (the roots stay on their side of the gap).  The
+ * argument of log D_V at the point from the pivots of the precision matrix (det_detlog_piv, Sigma as det_mgfparts left it:
+ * one small elimination), after Bao and Kan; with the principal arguments of mu_+ and -mu_-, each in the right half-plane on
+ * the line, log P(t)^{-2} has its continuous imaginary part at the point.  wk: 2 N^2 + N0^2 complex entries, piv N ints */
+static void line_point(const dfl_prov *pv, det_work *W, cdouble t, cdouble *v, cdouble *wk, int *piv)
 {
     cdouble th, ld, mu[2];
     if (det_mgfparts(W, pv->c, t, &th, &ld, mu, NULL)) PROVFAIL = 1;
-    v[0] = ld;
+    size_t N = W->N;
+    cdouble lp = det_detlog_piv(W, pv->c, DZERO, t, th, wk, wk + N * N, wk + 2 * N * N, piv);
+    v[0] = CPX(creal(ld), cimag(th) + cimag(lp));
     if (pv->r == 1) { v[1] = mu[0]; v[2] = DZERO; return; }
     if (creal(mu[0]) >= creal(mu[1])) { v[1] = mu[0]; v[2] = mu[1]; } else { v[1] = mu[1]; v[2] = mu[0]; }
 }
@@ -70,10 +75,16 @@ static void raw_body(int j, void *v)
 {
     raw_ctx *r = v; char buf[DET_WORK_STACK]; det_work W;
     if (det_work_init(&W, &r->pv->Mo, buf, sizeof buf)) { r->fail = 1; return; }
+    size_t N = W.N, N0 = W.N0;
+    cdouble wkb[3 * 64], *wk = 2 * N * N + N0 * N0 <= 3 * 64 ? wkb : malloc((2 * N * N + N0 * N0) * sizeof(cdouble));
+    int pvb[16], *piv = N <= 16 ? pvb : malloc(N * sizeof(int));
+    if (!wk || !piv) { r->fail = 1; det_work_free(&W); return; }
     int k = r->miss[j];
     PROVFAIL = 0;
-    line_point(r->pv, &W, r->t[k], r->out + 3 * k);
+    line_point(r->pv, &W, r->t[k], r->out + 3 * k, wk, piv);
     if (PROVFAIL) r->fail = 1;
+    if (wk != wkb) free(wk);
+    if (piv != pvb) free(piv);
     det_work_free(&W);
 }
 /* the transform at the points t (3 values each into out): from the memo, the missing points on the workers */
@@ -110,36 +121,14 @@ static void line_raw(dfl_prov *pv, int n, const cdouble *t, cdouble *out)
     }
     free(miss);
 }
-/* log P(t)^{-2} = log D_V + log mu_+ + log(-mu_-), before the continuation of its imaginary part */
+/* log P(t)^{-2} = log D_V + log mu_+ + log(-mu_-), with the argument of log D_V fixed at the point (line_point) */
 static inline cdouble lineLr(int r, const cdouble *v) { return r == 1 ? cadd(v[0], clog(v[1])) : cadd(cadd(v[0], clog(v[1])), clog(cneg(v[2]))); }
 
-/* one step of the continuation of L = log P^{-2} from ta (where it is La) to tb (where the transform gives Lrb up to a
- * multiple of 2 pi i): the multiple that puts the increment of Im L nearest to the prediction dpred (the previous increment
- * scaled by the ratio of the steps; 0 at the first step).  Where the increment so found differs from the prediction by more
- * than pi/4 (pi/8 at the first step) the step is walked through 8 points, recursively up to 4 levels; beyond that the
- * continuation fails (PROVFAIL 2: the classical integrator's line is too coarse for the phase of P) */
-static cdouble line_continue(dfl_prov *pv, cdouble ta, cdouble La, cdouble tb, cdouble Lrb, double dpred, int first, int depth)
-{
-    double k = jround((cimag(La) + dpred - cimag(Lrb)) / (2 * M_PI));
-    cdouble Lb = cadd(Lrb, CPX(0, 2 * M_PI * k));
-    if (fabs(cimag(Lb) - cimag(La) - dpred) <= (first ? M_PI / 8 : M_PI / 4)) return Lb;
-    if (depth >= 4) { PROVFAIL = 2; return Lb; }
-    enum { m = 8 };
-    cdouble tsub[m - 1], raw[3 * (m - 1)];
-    for (int i = 1; i < m; i++) tsub[i - 1] = cadd(ta, cscale((double) i / m, csub(tb, ta)));
-    line_raw(pv, m - 1, tsub, raw);
-    cdouble L = La, tprev = ta; double dp = dpred / m; int fs = first;
-    for (int i = 1; i <= m; i++) {
-        cdouble ti = i < m ? tsub[i - 1] : tb, Lri = i < m ? lineLr(pv->r, raw + 3 * (i - 1)) : Lrb;
-        cdouble Ln = line_continue(pv, tprev, L, ti, Lri, dp, fs, depth + 1);
-        dp = cimag(Ln) - cimag(L); fs = 0; L = Ln; tprev = ti;
-    }
-    return L;
-}
 /* P(t), s_1(t), s_2(t), M_0(t) on the points t of the line (every grid of the classical integrator starts at the real
  * point; otherwise it is put in front): s_1 the negative root and s_2 the positive one (rank two), s_1 the positive root
- * (rank one, s_2 and M_0 unused); M_0 = (-s_1)^{-1/2} s_2^{-1/2} with the principal branches; P from log P^{-2} continued
- * from the real point, where P > 0 */
+ * (rank one, s_2 and M_0 unused); M_0 = (-s_1)^{-1/2} s_2^{-1/2} with the principal branches; P from log P^{-2} with its
+ * argument fixed at each point (line_point; until November 2026 continued from the real point along the line, within
+ * 1.7e-14 of these values on the engine's grids, at the same cost) */
 static void prov_tparts(dfl_prov *pv, int nt, const cdouble *t, cdouble *P, cdouble *s1, cdouble *s2, cdouble *M0)
 {
     if (nt <= 0) return;
@@ -154,17 +143,11 @@ static void prov_tparts(dfl_prov *pv, int nt, const cdouble *t, cdouble *P, cdou
     }
     cdouble *raw = malloc(3 * (size_t) nt * sizeof(cdouble));
     line_raw(pv, nt, t, raw);
-    cdouble L = DZERO; double dprev = NAN;
     for (int j = 0; j < nt; j++) {
         const cdouble *v = raw + 3 * j;
-        cdouble Lr = lineLr(pv->r, v), Ln;
-        if (j == 0) Ln = CPX(creal(Lr), 0);      /* (D_V mu_+ (-mu_-) is positive at the real point) */
-        else {
-            double dpred = isnan(dprev) ? 0.0 : (j > 1 ? dprev * cfabs(csub(t[j], t[j - 1])) / cfabs(csub(t[j - 1], t[j - 2])) : dprev);
-            Ln = line_continue(pv, t[j - 1], L, t[j], Lr, dpred, isnan(dprev), 0);
-            dprev = cimag(Ln) - cimag(L);
-        }
-        L = Ln;
+        cdouble Lr = lineLr(pv->r, v), L;
+        if (j == 0) L = CPX(creal(Lr), 0);       /* (D_V mu_+ (-mu_-) is positive at the real point) */
+        else L = Lr;                             /* (the argument fixed at the point, line_point) */
         P[j] = cexp(cscale(-0.5, L));
         if (pv->r == 1) { s1[j] = cinv(v[1]); s2[j] = DZERO; M0[j] = DZERO; }
         else { s1[j] = cinv(v[2]); s2[j] = cinv(v[1]); M0[j] = cmul(csq(v[1]), csq(cneg(v[2]))); }
@@ -375,7 +358,7 @@ int det_line_select(const dfl_design *D, double c, const dfl_det_opts *o, dfl_pr
     return 0;
 }
 /* one value of the line integral at x: 0 and the value, or the bound of the classical integrator's paths (DFL_BOUND_*), or
- * -1 where the provider failed (the continuation of log P, the transform) */
+ * -1 where the provider failed (the transform) */
 int det_line_value(dfl_prov *pv, int kind, double x, double c0, double *out)
 {
     dfl_single_opts so; dfl_single_defaults(&so);
@@ -391,7 +374,7 @@ int det_line_value(dfl_prov *pv, int kind, double x, double c0, double *out)
 /* the message of a point the line integral cannot take under method line */
 void det_line_point_error(char *err, size_t errlen, const char *fn, const dfl_prov *pv, double x, double c0, int rc)
 {
-    if (rc < 0) snprintf(err, errlen, "%s: method line: c = %g, c0 = %g, x = %g: the continuation of log P(t) along the line failed (the classical integrator's line is too coarse for the phase of P); method auto takes the inversion on paths there", fn, pv->c, c0, x);
+    if (rc < 0) snprintf(err, errlen, "%s: method line: c = %g, c0 = %g, x = %g: the transform of the provider failed on the line; method auto takes the inversion on paths there", fn, pv->c, c0, x);
     else snprintf(err, errlen, "%s: method line: c = %g, c0 = %g, x = %g: the line integral needs more nodes than the engine allows here (%s); method auto takes the inversion on paths at such points",
                   fn, pv->c, c0, x, rc == DFL_BOUND_RULE ? "a Gauss-Legendre rule beyond its bound, at large x above the unit root" : "a path of the inner integrals beyond its bound, c0 < 0 near zero with x > 0");
 }

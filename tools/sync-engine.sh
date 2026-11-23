@@ -28,11 +28,14 @@ ENGINE="dflimit.h dfl_lock.h dfl_vmath.h dfl_api.c dfl_double.c dfl_gen.c dfl_gi
 # the general engine (any deterministic terms) and the router over the two engines
 GENERAL="dfl_det_int.h dfl_det_api.c dfl_det_design.c dfl_det_inner.c dfl_det_la.c dfl_det_mgf.c dfl_det_paper2.c
          dfl_det_path.c dfl_det_route.c dfl_det_line.c dfl_det_tables.c"
+# the devices of Bao and Kan (dfl_kan.c includes the templates dfl_kan_jet.inc and dfl_kan_logcf.inc; dfl_det_kan.c for the
+# general engine's transform)
+KAN="dfl_kan_int.h dfl_kan.c dfl_kan_jet.inc dfl_kan_logcf.inc dfl_det_kan.c"
 FADDEEVA="Faddeeva.cc Faddeeva.h faddeeva_shim.cpp"
 
 mkdir -p "$PKG/csrc"
 lf() { tr -d '\r' < "$1" > "$2"; }
-for f in $ENGINE $GENERAL; do lf "$UP/c/$f" "$PKG/csrc/$f"; done
+for f in $ENGINE $GENERAL $KAN; do lf "$UP/c/$f" "$PKG/csrc/$f"; done
 for f in $FADDEEVA; do lf "$UP/c/faddeeva/$f" "$PKG/csrc/$f"; done
 
 # the patches (unified diffs relative to the package root, paths csrc/...)
