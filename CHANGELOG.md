@@ -2,6 +2,18 @@
 
 ## 0.5.0
 
+- The C engine of dflimit-matlab 9484fb7: the upper tail above the unit root. Above the unit root the t-ratio with
+  `c0 != c` has its upper tail at x of the order (c - c0) e^c/(2c), and the default route returned values of the
+  distribution function outside [0, 1] there without a warning (case DK at c = 10, c0 = 2: 0.8415 for 0.7436 at
+  x = 1e4, -1.3674 for 0.9993 at x = 3e4; at c = 10, c0 = 9: 1.0479 for 0.9936 at x = 3e3; also with `verified=True`
+  and `engine="classical"`): beyond the line integral's bound the conditional integral returned its one evaluation
+  where its checked value was flagged, off by up to 14 in case DK. Case DK now takes the checked value (within 1.3e-8
+  of an independent computation up to c = 14), for c > 4 also at x > 300 and, with `c0 > c`, at x < -20 (where the line
+  integral was off by up to 1.5e-3); above c = 14 these points of case DK raise `ValueError` naming c, c0, x and the
+  region computed (the conditional integral is off by up to 7.7e-5 at c = 16). The general engine (`engine="general"`)
+  cut its line as if c0 were 0 and was off by 1.1e-3 at c = 10, c0 = 9, x = 1000: now within 2e-13. Every distribution
+  function of both engines ends with a check of its values: outside [0, 1] by more than 1e-8 a `ValueError` that names
+  the call.
 - The C engine of dflimit-matlab 06bb2cd: the general engine above the unit root. The coefficient statistic far above
   the unit root was silently wrong in the general engine (the segment of the path around the positive root, shorter than
   1e-12 from c = 16 on, got no panel; case DK at c = 20 gave 0.3128 for the 30% point with `engine="general"`; the
