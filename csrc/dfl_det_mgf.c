@@ -495,14 +495,20 @@ static int nystrom_nodes(const det_prep *P, int m, double **rs, double **ws, int
     }
     return n;
 }
+typedef struct { double c, v0; } ou_ctx;
+static double ou_kern(double r, double u, const void *v) { const ou_ctx *o = v; return oukernel(o->c, r, u, o->v0); }
 int det_eigtop(const det_prep *P, double c, int m, int stat, double *l1, double *l2)
 {
+    ou_ctx o = {c, stat ? -1 / (2 * c) : 0.0};
+    return det_eigtop_k(P, m, ou_kern, &o, l1, l2);
+}
+int det_eigtop_k(const det_prep *P, int m, double (*kern)(double r, double u, const void *ctx), const void *ctx, double *l1, double *l2)
+{
     double *rs, *ws; int n = nystrom_nodes(P, m, &rs, &ws, NULL);
-    double v0 = stat ? -1 / (2 * c) : 0.0;
     double *sw = malloc(n * sizeof(double)), *Kw = malloc((size_t) n * n * sizeof(double));
     if (!Kw) { free(rs); free(ws); free(sw); return 1; }
     for (int i = 0; i < n; i++) sw[i] = sqrt(ws[i]);
-    for (int k = 0; k < n; k++) for (int i = k; i < n; i++) { double v = sw[i] * oukernel(c, rs[i], rs[k], v0) * sw[k]; Kw[i + (size_t) k * n] = v; Kw[k + (size_t) i * n] = v; }
+    for (int k = 0; k < n; k++) for (int i = k; i < n; i++) { double v = sw[i] * kern(rs[i], rs[k], ctx) * sw[k]; Kw[i + (size_t) k * n] = v; Kw[k + (size_t) i * n] = v; }
     if (P->K > 0) {
         int K = P->Kd;
         dfl_design D = {P->Kd, P->np, P->deg, P->br, P->C, P->loc, P->first};
@@ -666,6 +672,287 @@ done:
 #undef F_
     det_work_free(&W);
     if (det_failed(&st)) { snprintf(err, errlen, "%s", st.msg); return 1; }
+    *tsout = result; if (mult) *mult = mres;
+    return 0;
+}
+
+/* =====================================================================================================================
+ * Volatility and persistence regimes (src/DFDet_vol.jl): the covariance Sigma of ell under the tilted process with the
+ * theta_j of the pieces, the tilt Gamma, the transform and t_*
+ * ===================================================================================================================== */
+int det_vwork_init(det_vwork *W, const det_vmodel *VM, void *buf, size_t bytes)
+{
+    invn_init();
+    const det_prep *P = VM->P;
+    memset(W, 0, sizeof *W);
+    W->VM = VM; W->nq = 24; W->zq = det_gl(24, &W->wq);
+    int N = VM->Ne, np = VM->np, d1 = P->gdeg + 1, pm = imax(P->p, 1), r = imax(VM->r, 1);
+    size_t nc = (size_t) d1 + N + (size_t) N * np + (size_t) pm * np + 2 * (size_t) N * N + 2 * (size_t) np + N + (size_t) N * r + (size_t) r * r + N;
+    size_t nd = (size_t) d1 * pm, need = nc * sizeof(cdouble) + nd * sizeof(double) + N * sizeof(int) + 64;
+    char *m;
+    if (buf && bytes >= need) m = buf; else { m = malloc(need); if (!m) return 1; W->heap = m; }
+    m = (char *) (((size_t) m + 15) & ~(size_t) 15);
+    cdouble *c = (cdouble *) m;
+    W->e = c; c += d1; W->F = c; c += N; W->Rb = c; c += (size_t) N * np; W->Ib = c; c += (size_t) pm * np;
+    W->S = c; c += (size_t) N * N; W->M = c; c += (size_t) N * N; W->th = c; c += np; W->v = c; c += np; W->gam = c; c += N;
+    W->X = c; c += (size_t) N * r; W->Hm = c; c += (size_t) r * r; W->v1 = c; c += N;
+    W->a = (double *) c; W->piv = (int *) (W->a + nd);
+    return 0;
+}
+void det_vwork_free(det_vwork *W) { free(W->heap); W->heap = NULL; }
+
+/* Sigma = int_0^1 F(u) F(u)' du (bilinear, no conjugation) of ell under dJ = -theta_j J dr + omega_j dW on piece j, J(0) = 0,
+ * the theta_j in W->th (sigma_vol!): on piece j = (a, b] with y = b - u, F(u)/omega_j = (the part of z inside the piece) +
+ * e^{-theta_j y} R_j, R_j the same functionals of the path started at b by a backward recursion over the pieces; the
+ * integral over y on the engine's panels (sigma!, which this is with one regime); the entries among J(1) and the J(b) then
+ * replaced by their closed forms from the variances at the right ends of the pieces */
+static void sigma_vol(det_vwork *W)
+{
+    const det_vmodel *VM = W->VM;
+    const det_prep *P = VM->P;
+    int N = VM->Ne, p = P->p, np = VM->np, D = P->gdeg, nj = P->nj, pm = imax(p, 1), iz0 = 1 + nj;
+    const double *br = P->br;
+    cdouble *S = W->S, *e = W->e, *F = W->F, *Rb = W->Rb, *Ib = W->Ib;
+    const cdouble *th = W->th;
+    double *a = W->a;
+    for (int i = 0; i < N * N; i++) S[i] = DZERO;
+    for (int m = 0; m < np && p > 0; m++) {
+        double Lm = VM->L[m];
+        ek(e, cscale(Lm, th[m]), D);
+        taylor(a, P->g + (size_t) m * (D + 1) * p, D, p, br[m] - P->off[m]);
+        for (int i = 0; i < p; i++) {
+            cdouble acc = DZERO; double Lk = Lm;
+            for (int k = 0; k <= D; k++) { acc = cadd(acc, cscale(a[k + i * (D + 1)] * Lk, e[k])); Lk *= Lm; }
+            Ib[i + m * pm] = acc;
+        }
+    }
+    for (int i = 0; i < N * np; i++) Rb[i] = DZERO;
+    Rb[0 + (size_t) (np - 1) * N] = DONE;
+    for (int j = np - 2; j >= 0; j--) {
+        cdouble el = cexp(cscale(-VM->L[j + 1], th[j + 1]));
+        for (int i = 0; i < N; i++) Rb[i + (size_t) j * N] = cmul(el, Rb[i + (size_t) (j + 1) * N]);
+        for (int i = 0; i < p; i++) Rb[iz0 + i + (size_t) j * N] = cadd(Rb[iz0 + i + (size_t) j * N], Ib[i + (j + 1) * pm]);
+        int pos = VM->bpos[j];
+        if (pos >= 0) Rb[pos + (size_t) j * N] = DONE;
+    }
+    const double *zq = W->zq, *wq = W->wq;
+    for (int j = 0; j < np; j++) {
+        cdouble thj = th[j];
+        double at = cabs(thj), rt = creal(thj), h0 = at > 0 ? 1 / at : INFINITY;
+        double b = br[j + 1], Lj = VM->L[j], w2 = VM->om2[j], y0 = 0;
+        const double *gj = p > 0 ? P->g + (size_t) j * (D + 1) * p : NULL;
+        while (y0 < Lj * (1 - 1e-14)) {
+            double y1;
+            if (at * Lj <= 2) y1 = Lj;
+            else {
+                double wdt = dmax(y0, h0);
+                if (2 * rt * y0 < 80) wdt = dmin(wdt, 24 * h0);
+                y1 = dmin(y0 + wdt, Lj);
+                if ((Lj - y1) < 0.5 * wdt) y1 = Lj;
+            }
+            for (int q = 0; q < W->nq; q++) {
+                double y = y0 + (y1 - y0) * zq[q], wqq = w2 * (y1 - y0) * wq[q];
+                cdouble ey = cexp(cscale(-y, thj));
+                for (int i = 0; i < N; i++) F[i] = cmul(ey, Rb[i + (size_t) j * N]);
+                if (p > 0) {
+                    ek(e, cscale(y, thj), D);
+                    taylor(a, gj, D, p, b - y - P->off[j]);
+                    for (int i = 0; i < p; i++) {
+                        cdouble acc = DZERO; double yk = y;
+                        for (int k = 0; k <= D; k++) { acc = cadd(acc, cscale(a[k + i * (D + 1)] * yk, e[k])); yk *= y; }
+                        F[iz0 + i] = cadd(F[iz0 + i], acc);
+                    }
+                }
+                for (int jj = 0; jj < N; jj++) {
+                    cdouble fj = cscale(wqq, F[jj]);
+                    for (int ii = 0; ii <= jj; ii++) S[ii + jj * N] = cadd(S[ii + jj * N], cmul(fj, F[ii]));
+                }
+            }
+            y0 = y1;
+        }
+    }
+    /* the variances of the path at the right ends of the pieces, and from them the entries among J(1) and the J(b) */
+    cdouble *v = W->v, acc = DZERO;
+    for (int j = 0; j < np; j++) {
+        cdouble z = cscale(2 * VM->L[j], th[j]);
+        acc = cadd(cscale(VM->om2[j] * VM->L[j], e0c(z)), cmul(cexp(cneg(z)), acc));
+        v[j] = acc;
+    }
+    for (int j = 0; j < np; j++) {
+        int pj = j == np - 1 ? 0 : VM->bpos[j];
+        if (pj < 0) continue;
+        S[pj + pj * N] = v[j];
+        cdouble dec = DONE;
+        for (int k = j + 1; k < np; k++) {
+            dec = cmul(dec, cexp(cscale(-VM->L[k], th[k])));
+            int pk = k == np - 1 ? 0 : VM->bpos[k];
+            if (pk < 0) continue;
+            int lo = imin(pj, pk), hi = imax(pj, pk);
+            S[lo + hi * N] = cmul(v[j], dec);
+        }
+    }
+    for (int jj = 0; jj < N; jj++) for (int ii = 0; ii < jj; ii++) S[jj + ii * N] = S[ii + jj * N];
+}
+/* the theta_j at t (principal square roots), Sigma into W->S and the diagonal tilt Gamma into W->gam (g_last at J(1),
+ * g_j - g_{j+1} at the boundary between pieces j and j + 1, g_j = (c_j + theta_j)/(2 omega_j^2)); returns the exponent
+ * sum_j (c_j + theta_j) L_j (vol_tilt!) */
+static cdouble vol_tilt(det_vwork *W, cdouble t)
+{
+    const det_vmodel *VM = W->VM;
+    int np = VM->np, N = VM->Ne;
+    for (int j = 0; j < np; j++) { double cj = VM->c[j], w2 = VM->om2[j]; W->th[j] = csq(CPX(cj * cj - 2 * creal(t) * w2, -(2 * cimag(t) * w2))); }
+    sigma_vol(W);
+    for (int i = 0; i < N; i++) W->gam[i] = DZERO;
+#define GJ(j) cdivr(caddr(W->th[j], VM->c[j]), 2 * VM->om2[j])
+    W->gam[0] = cadd(W->gam[0], GJ(np - 1));
+    cdouble ex = DZERO;
+    for (int j = 0; j < np; j++) {
+        ex = cadd(ex, cscale(VM->L[j], caddr(W->th[j], VM->c[j])));
+        if (j < np - 1) { int pos = VM->bpos[j]; if (pos >= 0) W->gam[pos] = cadd(W->gam[pos], csub(GJ(j), GJ(j + 1))); }
+    }
+#undef GJ
+    return ex;
+}
+/* M = I - 2 (s A + t B + Gamma) Sigma into W->M */
+static void vol_buildM(det_vwork *W, cdouble s, cdouble t)
+{
+    const det_vmodel *VM = W->VM;
+    int N = VM->Ne;
+    cdouble *M = W->M, *S = W->S;
+    for (int i = 0; i < N * N; i++) M[i] = DZERO;
+    for (int k = 0; k < N; k++) for (int i = 0; i < N; i++) {
+        cdouble q = cadd(cscale(VM->A[i + k * N], s), cscale(VM->B[i + k * N], t));
+        if (i == k) q = cadd(q, W->gam[i]);
+        if (creal(q) == 0 && cimag(q) == 0) continue;
+        for (int j = 0; j < N; j++) M[i + j * N] = cadd(M[i + j * N], cmul(q, S[k + j * N]));
+    }
+    for (int i = 0; i < N * N; i++) M[i] = cscale(-2, M[i]);
+    for (int i = 0; i < N; i++) M[i + i * N] = caddr(M[i + i * N], 1);
+}
+int det_vol_parts(det_vwork *W, cdouble t, cdouble *ld, cdouble *mu)
+{
+    const det_vmodel *VM = W->VM;
+    int N = VM->Ne, r = VM->r, odd;
+    cdouble ex = vol_tilt(W, t);
+    vol_buildM(W, DZERO, t);
+    det_clu(N, W->M, W->piv, &odd);
+    *ld = cadd(ex, det_clogdet(N, W->M, odd));
+    /* H = 2 Dv L' S M0^{-1} L */
+    for (int k = 0; k < r; k++) {
+        cdouble *x = W->X + (size_t) k * N;
+        for (int i = 0; i < N; i++) x[i] = CPX(VM->Lx[i + (size_t) k * N], 0);
+        det_csolve(N, W->M, W->piv, x);
+    }
+    const cdouble *S = W->S;
+    for (int l = 0; l < r; l++) {
+        const cdouble *x = W->X + (size_t) l * N;
+        for (int i = 0; i < N; i++) { cdouble s = DZERO; for (int j = 0; j < N; j++) s = cadd(s, cmul(S[i + j * N], x[j])); W->v1[i] = s; }
+        for (int k = 0; k < r; k++) {
+            cdouble s = DZERO; for (int i = 0; i < N; i++) s = cadd(s, cscale(VM->Lx[i + (size_t) k * N], W->v1[i]));
+            W->Hm[k + l * r] = cscale(2 * VM->Dv[k], s);
+        }
+    }
+    return det_ceigvals(r, W->Hm, mu);
+}
+cdouble det_vol_dval(const det_vmodel *VM, cdouble s, cdouble t)
+{
+    det_vwork W; char buf[DET_WORK_STACK];
+    if (det_vwork_init(&W, VM, buf, sizeof buf)) return CPX(NAN, NAN);
+    int odd;
+    cdouble ex = vol_tilt(&W, t);
+    vol_buildM(&W, s, t);
+    det_clu(VM->Ne, W.M, W.piv, &odd);
+    cdouble d = cmul(cexp(ex), det_cdet(VM->Ne, W.M, odd));
+    det_vwork_free(&W);
+    return d;
+}
+
+/* the covariance of the path with the regimes, zero start: e^{C(r) + C(u)} int_0^{min(r,u)} omega^2 e^{-2C(v)} dv with
+ * C(r) = int_0^r c, piece by piece in closed form, the exponents combined so that nothing overflows (vol_kernel) */
+typedef struct { const det_vmodel *VM; const double *Cb; } vk_ctx;
+static double vol_Cat(const vk_ctx *k, double r)
+{
+    const det_vmodel *VM = k->VM; const double *br = VM->P->br;
+    int j = 0; while (j < VM->np - 1 && r > br[j + 1]) j++;
+    return k->Cb[j] + VM->c[j] * (r - br[j]);
+}
+static double vol_kern(double r, double u, const void *v)
+{
+    const vk_ctx *k = v; const det_vmodel *VM = k->VM; const double *br = VM->P->br;
+    double m = dmin(r, u), E = vol_Cat(k, r) + vol_Cat(k, u), acc = 0;
+    for (int j = 0; j < VM->np; j++) {
+        double a = br[j];
+        if (a >= m) break;
+        double b = dmin(br[j + 1], m), L = b - a, cj = VM->c[j], Ca = k->Cb[j], Cbb = Ca + cj * L;
+        acc += VM->om2[j] * (fabs(2 * cj * L) < 1e-3 ? exp(E - 2 * Ca) * L * det_e0r(2 * cj * L) : (exp(E - 2 * Cbb) - exp(E - 2 * Ca)) / (-2 * cj));
+    }
+    return acc;
+}
+typedef struct { const det_vmodel *VM; const double *t; double *f; det_status st; } vgrid_ctx;
+static double vfval(det_vwork *W, double t, det_status *st)
+{
+    cdouble ld, mu[64];
+    if (det_vol_parts(W, CPX(t, 0), &ld, mu) && st) det_fail(st, "the eigenvalues of the reciprocal roots did not converge at t = %g", t);
+    return creal(cexp(ld));
+}
+static void vgrid_body(int j, void *v)
+{
+    vgrid_ctx *o = v;
+    char buf[DET_WORK_STACK]; det_vwork W;
+    if (det_vwork_init(&W, o->VM, buf, sizeof buf)) { det_fail(&o->st, "out of memory"); return; }
+    o->f[j] = vfval(&W, o->t[j], &o->st);
+    det_vwork_free(&W);
+}
+/* t_* of the volatility model (vol_tstar): the Nystrom estimate with the covariance of the regimes; D_V on 81 points of
+ * +-2% around it, bisection at the first change of sign, the golden section for a double zero; where the estimate is off,
+ * D_V scanned from zero in steps of a thousandth of the estimate for its first change of sign (or a double zero) */
+int det_vol_tstar(const det_vmodel *VM, double *tsout, int *mult, char *err, size_t errlen)
+{
+    double *Cb = malloc((VM->np + 1) * sizeof(double));
+    Cb[0] = 0; for (int j = 0; j < VM->np; j++) Cb[j + 1] = Cb[j] + VM->c[j] * VM->L[j];
+    vk_ctx kc = {VM, Cb};
+    double l1, l2;
+    int rc = det_eigtop_k(VM->P, 16, vol_kern, &kc, &l1, &l2);
+    free(Cb);
+    if (rc) { snprintf(err, errlen, "t_*: the Nystrom estimate failed"); return 1; }
+    double te = 1 / (2 * l1), grid[81], vals[81];
+    for (int i = 0; i < 81; i++) grid[i] = 0.98 * te + (1.02 * te - 0.98 * te) * i / 80;
+    vgrid_ctx g = {VM, grid, vals, {0, ""}};
+    dfl_parfor(81, vgrid_body, &g);
+    if (det_failed(&g.st)) { snprintf(err, errlen, "%s", g.st.msg); return 1; }
+    char buf[DET_WORK_STACK]; det_vwork W;
+    if (det_vwork_init(&W, VM, buf, sizeof buf)) { snprintf(err, errlen, "out of memory"); return 1; }
+    det_status st = {0, ""};
+#define F_(tt) vfval(&W, (tt), &st)
+#define BISECT(a0, b0) do { double lo = (a0), hi = (b0); for (int it = 0; it < 100; it++) { double mid = (lo + hi) / 2; if (F_(mid) > 0) lo = mid; else hi = mid; if (hi - lo < 1e-13 * hi) break; } result = (lo + hi) / 2; } while (0)
+#define GOLDEN(a0, b0) do { double a = (a0), b = (b0), gg = (sqrt(5.0) - 1) / 2, x1 = b - gg * (b - a), x2 = a + gg * (b - a), f1 = F_(x1), f2 = F_(x2); \
+        for (int it = 0; it < 80; it++) { if (f1 < f2) { b = x2; x2 = x1; f2 = f1; x1 = b - gg * (b - a); f1 = F_(x1); } else { a = x1; x1 = x2; f1 = f2; x2 = a + gg * (b - a); f2 = F_(x2); } } \
+        result = (a + b) / 2; } while (0)
+    double result = NAN; int mres = 1, found = 0;
+    int k = -1; for (int i = 0; i < 81; i++) if (vals[i] <= 0) { k = i; break; }
+    if (k > 0) { BISECT(grid[k - 1], grid[k]); mres = fabs(l1 - l2) < 1e-4 * l1 ? 2 : 1; found = 1; }
+    else if (k < 0) {
+        int j = 0; double vmax = vals[0];
+        for (int i = 1; i < 81; i++) { if (vals[i] < vals[j]) j = i; if (vals[i] > vmax) vmax = vals[i]; }
+        if (j > 0 && j < 80 && vals[j] < 1e-6 * vmax) { GOLDEN(grid[j - 1], grid[j + 1]); mres = 2; found = 1; }
+    }
+    if (!found) {
+        /* (the estimate is off: the scan from zero) */
+        double h = te / 1000, fprev = F_(h), fmax = fabs(fprev), fpp = INFINITY, tprev = h;
+        for (int j = 2; j <= 8000 && !found; j++) {
+            double tj = j * h, fj = F_(tj);
+            if (fj <= 0) { BISECT(tprev, tj); mres = 1; found = 1; break; }
+            if (fprev < fpp && fprev <= fj && fprev < 1e-6 * fmax) { GOLDEN(tprev - h, tj); mres = 2; found = 1; break; }
+            fmax = dmax(fmax, fj); fpp = fprev; fprev = fj; tprev = tj;
+        }
+        if (!found) snprintf(err, errlen, "tstar: no zero of D_V of the volatility model below %g (the Nystrom estimate of t_* is %g)", 8 * te, te);
+    }
+#undef F_
+#undef BISECT
+#undef GOLDEN
+    det_vwork_free(&W);
+    if (det_failed(&st)) { snprintf(err, errlen, "%s", st.msg); return 1; }
+    if (!found) return 1;
     *tsout = result; if (mult) *mult = mres;
     return 0;
 }

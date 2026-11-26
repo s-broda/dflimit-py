@@ -16,6 +16,7 @@ import numpy as np
 
 from . import _engine
 from ._design import Design
+from ._ext import RHO_DOC, VOL_DOC, ext_active, ext_args
 from ._route import engine_of, gls_value, route_tuple, route_x, spec_of, start_code, warn_lines
 from ._utils import Result, dfl_flag, dfl_imethod, dfl_num, dfl_posint, dfl_real, dfl_shape, engine_call, f64, fill_doc
 
@@ -24,6 +25,7 @@ from ._utils import Result, dfl_flag, dfl_imethod, dfl_num, dfl_posint, dfl_real
  DET_ENV, DET_PT_CDF, DET_PT_PDF, DET_PT_ENV, DET_LM_CDF, DET_MZA_CDF, DET_MSB_CDF) = range(1, 18)
 DET_Q, DET_COEF_Q, DET_LIN_Q, DET_ADF_Q, DET_PT_Q, DET_LM_Q, DET_MZA_Q, DET_MSB_Q = range(30, 38)
 DET_PT_POW, DET_LM_POW = 50, 51
+DET_T3_CDF, DET_T3_PDF, DET_T3_Q = 60, 61, 62
 
 OPTS_DOC = """\
 c : float, default 0
@@ -59,14 +61,18 @@ def _design(D):
     return D._tuple()
 
 
-def _opts(c0=0.0, start=None, gamma0=0.0, gls=None, verified=False, method=None, rule=None):
+def _opts(c0=0.0, start=None, gamma0=0.0, gls=None, verified=False, method=None, rule=None, ext=None):
     g0 = dfl_num(gamma0, "gamma0")
     s = start_code(start, g0, "gamma0")
     o = (dfl_num(c0, "c0"), s, g0 if s == 1 else 0.0, gls_value(gls), dfl_flag(verified, "verified"))
-    if method is None and rule is None:
+    if method is None and rule is None and ext is None:
         return o
     o = o + (0 if method is None else _gmethod(method),)
-    return o if rule is None else o + (_grule(rule),)
+    if rule is None and ext is None:
+        return o
+    o = o + (0 if rule is None else _grule(rule),)
+    # (the extensions of the limit, ext_args: rho and the volatility path)
+    return o if ext is None or not ext_active(ext[1], ext[2]) else o + (ext[1], ext[2])
 
 
 _GRULES = {"auto": 0, "present": 1, "thin": 2, "inner": 3, "outer": 4, "fine": 5, "finestep": 6}
@@ -84,9 +90,9 @@ def _grule(rule):
         raise ValueError(_GRULE_MSG) from None
 
 
-_GMETHODS = {"auto": 0, "line": 1, "paths": 2}
+_GMETHODS = {"auto": 0, "line": 1, "paths": 2, "lines": 3, "mixture": 4}
 _GMETHOD_MSG = ('method must be "auto", "line" (the line integral with the explicit kernel) or "paths" (the inversion on '
-                'paths around the roots)')
+                'paths around the roots), with rho "lines" or "mixture"')
 
 
 def _gmethod(method):
@@ -114,7 +120,8 @@ METHOD_DOC = """method : {"auto", "line", "paths"}, default "auto"
         November 2026; the paths otherwise. Above
         ``c = 5.5`` the paths warn for a design beyond the classical cases and a fixed start with deterministic terms,
         where one evaluation may be off by more than 1e-5 in the upper tail. ``"line"`` raises ``ValueError`` with the
-        reason where it does not cover the design, the start or the options (GLS detrending, a fixed start, a jump)."""
+        reason where it does not cover the design, the start or the options (GLS detrending, a fixed start, a jump).
+        With ``rho`` the methods are "auto", "lines" and "mixture", with ``vol`` "auto" and "paths"."""
 
 RULE_DOC = """rule : {"auto", "present", "thin", "inner", "outer", "fine", "finestep"}, default "auto"
         The rule of one evaluation of the inversion on paths. ``"auto"`` takes by regions the outer hyperbola with 1.5
@@ -161,8 +168,8 @@ def _quantiles(op, D, p, c, opts, *par):
     return dfl_shape(_call(op, D, a.ravel(), c, opts, *par).copy(), a)
 
 
-@fill_doc(opts=OPTS_DOC, verified=VERIFIED_DOC, notes=NOTES_DOC, method=METHOD_DOC, rule=RULE_DOC)
-def dist_cdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False, method="auto", rule="auto"):
+@fill_doc(opts=OPTS_DOC, verified=VERIFIED_DOC, notes=NOTES_DOC, method=METHOD_DOC, rule=RULE_DOC, vol=VOL_DOC, rho=RHO_DOC)
+def dist_cdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False, method="auto", rule="auto", vol=None, rho=1):
     """Distribution function of the limit of the Dickey-Fuller t-ratio for a design, by the general engine.
 
     The limit (U - c0 V)/sqrt(V) of the t-ratio of phi = phi0 = 1 + c0/n in the regression of y_t on d(t/n) and
@@ -178,6 +185,8 @@ def dist_cdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False,
     {verified}
     {method}
     {rule}
+    {vol}
+    {rho}
 
     Returns
     -------
@@ -203,11 +212,12 @@ def dist_cdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False,
     >>> dist_cdf(perron("C", [0.3, 0.7]), [-5, -4, -3], -5)
     array([0.030755..., 0.292180..., 0.790536...])
     """
-    return _values(DET_CDF, D, x, c, _opts(c0, start, gamma0, gls, verified, method, rule))
+    e = ext_args(vol, rho, c)
+    return _values(DET_CDF, D, x, e[0], _opts(c0, start, gamma0, gls, verified, method, rule, e))
 
 
-@fill_doc(opts=OPTS_DOC, verified=VERIFIED_DOC, notes=NOTES_DOC, method=METHOD_DOC, rule=RULE_DOC)
-def dist_pdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False, method="auto", rule="auto"):
+@fill_doc(opts=OPTS_DOC, verified=VERIFIED_DOC, notes=NOTES_DOC, method=METHOD_DOC, rule=RULE_DOC, vol=VOL_DOC, rho=RHO_DOC)
+def dist_pdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False, method="auto", rule="auto", vol=None, rho=1):
     """Density of the limit of the Dickey-Fuller t-ratio for a design, by the general engine.
 
     For a design whose numerator has rank one (no deterministic terms, GLS detrending) with ``c0 > 0`` the density is
@@ -224,6 +234,8 @@ def dist_pdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False,
     {verified}
     {method}
     {rule}
+    {vol}
+    {rho}
 
     Returns
     -------
@@ -249,11 +261,13 @@ def dist_pdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False,
     >>> dist_pdf(trend(2), -3.8)               # the quadratic trend at the unit root
     0.142477...
     """
-    return _values(DET_PDF, D, x, c, _opts(c0, start, gamma0, gls, verified, method, rule))
+    e = ext_args(vol, rho, c)
+    return _values(DET_PDF, D, x, e[0], _opts(c0, start, gamma0, gls, verified, method, rule, e))
 
 
-@fill_doc(opts=OPTS_DOC, notes=NOTES_DOC, method=METHOD_DOC, rule=RULE_DOC)
-def dist_quantile(D, p, c=0, *, x0=-2, tol=1e-9, c0=0, start=None, gamma0=0, gls=None, method="auto", rule="auto"):
+@fill_doc(opts=OPTS_DOC, notes=NOTES_DOC, method=METHOD_DOC, rule=RULE_DOC, vol=VOL_DOC, rho=RHO_DOC)
+def dist_quantile(D, p, c=0, *, x0=-2, tol=1e-9, c0=0, start=None, gamma0=0, gls=None, method="auto", rule="auto", vol=None,
+                  rho=1):
     """Quantiles of the limit of the Dickey-Fuller t-ratio for a design, by the general engine.
 
     Newton's method from ``x0`` on `dist_cdf` with `dist_pdf` from the same evaluation (the step limited to 1), the
@@ -272,6 +286,8 @@ def dist_quantile(D, p, c=0, *, x0=-2, tol=1e-9, c0=0, start=None, gamma0=0, gls
     tol : float, default 1e-9
         The tolerance on the quantile.
     {method}
+    {vol}
+    {rho}
 
     Returns
     -------
@@ -292,7 +308,9 @@ def dist_quantile(D, p, c=0, *, x0=-2, tol=1e-9, c0=0, start=None, gamma0=0, gls
     >>> dist_quantile(perron("C", 0.3), [0.01, 0.05, 0.10])     # critical values of Perron's model C
     array([-4.625894..., -4.072544..., -3.782146...])
     """
-    return _quantiles(DET_Q, D, p, c, _opts(c0, start, gamma0, gls, method=method, rule=rule), dfl_num(x0, "x0"), dfl_num(tol, "tol"))
+    e = ext_args(vol, rho, c)
+    return _quantiles(DET_Q, D, p, e[0], _opts(c0, start, gamma0, gls, method=method, rule=rule, ext=e), dfl_num(x0, "x0"),
+                      dfl_num(tol, "tol"))
 
 
 @fill_doc(opts=OPTS_DOC)
@@ -1291,3 +1309,117 @@ def empty_caches():
     >>> empty_caches()
     """
     _engine.det_empty()
+
+
+T3_DOC = """\
+D : Design
+    The design of the deterministic terms (real trend functions entering with complex coefficients): ``trend(-1)`` for a
+    regression without seasonal terms (a constant or a linear trend leave the harmonic statistics alone), ``trend(0)``
+    for seasonal dummies (with or without a trend), ``trend(1)`` for seasonal dummies and seasonal trends, and any design
+    of the general engine (breaks in the seasonal means, ...).
+c : float or sequence, default 0
+    The local-to-unity parameter, c <= 0, in the units of the roots' modulus 1 + c/n (n the number of years); with
+    ``vol`` a sequence of one value per regime.
+c0 : float, default 0
+    The local null value.
+vol : VolPath, optional
+    A volatility path (`volpath`)."""
+
+
+@fill_doc(t3=T3_DOC)
+def hegy_t3_cdf(D, x, c=0, *, c0=0, vol=None, verified=False):
+    """Distribution function of the limit of the first seasonal t-ratio of Hylleberg, Engle, Granger and Yoo.
+
+    The t-ratio of Dickey-Fuller shape of the regression at a harmonic frequency (strictly between 0 and pi: pi/2 for
+    quarterly data, where t3 is the t-ratio of pi_3, the coefficient of y_{3,t-2}; each pair of harmonic frequencies of
+    monthly data): t3 = (R - c0 V)/sqrt(V), R = Re int Z~* dZ, V = int |Z~|^2 of the complex Ornstein-Uhlenbeck process
+    dZ = c Z dr + dW, Z(0) = 0, and Z~ its residual on the deterministic terms. The moment generating function of (R, V)
+    is e^{-s}/D(s, t) with the general engine's determinant, whose singularities in s are poles: the distribution
+    function is one integral over the engine's outer contour of the residues at the roots (where two roots of a group
+    come within 1e-4 of each other, the engine's inversion on paths of the doubled transform). Zero start, least squares
+    detrending.
+
+    Parameters
+    ----------
+    {t3}
+    x : array_like
+        The points. ``-inf``, ``inf`` and ``nan`` give 0, 1 and ``nan``.
+    verified : bool, default False
+        True: the residues against the inversion on paths of the doubled transform, the latter returned with a warning
+        where they differ by more than 1e-9.
+
+    Returns
+    -------
+    float or numpy.ndarray
+        The distribution function at ``x``.
+
+    See Also
+    --------
+    hegy_t3_pdf, hegy_t3_quantile, volpath
+
+    Examples
+    --------
+    >>> from dflimit import hegy_t3_cdf, trend
+    >>> hegy_t3_cdf(trend(0), -3.3442)       # the 5% critical value with seasonal dummies
+    0.0500...
+    """
+    e = ext_args(vol, 1, c)
+    return _values(DET_T3_CDF, D, x, e[0], _opts(c0, verified=verified, method="auto", rule="auto", ext=e), cdf=True)
+
+
+@fill_doc(t3=T3_DOC)
+def hegy_t3_pdf(D, x, c=0, *, c0=0, vol=None, verified=False):
+    """Density of the limit of the first seasonal t-ratio of Hylleberg, Engle, Granger and Yoo (`hegy_t3_cdf`).
+
+    Parameters
+    ----------
+    {t3}
+    x : array_like
+        The points. ``-inf``, ``inf`` and ``nan`` give 0, 0 and ``nan``.
+    verified : bool, default False
+        As in `hegy_t3_cdf`.
+
+    Returns
+    -------
+    float or numpy.ndarray
+        The density at ``x``.
+
+    Examples
+    --------
+    >>> from dflimit import hegy_t3_pdf, trend
+    >>> hegy_t3_pdf(trend(0), -1.0)
+    0.2274...
+    """
+    e = ext_args(vol, 1, c)
+    return _values(DET_T3_PDF, D, x, e[0], _opts(c0, verified=verified, method="auto", rule="auto", ext=e), cdf=False)
+
+
+@fill_doc(t3=T3_DOC)
+def hegy_t3_quantile(D, p, c=0, *, x0=-2, tol=1e-10, c0=0, vol=None):
+    """Quantiles of the limit of the first seasonal t-ratio of Hylleberg, Engle, Granger and Yoo (`hegy_t3_cdf`).
+
+    Newton's method with the density from ``x0``, the step limited to 1, then the safeguarded search.
+
+    Parameters
+    ----------
+    {t3}
+    p : array_like
+        The probabilities, in (0, 1).
+    x0 : float, default -2
+        The start of the search.
+    tol : float, default 1e-10
+        The tolerance on the quantile.
+
+    Returns
+    -------
+    float or numpy.ndarray
+        The quantiles.
+
+    Examples
+    --------
+    >>> from dflimit import hegy_t3_quantile, trend
+    >>> hegy_t3_quantile(trend(0), 0.05)
+    -3.3442...
+    """
+    e = ext_args(vol, 1, c)
+    return _quantiles(DET_T3_Q, D, p, e[0], _opts(c0, method="auto", rule="auto", ext=e), dfl_num(x0, "x0"), dfl_num(tol, "tol"))

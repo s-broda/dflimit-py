@@ -2,8 +2,30 @@
  * along a path in t (rootpath_sparse, match!), the hyperbola t = tau + a (cosh u - 1) + i b sinh u (cpath, hyperbola,
  * fixed_phi) and the vertical line of Gauss-Legendre panels (linecpath, line_refine), the caches of the prepared designs,
  * the outer paths and the refined lines (behind one lock), and the stored paths of the classical cases at the unit root
- * (the tables of data/paths, dfl_det_tables.c). */
+ * (the tables of data/paths, dfl_det_tables.c).  The contour follows a transform model (det_tm): the engine's model or the
+ * model of volatility and persistence regimes (src/DFDet_vol.jl), whose construction and paths are cached here too. */
 #include "dfl_det_int.h"
+
+/* ---- the transform model: its work space, its transform at t and its t_* ---- */
+static det_tm tm_of_model(const det_model *Mo) { det_tm T = {Mo, NULL, Mo->r, Mo->rp, Mo->rm, Mo->start, Mo->g0}; return T; }
+static det_tm tm_of_vol(const det_vmodel *VM) { det_tm T = {&VM->mr->Mo, VM, VM->r, VM->rp, VM->rm, 0, 0.0}; return T; }
+typedef struct { const det_tm *T; det_work W; det_vwork V; } tw_t;
+static int tw_init(tw_t *w, const det_tm *T, void *buf, size_t bytes)
+{
+    w->T = T;
+    return T->vm ? det_vwork_init(&w->V, T->vm, buf, bytes) : det_work_init(&w->W, T->Mo, buf, bytes);
+}
+static void tw_free(tw_t *w) { if (w->T->vm) det_vwork_free(&w->V); else det_work_free(&w->W); }
+static int tw_parts(tw_t *w, double c, cdouble t, cdouble *ld, cdouble *mu, det_fixt *fx)
+{
+    if (w->T->vm) return det_vol_parts(&w->V, t, ld, mu);
+    cdouble th;
+    return det_mgfparts(&w->W, c, t, &th, ld, mu, fx);
+}
+static int tm_tstar(const det_tm *T, double c, double *ts, char *err, size_t errlen)
+{
+    return T->vm ? det_vol_tstar(T->vm, ts, NULL, err, errlen) : det_tstar(T->Mo, c, ts, NULL, err, errlen);
+}
 
 static dfl_lock_t CLOCK_ = DFL_LOCK_INIT;
 #define DET_CACHE_MAX 64
@@ -59,11 +81,13 @@ static void mref_unref_locked(det_model_ref *m)   /* (with the lock held) */
 }
 
 /* ---------------------------------------------------------------------------------------------------------------- */
+static void vol_unref_locked(det_vmodel *VM);
 static void path_free_locked(det_path *CP)
 {
     if (CP->fx) for (int k = 0; k < CP->K; k++) free(CP->fx[k]);
     free(CP->fx); free(CP->t); free(CP->dt); free(CP->R); free(CP->lP); free(CP->wt); free(CP->cuts);
     if (CP->mref) mref_unref_locked(CP->mref);
+    if (CP->vm) vol_unref_locked(CP->vm);
     free(CP);
 }
 void det_path_release(det_path *CP)
@@ -80,9 +104,11 @@ static path_entry PATHC[DET_CACHE_MAX]; static int NPATHC = 0;
 typedef struct { unsigned long long pkey; double xb; int nab; double ab[8]; int nc0; double c0[8]; det_path *CP; } line_entry;
 static line_entry LINEC[DET_CACHE_MAX]; static int NLINEC = 0;
 
+static void vol_empty_locked(void);
 void dfl_det_empty_caches(void)
 {
     dfl_lock(&CLOCK_);
+    vol_empty_locked();
     for (int i = 0; i < NPATHC; i++) if (--PATHC[i].CP->refs == 0) path_free_locked(PATHC[i].CP);
     for (int i = 0; i < NLINEC; i++) if (--LINEC[i].CP->refs == 0) path_free_locked(LINEC[i].CP);
     for (int i = 0; i < NPREPC; i++) prep_unref(PREPC[i].P);
@@ -140,20 +166,20 @@ static void match(cdouble *nw, const cdouble *prev, int r)
 }
 
 /* mgfparts at the points of a path, on the workers */
-typedef struct { const det_model *Mo; double c; const cdouble *t; const int *idx; cdouble *MU, *LD; det_fixt **FX; det_status st; } mp_ctx;
+typedef struct { const det_tm *T; double c; const cdouble *t; const int *idx; cdouble *MU, *LD; det_fixt **FX; det_status st; } mp_ctx;
 static void mp_body(int k, void *v)
 {
     mp_ctx *o = v;
     if (det_failed(&o->st)) return;
-    char buf[DET_WORK_STACK]; det_work W;
-    if (det_work_init(&W, o->Mo, buf, sizeof buf)) { det_fail(&o->st, "out of memory"); return; }
+    char buf[DET_WORK_STACK]; tw_t W;
+    if (tw_init(&W, o->T, buf, sizeof buf)) { det_fail(&o->st, "out of memory"); return; }
     det_fixt *fx = NULL;
-    if (o->FX && o->Mo->start == 1) { fx = det_fixt_alloc(o->Mo->r); o->FX[k] = fx; }
-    cdouble th, ld;
+    if (o->FX && o->T->start == 1) { fx = det_fixt_alloc(o->T->r); o->FX[k] = fx; }
+    cdouble ld;
     cdouble t = o->t[o->idx ? o->idx[k] : k];
-    if (det_mgfparts(&W, o->c, t, &th, &ld, o->MU + (size_t) k * o->Mo->r, fx)) det_fail(&o->st, "the eigenvalues of the reciprocal roots did not converge at t = %g%+gi", creal(t), cimag(t));
+    if (tw_parts(&W, o->c, t, &ld, o->MU + (size_t) k * o->T->r, fx)) det_fail(&o->st, "the eigenvalues of the reciprocal roots did not converge at t = %g%+gi", creal(t), cimag(t));
     o->LD[k] = ld;
-    det_work_free(&W);
+    tw_free(&W);
 }
 static cdouble lr(cdouble ld, const cdouble *rts, int r, int rp)
 {
@@ -166,7 +192,7 @@ static inline cdouble cont2pi(cdouble Lr, double target) { return cadd(Lr, CPX(0
 
 /* rootpath_sparse: the roots R (r x K) and log P (K) at the nodes tt[0], tt[sub], ..., the fixed start's data at the nodes
  * (FX, K entries, may be NULL), minpos and maxneg */
-static int rootpath_sparse(const det_model *Mo, double c, const cdouble *tt, int nt, int sub, cdouble **Rout, cdouble **lPout, det_fixt ***FXout,
+static int rootpath_sparse(const det_tm *Mo, double c, const cdouble *tt, int nt, int sub, cdouble **Rout, cdouble **lPout, det_fixt ***FXout,
                            double *minpos, double *maxneg, char *err, size_t errlen)
 {
     perms_init();
@@ -206,7 +232,7 @@ static int rootpath_sparse(const det_model *Mo, double c, const cdouble *tt, int
         cdouble *spMU = NULL, *spLD = NULL; int *spJ = NULL, nsp = 0;
         int *flagged = malloc(K * sizeof(int)), nfl = 0;
         double mnp = 0, mxn = 0;
-        char wbuf[DET_WORK_STACK]; det_work W; det_work_init(&W, Mo, wbuf, sizeof wbuf);
+        char wbuf[DET_WORK_STACK]; tw_t W; tw_init(&W, Mo, wbuf, sizeof wbuf);
         cdouble nw[64], Rw[64], mu1[64];
         for (int pass = 0; pass < 2 && !rc; pass++) {
             int dry = pass == 0;
@@ -237,7 +263,7 @@ static int rootpath_sparse(const det_model *Mo, double c, const cdouble *tt, int
                             if (j < idx[k]) {
                                 int q = -1; for (int l = 0; l < nsp; l++) if (spJ[l] == j) { q = l; break; }
                                 if (q >= 0) { mu = spMU + (size_t) q * r; ldj = spLD[q]; }
-                                else { cdouble th; if (det_mgfparts(&W, c, tt[j], &th, &ldj, mu1, NULL)) { snprintf(err, errlen, "the eigenvalues of the reciprocal roots did not converge"); rc = 1; break; } mu = mu1; }
+                                else { if (tw_parts(&W, c, tt[j], &ldj, mu1, NULL)) { snprintf(err, errlen, "the eigenvalues of the reciprocal roots did not converge"); rc = 1; break; } mu = mu1; }
                             } else { mu = MU + (size_t) k * r; ldj = LD[k]; }
                             cdouble nn[64]; for (int i = 0; i < r; i++) nn[i] = cinv(mu[i]);
                             match(nn, Rw, r);
@@ -271,7 +297,7 @@ static int rootpath_sparse(const det_model *Mo, double c, const cdouble *tt, int
                 }
             }
         }
-        det_work_free(&W);
+        tw_free(&W);
         free(spJ); free(spMU); free(spLD); free(flagged);
         *minpos = mnp; *maxneg = Mo->rm == 0 ? -INFINITY : mxn;
     }
@@ -300,24 +326,24 @@ static int hyperbola(double ts, double phi, double hfac, double rmax, double tau
     return 0;
 }
 static const double PHI_FIXED[15] = {45, 50, 55, 60, 65, 70, 75, 78, 80, 82, 84, 85, 86, 87, 88};
-typedef struct { const det_model *Mo; double c, tau, a, b, h, g2; int k0, k1; volatile int bad; det_status st; } fp_ctx;
+typedef struct { const det_tm *Mo; double c, tau, a, b, h, g2; int k0, k1; volatile int bad; det_status st; } fp_ctx;
 static void fp_body(int k, void *v)
 {
     fp_ctx *o = v;
     if (o->bad || det_failed(&o->st)) return;
     k += o->k0;
-    char buf[DET_WORK_STACK]; det_work W;
-    if (det_work_init(&W, o->Mo, buf, sizeof buf)) { det_fail(&o->st, "out of memory"); return; }
+    char buf[DET_WORK_STACK]; tw_t W;
+    if (tw_init(&W, o->Mo, buf, sizeof buf)) { det_fail(&o->st, "out of memory"); return; }
     det_fixt *fx = o->Mo->start == 1 ? det_fixt_alloc(o->Mo->r) : NULL;
-    cdouble t = CPX(o->tau + o->a * (cosh(k * o->h) - 1), o->b * sinh(k * o->h)), dt = CPX(o->a * sinh(k * o->h), o->b * cosh(k * o->h)), th, ld, mu[64];
-    if (det_mgfparts(&W, o->c, t, &th, &ld, mu, fx)) det_fail(&o->st, "the eigenvalues of the reciprocal roots did not converge");
+    cdouble t = CPX(o->tau + o->a * (cosh(k * o->h) - 1), o->b * sinh(k * o->h)), dt = CPX(o->a * sinh(k * o->h), o->b * cosh(k * o->h)), ld, mu[64];
+    if (tw_parts(&W, o->c, t, &ld, mu, fx)) det_fail(&o->st, "the eigenvalues of the reciprocal roots did not converge");
     double val = exp(-creal(ld) / 2 + (fx ? o->g2 * creal(fx->cf) : 0.0)) * cabs(cdiv(dt, t)) * o->h / M_PI;
     if (!(isfinite(val) && val <= 2)) o->bad = 1;
-    free(fx); det_work_free(&W);
+    free(fx); tw_free(&W);
 }
 /* the asymptotic angle with a fixed start (and below c = -60): the smallest angle of PHI_FIXED at which every term
  * |M_V(t_k) e^{g0^2 cf(t_k)} t'(u_k)/t_k| h/pi is at most 2 (fixed_phi) */
-static int fixed_phi(const det_model *Mo, double c, double ts, double tau, double hfac, double rmax, double *phiout, char *err, size_t errlen)
+static int fixed_phi(const det_tm *Mo, double c, double ts, double tau, double hfac, double rmax, double *phiout, char *err, size_t errlen)
 {
     int nth = dfl_nworkers();
     for (int i = 0; i < 15; i++) {
@@ -348,10 +374,9 @@ static det_path *path_alloc(int K, int r)
 }
 /* linecpath: the vertical line t = tau + i w, Gauss-Legendre panels of nq nodes at cuts (NULL: the first of length
  * min(tau, 1)/4, doubling up to rmax), the roots continued on sub points between nodes */
-static det_path *linecpath(det_model_ref *mr, double c, double ts, double tau, double rmax, int nq, const double *cuts0, int ncuts0,
+static det_path *linecpath(det_model_ref *mr, const det_tm *Mo, double c, double ts, double tau, double rmax, int nq, const double *cuts0, int ncuts0,
                            char *err, size_t errlen)
 {
-    const det_model *Mo = &mr->Mo;
     const int sub = 8;
     const double *w, *z = det_gl(nq, &w);
     dvec cuts = {0};
@@ -391,14 +416,16 @@ static det_path *linecpath(det_model_ref *mr, double c, double ts, double tau, d
     return CP;
 }
 
-/* cpath: the hyperbola of the design with its start at c (phi NaN: pi/4, or fixed_phi with a fixed start and below c = -60,
- * steepened while the positive roots leave Re s > 0, the vertical line beyond 88 degrees) */
-static det_path *cpath(det_model_ref *mr, double c, double phi, double hfac, double tau0, char *err, size_t errlen)
+/* cpath: the hyperbola of the transform model at c (phi NaN: pi/4, or fixed_phi with a fixed start and below c = -60,
+ * steepened while a root group leaves its side of the imaginary axis, the vertical line beyond 88 degrees); mr the inner
+ * model of the path.  (The steepening for the negative group too: the volatility transform with an intercept and the
+ * standard deviation rising fivefold at a tenth of the sample has its negative root at Re s = +0.22 on the 45-degree
+ * hyperbola; the engine's designs keep that group left of the origin, where the condition changes nothing.) */
+static det_path *cpath(det_model_ref *mr, const det_tm *Mo, double c, double phi, double hfac, double tau0, char *err, size_t errlen)
 {
-    const det_model *Mo = &mr->Mo;
     const int sub = 8;
     double rmax = det_default_rmax(c), ts;
-    if (det_tstar(Mo, c, &ts, NULL, err, errlen)) return NULL;
+    if (tm_tstar(Mo, c, &ts, err, errlen)) return NULL;
     double tau = isnan(tau0) ? dmin(1.0, ts / 2) : tau0;
     int autophi = isnan(phi);
     if (autophi) {
@@ -415,14 +442,14 @@ static det_path *cpath(det_model_ref *mr, double c, double phi, double hfac, dou
         int rc = rootpath_sparse(Mo, c, tt, nt, sub, &R, &lP, &FX, &mnp, &mxn, err, errlen);
         free(tt); tt = NULL;
         if (rc) return NULL;
-        if (!(autophi && mnp <= 0 && phi < 88 * M_PI / 180)) break;
+        if (!(autophi && (mnp <= 0 || mxn >= 0) && phi < 88 * M_PI / 180)) break;
         free(R); free(lP); R = lP = NULL;
         if (FX) { for (int k = 0; k <= K; k++) free(FX[k]); free(FX); FX = NULL; }
         phi = dmin(phi + 5 * M_PI / 180, 88 * M_PI / 180);
     }
-    if (autophi && mnp <= 0) {
+    if (autophi && (mnp <= 0 || mxn >= 0)) {
         free(R); free(lP); if (FX) { for (int k = 0; k <= K; k++) free(FX[k]); free(FX); }
-        return linecpath(mr, c, ts, tau, rmax, 24, NULL, 0, err, errlen);
+        return linecpath(mr, Mo, c, ts, tau, rmax, 24, NULL, 0, err, errlen);
     }
     det_path *CP = path_alloc(K + 1, Mo->r);
     CP->c = c; CP->tau = tau; CP->tstar = ts; CP->a = a; CP->b = b; CP->h = h; CP->phi = phi;
@@ -480,7 +507,8 @@ det_path *det_path_prep(det_prep *P, int start, double g0, double c, char *err, 
     dfl_lock(&CLOCK_); prep_ref(P); dfl_unlock(&CLOCK_);
     det_model_ref *mr = mref_new(P, start, g0, err, errlen);
     if (!mr) { det_prep_release(P); return NULL; }
-    det_path *CP = cpath(mr, c, NAN, 1.0, NAN, err, errlen);
+    det_tm T = tm_of_model(&mr->Mo);
+    det_path *CP = cpath(mr, &T, c, NAN, 1.0, NAN, err, errlen);
     dfl_lock(&CLOCK_); mref_unref_locked(mr); dfl_unlock(&CLOCK_);
     return CP;
 }
@@ -493,13 +521,13 @@ det_path *det_v_path_prep(det_prep *P, int start, double g0, double c, char *err
     dfl_lock(&CLOCK_); prep_ref(P); dfl_unlock(&CLOCK_);
     det_model_ref *mr = mref_new(P, start, g0, err, errlen);
     if (!mr) { det_prep_release(P); return NULL; }
-    det_path *CP = cpath(mr, c, NAN, 1.0, NAN, err, errlen);
+    det_tm T = tm_of_model(&mr->Mo);
+    det_path *CP = cpath(mr, &T, c, NAN, 1.0, NAN, err, errlen);
     if (CP && isnan(CP->h)) {
-        const det_model *Mo = &mr->Mo;
         double ph = M_PI / 4; int rc = 0;
-        if (Mo->start == 1 || c < DET_FAR_CMIN) rc = fixed_phi(Mo, c, CP->tstar, CP->tau, 1.0, det_default_rmax(c), &ph, err, errlen);
+        if (T.start == 1 || c < DET_FAR_CMIN) rc = fixed_phi(&T, c, CP->tstar, CP->tau, 1.0, det_default_rmax(c), &ph, err, errlen);
         det_path_release(CP);
-        CP = rc ? NULL : cpath(mr, c, ph, 1.0, NAN, err, errlen);
+        CP = rc ? NULL : cpath(mr, &T, c, ph, 1.0, NAN, err, errlen);
     }
     dfl_lock(&CLOCK_); mref_unref_locked(mr); dfl_unlock(&CLOCK_);
     return CP;
@@ -524,7 +552,8 @@ det_path *det_path_cached(const dfl_design *D, double cbar, int start, double g0
     det_path *CP = NULL;
     int tp = isnan(phi) && hfac == 1 ? table_case(P, &mr->Mo, c) : -2;
     if (tp >= -1 && DET_USE_TABLES) CP = table_path(mr, tp);
-    if (!CP) CP = cpath(mr, c, phi, hfac, NAN, err, errlen);
+    det_tm T = tm_of_model(&mr->Mo);
+    if (!CP) CP = cpath(mr, &T, c, phi, hfac, NAN, err, errlen);
     dfl_lock(&CLOCK_);
     mref_unref_locked(mr);              /* (the path holds its own reference) */
     if (CP) {
@@ -612,14 +641,15 @@ static det_path *line_refine(det_path *CP, double xmax, int na, const double *am
     long nn = (long) (nc.n - 1) * nq;
     if (nn > 400000) { snprintf(err, errlen, "line_refine: the line would need %ld nodes for |x| <= %g at c = %g, more than 400000 (the oscillation of the outer integrand grows with x; at c = 10 the bulk needs about 60000)", nn, xmax, CP->c); dvec_free(&nc); return NULL; }
     if (nc.n > 4000) det_warn("line_refine: the line needs %d panels for |x| <= %g at c = %g (the oscillation of the outer integrand grows with x); this is slow", nc.n - 1, xmax, CP->c);
-    det_path *CPr = linecpath(CP->mref, CP->c, CP->tstar, tau, 1e5, nq, nc.v, nc.n, err, errlen);
+    det_tm T = tm_of_model(CP->Mo);
+    det_path *CPr = linecpath(CP->mref, &T, CP->c, CP->tstar, tau, 1e5, nq, nc.v, nc.n, err, errlen);
     dvec_free(&nc);
     return CPr;
 }
 static int cmp_dbl(const void *a, const void *b) { double x = *(const double *) a, y = *(const double *) b; return (x > y) - (x < y); }
 det_path *det_line_refined(det_path *CP, int nx, const double *xs, int na, const double *amax, int nc0, const double *c0s, char *err, size_t errlen)
 {
-    if (!isnan(CP->h)) { path_ref(CP); return CP; }
+    if (!isnan(CP->h) || CP->vm) { path_ref(CP); return CP; }      /* (the volatility paths are not refined, as in Julia) */
     double xm = 0; int any = 0;
     for (int i = 0; i < nx; i++) if (isfinite(xs[i])) { xm = any ? dmax(xm, fabs(xs[i])) : fabs(xs[i]); any = 1; }
     double xb = xm > 0 ? pow(2.0, ceil(log2(xm))) : 0.0;
@@ -662,9 +692,16 @@ det_path *det_line_refined(det_path *CP, int nx, const double *xs, int na, const
 det_path *det_variant_path(det_path *CP, int level, char *err, size_t errlen)
 {
     det_model_ref *mr = CP->mref;
-    if (CP->phi == M_PI / 2 && isnan(CP->h)) return linecpath(mr, CP->c, CP->tstar, CP->tau, 1e5, level == 2 ? 48 : 32, NULL, 0, err, errlen);
-    /* (the variant hyperbolas are cached as in Julia: cpath_cached with an angle and a step factor) */
+    if (CP->phi == M_PI / 2 && isnan(CP->h)) {
+        det_tm T = CP->vm ? tm_of_vol(CP->vm) : tm_of_model(CP->Mo);
+        det_path *L = linecpath(mr, &T, CP->c, CP->tstar, CP->tau, 1e5, level == 2 ? 48 : 32, NULL, 0, err, errlen);
+        if (L && CP->vm) { dfl_lock(&CLOCK_); L->vm = CP->vm; CP->vm->refs++; dfl_unlock(&CLOCK_); }
+        return L;
+    }
+    /* (the variant hyperbolas are cached as in Julia: cpath_cached with an angle and a step factor; vol_variant for the
+     * volatility model) */
     double phi = level == 1 ? dmin(CP->phi + 7.5 * M_PI / 180, 88 * M_PI / 180) : CP->phi, hfac = level == 1 ? 0.8 : level == 0 ? 0.8 : 0.5;
+    if (CP->vm) return det_vol_path(CP->vm, phi, hfac, err, errlen);
     const det_prep *P = CP->Mo->P;
     dfl_design D = {P->Kd, P->np, P->deg, P->br, P->C, P->loc, P->first};
     return det_path_cached(&D, P->cbar, CP->Mo->start, CP->Mo->g0, CP->c, phi, hfac, err, errlen);
@@ -676,10 +713,164 @@ det_path *det_v_path(const dfl_design *D, double cbar, int start, double g0, dou
     det_path *CP = det_path_cached(D, cbar, start, g0, c, phi, hfac, err, errlen);
     if (!CP) return NULL;
     if (!(isnan(phi) && isnan(CP->h))) return CP;
-    const det_model *Mo = CP->Mo;
+    det_tm T = tm_of_model(CP->Mo);
     double ph = M_PI / 4;
-    if (Mo->start == 1 || c < DET_FAR_CMIN) { if (fixed_phi(Mo, c, CP->tstar, CP->tau, hfac, det_default_rmax(c), &ph, err, errlen)) { det_path_release(CP); return NULL; } }
-    int st = Mo->start; double gg = Mo->g0;
+    if (T.start == 1 || c < DET_FAR_CMIN) { if (fixed_phi(&T, c, CP->tstar, CP->tau, hfac, det_default_rmax(c), &ph, err, errlen)) { det_path_release(CP); return NULL; } }
+    int st = T.start; double gg = T.g0;
     det_path_release(CP);
     return det_path_cached(D, cbar, st, gg, c, ph, hfac, err, errlen);
+}
+
+/* =====================================================================================================================
+ * The volatility and persistence regimes (src/DFDet_vol.jl): the model of a design with the regimes (vol_model), cached,
+ * and its outer contours (vol_path), cached
+ * ===================================================================================================================== */
+typedef struct { unsigned long long key; det_vmodel *VM; } vol_entry;
+static vol_entry VOLC[DET_CACHE_MAX]; static int NVOLC = 0;
+typedef struct { unsigned long long key; double phi, hfac; det_path *CP; } vpath_entry;
+static vpath_entry VPATHC[DET_CACHE_MAX]; static int NVPATHC = 0;
+static void vol_free_locked(det_vmodel *VM)
+{
+    if (VM->mr) mref_unref_locked(VM->mr);
+    free(VM->lam); free(VM->om); free(VM->cr); free(VM->L); free(VM->om2); free(VM->c); free(VM->bpos);
+    free(VM->A); free(VM->B); free(VM->Lx); free(VM->Dv);
+    free(VM);
+}
+static void vol_unref_locked(det_vmodel *VM) { if (VM && --VM->refs == 0) vol_free_locked(VM); }
+void det_vol_release(det_vmodel *VM) { if (!VM) return; dfl_lock(&CLOCK_); vol_unref_locked(VM); dfl_unlock(&CLOCK_); }
+static void vol_empty_locked(void)
+{
+    for (int i = 0; i < NVPATHC; i++) if (--VPATHC[i].CP->refs == 0) path_free_locked(VPATHC[i].CP);
+    for (int i = 0; i < NVOLC; i++) vol_unref_locked(VOLC[i].VM);
+    NVPATHC = NVOLC = 0;
+}
+/* the Taylor coefficients at s of the columns of C ((D + 1) x K) */
+static void taylor_cols(double *a, const double *C, int D, int K, double s)
+{
+    memcpy(a, C, (size_t) (D + 1) * K * sizeof(double));
+    for (int i = 0; i < K; i++) { double *ai = a + (size_t) i * (D + 1); for (int k = 0; k < D; k++) for (int j = D - 1; j >= k; j--) ai[j] += s * ai[j + 1]; }
+}
+static int dsort_cmp(const void *a, const void *b) { double x = *(const double *) a, y = *(const double *) b; return (x > y) - (x < y); }
+/* the design D with its pieces split at the points lam (a point within 1e-12 of a piece boundary is that boundary); a piece
+ * keeps the coefficients of the piece that contains its midpoint, shifted to its left end when they are local (vol_refine) */
+static int vol_refine(const dfl_design *D, int nl, const double *lam, dfl_design *out)
+{
+    double *br = malloc((D->np + 1 + nl) * sizeof(double));
+    if (!br) return 1;
+    int nb = D->np + 1;
+    memcpy(br, D->br, nb * sizeof(double));
+    for (int i = 0; i < nl; i++) {
+        int dup = 0;
+        for (int j = 0; j < nb; j++) if (fabs(br[j] - lam[i]) < 1e-12) { dup = 1; break; }
+        if (!dup) br[nb++] = lam[i];
+    }
+    qsort(br, nb, sizeof(double), dsort_cmp);
+    int np = nb - 1, d1 = D->deg + 1, K = D->K;
+    out->K = K; out->np = np; out->deg = D->deg; out->loc = D->loc; out->first = D->first; out->br = br;
+    out->C = malloc(((size_t) np * d1 * K + 1) * sizeof(double));
+    if (!out->C) { free(br); return 1; }
+    for (int j = 0; j < np; j++) {
+        double mid = (br[j] + br[j + 1]) / 2;
+        int jo = 0; while (jo < D->np - 1 && mid > D->br[jo + 1]) jo++;
+        const double *Cj = D->C + (size_t) jo * d1 * K;
+        if (D->loc) taylor_cols(out->C + (size_t) j * d1 * K, Cj, D->deg, K, br[j] - D->br[jo]);
+        else memcpy(out->C + (size_t) j * d1 * K, Cj, (size_t) d1 * K * sizeof(double));
+    }
+    return 0;
+}
+static unsigned long long vol_key(const dfl_design *D, int nreg, const double *lam, const double *om, const double *cr)
+{
+    unsigned long long h = det_design_key(D, NAN);
+#define MIX(p, n) do { const unsigned char *b_ = (const unsigned char *) (p); for (size_t i_ = 0; i_ < (n); i_++) { h ^= b_[i_]; h *= 1099511628211ULL; } } while (0)
+    MIX(&nreg, sizeof nreg);
+    MIX(lam, (nreg + 1) * sizeof(double)); MIX(om, nreg * sizeof(double)); MIX(cr, nreg * sizeof(double));
+#undef MIX
+    return h;
+}
+det_vmodel *det_vol_model(const dfl_design *D, const dfl_vol *v, const double *cr, char *err, size_t errlen)
+{
+    int nreg = v->nreg;
+    double *lam = malloc((nreg + 1) * sizeof(double)), *om = malloc(nreg * sizeof(double)), *crc = malloc(nreg * sizeof(double));
+    if (!lam || !om || !crc) { free(lam); free(om); free(crc); snprintf(err, errlen, "out of memory"); return NULL; }
+    lam[0] = 0; for (int i = 0; i < nreg - 1; i++) lam[i + 1] = v->breaks[i]; lam[nreg] = 1;
+    double s2 = 0;
+    for (int i = 0; i < nreg; i++) { om[i] = v->omega ? v->omega[i] : 1.0; s2 += om[i] * om[i] * (lam[i + 1] - lam[i]); }
+    double sc = sqrt(s2);
+    for (int i = 0; i < nreg; i++) { om[i] /= sc; crc[i] = cr[i]; }
+    unsigned long long key = vol_key(D, nreg, lam, om, crc);
+    dfl_lock(&CLOCK_);
+    for (int i = 0; i < NVOLC; i++) if (VOLC[i].key == key) { det_vmodel *VM = VOLC[i].VM; VM->refs++; dfl_unlock(&CLOCK_); free(lam); free(om); free(crc); return VM; }
+    dfl_unlock(&CLOCK_);
+    dfl_design Dr;
+    if (vol_refine(D, nreg + 1, lam, &Dr)) { free(lam); free(om); free(crc); snprintf(err, errlen, "out of memory"); return NULL; }
+    det_prep *P = det_prep_cached(&Dr, NAN, err, errlen);
+    free(Dr.br); free(Dr.C);
+    if (!P) { free(lam); free(om); free(crc); return NULL; }
+    det_model_ref *mr = mref_new(P, 0, 0.0, err, errlen);
+    if (!mr) { det_prep_release(P); free(lam); free(om); free(crc); return NULL; }
+    det_vmodel *VM = calloc(1, sizeof *VM);
+    VM->mr = mr; VM->P = P; VM->nreg = nreg; VM->lam = lam; VM->om = om; VM->cr = crc; VM->key = key; VM->refs = 1;
+    int np = P->np, N = P->N, r = P->r;
+    VM->np = np;
+    VM->L = malloc(np * sizeof(double)); VM->om2 = malloc(np * sizeof(double)); VM->c = malloc(np * sizeof(double));
+    VM->bpos = malloc(imax(np, 1) * sizeof(int));
+    for (int j = 0; j < np; j++) {
+        VM->L[j] = P->br[j + 1] - P->br[j];
+        double mid = (P->br[j] + P->br[j + 1]) / 2;
+        int i = 0; while (i < nreg - 1 && mid > lam[i + 1]) i++;
+        VM->om2[j] = om[i] * om[i]; VM->c[j] = crc[i];
+    }
+    int Ne = N;
+    for (int j = 0; j < np - 1; j++) {
+        double b = P->br[j + 1]; int ij = -1;
+        for (int i = 0; i < P->nj; i++) if (fabs(P->jl[i] - b) < 1e-12) { ij = i; break; }
+        if (ij >= 0) VM->bpos[j] = 1 + ij;
+        else if (VM->om2[j] != VM->om2[j + 1] || VM->c[j] != VM->c[j + 1]) VM->bpos[j] = Ne++;
+        else VM->bpos[j] = -1;
+    }
+    VM->Ne = Ne;
+    VM->A = calloc((size_t) Ne * Ne, sizeof(double)); VM->B = calloc((size_t) Ne * Ne, sizeof(double));
+    VM->Lx = calloc((size_t) Ne * imax(r, 1), sizeof(double)); VM->Dv = malloc(imax(r, 1) * sizeof(double));
+    for (int j = 0; j < N; j++) for (int i = 0; i < N; i++) { VM->A[i + (size_t) j * Ne] = P->A[i + (size_t) j * N]; VM->B[i + (size_t) j * Ne] = P->B[i + (size_t) j * N]; }
+    for (int k = 0; k < r; k++) { for (int i = 0; i < N; i++) VM->Lx[i + (size_t) k * Ne] = P->L[i + (size_t) k * N]; VM->Dv[k] = P->Dv[k]; }
+    VM->r = r; VM->rp = P->rp; VM->rm = P->rm;
+    VM->cmin = crc[0]; for (int i = 1; i < nreg; i++) VM->cmin = dmin(VM->cmin, crc[i]);
+    dfl_lock(&CLOCK_);
+    for (int i = 0; i < NVOLC; i++) if (VOLC[i].key == key) {
+        det_vmodel *Q = VOLC[i].VM; Q->refs++;
+        vol_unref_locked(VM);
+        dfl_unlock(&CLOCK_);
+        return Q;
+    }
+    if (NVOLC == DET_CACHE_MAX) { vol_unref_locked(VOLC[0].VM); memmove(VOLC, VOLC + 1, (NVOLC - 1) * sizeof(vol_entry)); NVOLC--; }
+    VOLC[NVOLC].key = key; VOLC[NVOLC].VM = VM; NVOLC++;
+    VM->refs++;      /* the cache's */
+    dfl_unlock(&CLOCK_);
+    return VM;
+}
+det_path *det_vol_path(det_vmodel *VM, double phi, double hfac, char *err, size_t errlen)
+{
+    double phik = isnan(phi) ? -1.0 : phi;
+    dfl_lock(&CLOCK_);
+    for (int i = 0; i < NVPATHC; i++) {
+        vpath_entry *e = &VPATHC[i];
+        if (e->key == VM->key && e->phi == phik && e->hfac == hfac) { e->CP->refs++; det_path *CP = e->CP; dfl_unlock(&CLOCK_); return CP; }
+    }
+    dfl_unlock(&CLOCK_);
+    det_tm T = tm_of_vol(VM);
+    det_path *CP = cpath(VM->mr, &T, VM->cmin, phi, hfac, NAN, err, errlen);
+    if (!CP) return NULL;
+    dfl_lock(&CLOCK_);
+    CP->vm = VM; VM->refs++;
+    int dup = -1;
+    for (int i = 0; i < NVPATHC; i++) { vpath_entry *e = &VPATHC[i]; if (e->key == VM->key && e->phi == phik && e->hfac == hfac) dup = i; }
+    if (dup >= 0) { if (--CP->refs == 0) path_free_locked(CP); CP = VPATHC[dup].CP; CP->refs++; }
+    else {
+        if (NVPATHC == DET_CACHE_MAX) { if (--VPATHC[0].CP->refs == 0) path_free_locked(VPATHC[0].CP); memmove(VPATHC, VPATHC + 1, (NVPATHC - 1) * sizeof(vpath_entry)); NVPATHC--; }
+        vpath_entry e = {VM->key, phik, hfac, CP};
+        VPATHC[NVPATHC++] = e;
+        CP->refs++;
+    }
+    dfl_unlock(&CLOCK_);
+    return CP;
 }

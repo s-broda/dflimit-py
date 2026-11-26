@@ -7,6 +7,7 @@ import numpy as np
 from . import _engine
 from ._route import (AUTO, CLASSICAL, DESIGN_DOC, ENGINE_DOC, F_ICDF, brittle, classical_ok, engine_of, route_tuple,
                      route_x, spec_of, warn_lines)
+from ._ext import ext_active, ext_args
 from ._utils import (Result, cint, dfl_case, dfl_flag, dfl_imethod, dfl_method, dfl_num, dfl_posint, dfl_real, dfl_shape,
                      dfl_tol, f64, fill_doc, warn)
 
@@ -95,6 +96,17 @@ where the classical one does not apply (the README, "The general engine"). With 
 classical engine computes, as before. The general engine's warnings (where one evaluation may be inaccurate) are
 ``RuntimeWarning``s."""
 
+EXT_DOC = """\
+vol : VolPath, optional
+    Volatility and persistence regimes (`volpath`; ``c`` may then be a sequence of one value per regime), computed by
+    the general engine for the case or the design (``engine="classical"`` refuses it; ``method`` "auto" or "paths"):
+    see `dist_cdf`.
+rho : float, default 1
+    A normal component (1: none), the limit rho tau + sqrt(1 - rho^2) Z of the covariate-augmented t-ratio (`cadf_c0`)
+    and of the predictive regression (`predictive_c0`), computed by the general engine (``method`` "auto", "lines" or
+    "mixture"): see `dist_cdf`."""
+
+
 ERRORS_DOC = """\
 TypeError
     If an argument has the wrong type.
@@ -110,8 +122,8 @@ REFERENCES_DOC = """\
 
 
 @fill_doc(params=PARAMS_DOC, errors=ERRORS_DOC, cases=CASES_DOC, methods=METHODS_DOC, references=REFERENCES_DOC,
-          engine=ENGINE_DOC, design=DESIGN_DOC, route=ROUTE_DOC)
-def ltratio_cdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engine="auto", start=None, gls=None):
+          engine=ENGINE_DOC, design=DESIGN_DOC, route=ROUTE_DOC, ext=EXT_DOC)
+def ltratio_cdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engine="auto", start=None, gls=None, vol=None, rho=1):
     """Distribution function of the limit of the Dickey-Fuller t-ratio.
 
     The limit, as the sample size grows, of the distribution function of the least squares t-ratio of the
@@ -129,6 +141,7 @@ def ltratio_cdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engin
     {params}
     {engine}
     {design}
+    {ext}
 
     Returns
     -------
@@ -180,12 +193,12 @@ def ltratio_cdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engin
     >>> ltratio_cdf(-2.86157, "DU", -5, engine="auto")    # the router's rule for a case string
     0.1165135620...
     """
-    return _dist(2, x, cas, c, c0, g0, method, verified, engine, start, gls)
+    return _dist(2, x, cas, c, c0, g0, method, verified, engine, start, gls, vol, rho)
 
 
 @fill_doc(params=PARAMS_DOC, errors=ERRORS_DOC, cases=CASES_DOC, methods=METHODS_DOC, references=REFERENCES_DOC,
-          engine=ENGINE_DOC, design=DESIGN_DOC, route=ROUTE_DOC)
-def ltratio_pdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engine="auto", start=None, gls=None):
+          engine=ENGINE_DOC, design=DESIGN_DOC, route=ROUTE_DOC, ext=EXT_DOC)
+def ltratio_pdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engine="auto", start=None, gls=None, vol=None, rho=1):
     """Density of the limit of the Dickey-Fuller t-ratio.
 
     The density of the limit tau = (U - c0 V)/sqrt(V) of `ltratio_cdf`, under phi = 1 + c/n, phi0 = 1 + c0/n.
@@ -197,6 +210,7 @@ def ltratio_pdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engin
     {params}
     {engine}
     {design}
+    {ext}
 
     Returns
     -------
@@ -239,7 +253,7 @@ def ltratio_pdf(x, cas, c=0, c0=0, g0=0, method="auto", verified=False, *, engin
     >>> ltratio_pdf(-3.5, trend(2), -5)      # a quadratic trend
     0.326334...
     """
-    return _dist(1, x, cas, c, c0, g0, method, verified, engine, start, gls)
+    return _dist(1, x, cas, c, c0, g0, method, verified, engine, start, gls, vol, rho)
 
 
 def _classical(S, e, c, c0, me, ve):
@@ -248,9 +262,17 @@ def _classical(S, e, c, c0, me, ve):
     return e == CLASSICAL or (e == AUTO and (me != 0 or ve) and (S.named or classical_ok(S, c, c0, me)))
 
 
-def _dist(kind, x, cas, c, c0, g0, method, verified=False, engine="auto", start=None, gls=None):
+def _dist(kind, x, cas, c, c0, g0, method, verified=False, engine="auto", start=None, gls=None, vol=None, rho=1):
     S = spec_of(cas, g0, start, gls)
     e = engine_of(S, engine)
+    cx, rx, vb = ext_args(vol, rho, c)
+    if ext_active(rx, vb):
+        # (the extensions of the limit: the general engine for the case or the design, through the router)
+        a = dfl_real(x, "x")
+        out, wd, wc = _engine.route(R_CDF if kind == 2 else R_PDF, route_tuple(S), a.tobytes(), cx, dfl_num(c0, "c0"), e,
+                                    ext_method(method), dfl_flag(verified, "verified"), 0.0, rx, vb)
+        warn_lines(wc, wd)
+        return dfl_shape(f64(out), a)
     me = dfl_method(method)
     ve = dfl_flag(verified, "verified")
     if _classical(S, e, c, c0, me, ve):
@@ -280,9 +302,9 @@ def _dist_classical(kind, x, cas, c, c0, g0, me, ve):
 
 
 @fill_doc(params=PARAMS_DOC, errors=ERRORS_DOC, cases=CASES_DOC, references=REFERENCES_DOC, engine=ENGINE_DOC,
-          design=DESIGN_DOC, route=ROUTE_DOC)
+          design=DESIGN_DOC, route=ROUTE_DOC, ext=EXT_DOC)
 def ltratio_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-10, info=False, verified=False, *, engine="auto", start=None,
-                 gls=None):
+                 gls=None, vol=None, rho=1):
     """Quantiles of the limit of the Dickey-Fuller t-ratio.
 
     The p-quantiles of the limit of `ltratio_cdf`, by Newton's method with `ltratio_pdf` as the derivative,
@@ -301,6 +323,7 @@ def ltratio_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-10, info=False, 
         each of the shape of ``p`` (by the router: ``q`` and ``F`` only).
     {engine}
     {design}
+    {ext}
 
     Returns
     -------
@@ -345,6 +368,20 @@ def ltratio_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-10, info=False, 
     """
     S = spec_of(cas, g0, start, gls)
     e = engine_of(S, engine)
+    cx, rx, vb = ext_args(vol, rho, c)
+    if ext_active(rx, vb):
+        # (the extensions of the limit: the general engine's quantiles, started at the normal approximation from the
+        # moments, through the router)
+        a = dfl_real(p, "p")
+        if not np.all((a > 0) & (a < 1)):
+            raise ValueError("p must lie in (0, 1)")
+        q, wd, wc = _engine.route(R_ICDF, route_tuple(S), a.tobytes(), cx, dfl_num(c0, "c0"), e, ext_method(method), 0,
+                                  dfl_num(tol, "tol"), rx, vb)
+        warn_lines(wc, wd)
+        q = dfl_shape(f64(q), a)
+        if not info:
+            return q
+        return Result(q=q, F=_dist(2, q, cas, c, c0, g0, method, False, engine, start, gls, vol, rho))
     me = dfl_method(method)
     ve = dfl_flag(verified, "verified")
     if _classical(S, e, c, c0, me, ve):
@@ -477,3 +514,20 @@ def ltratio_mom(p, cas, c=0, c0=0, g0=0, info=False, *, engine="auto", start=Non
     m, eo = route_x(1, route_tuple(S), np.array([float(pm)]), dfl_num(c, "c"), dfl_num(c0, "c0"), e, im, dfl_tol(tol), ve)
     r = Result(m=m.copy(), err=eo.copy())
     return r if info else r["m"]
+
+
+_EXT_METHODS = {"auto": 0, "single": 1, "line": 1, "double": 2, "conditional": 2, "contour": 3, "paths": 4, "lines": 8,
+                "mixture": 9}
+_EXT_METHOD_MSG = 'with vol or rho the method must be "auto", "paths" (vol), "lines" or "mixture" (rho)'
+
+
+def ext_method(method):
+    """The router's method with the extensions of the limit: 0 "auto", 1 "single" ("line"), 2 "double"
+    ("conditional"), 3 "contour", 4 "paths", 8 "lines", 9 "mixture" (the general engine refuses the classical
+    engine's representations)."""
+    if not isinstance(method, str):
+        raise TypeError(_EXT_METHOD_MSG)
+    try:
+        return _EXT_METHODS[method.lower()]
+    except KeyError:
+        raise ValueError(_EXT_METHOD_MSG) from None

@@ -328,6 +328,64 @@ static int gen_icdf(int n, const double *p, const spec_t *R, double c, double c0
     det_warn_hold(0);
     return 0;
 }
+/* ---- the extensions of the limit through the router (ext_dist, ext_icdf of merged.jl) ---- */
+static int ext_method(int method)
+{
+    switch (method) {
+    case 0: return DFL_DET_AUTO;
+    case 1: return DFL_DET_LINE;
+    case DFL_METHOD_PATHS: return DFL_DET_PATHS;
+    case DFL_METHOD_LINES: return DFL_DET_LINES;
+    case DFL_METHOD_MIXTURE: return DFL_DET_MIXTURE;
+    default: return -1;          /* (a representation of the classical engine: the general engine's checks refuse it) */
+    }
+}
+#define EXT_CLASSICAL_MSG "engine classical: the extensions of the limit (vol and rho) are computed by the general engine"
+int dfl_engine_dist_ext(int kind, int n, const double *x, const dfl_spec *S, double c, double c0, int engine, int method, int verified,
+                        const dfl_vol *vol, double rho, double *out, char *err, size_t errlen)
+{
+    if (!vol && rho == 1) return dfl_engine_dist(kind, n, x, S, c, c0, engine, method, verified, out, err, errlen);
+    warn_entry();
+    if (engine < 0 || engine > 2) { snprintf(err, errlen, "engine must be auto (0), classical (1) or general (2)"); return 1; }
+    if (engine == DFL_ENGINE_CLASSICAL) { snprintf(err, errlen, EXT_CLASSICAL_MSG); return 1; }
+    spec_t R; if (resolve(S, &R, err, errlen)) return 1;
+    dfl_det_opts o; det_opts_of(&R, c0, verified, &o); o.method = ext_method(method); o.vol = vol; o.rho = rho;
+    int rc = dfl_det_dist(kind, R.D, n, x, c, &o, out, err, errlen);
+    if (!rc && kind == 1) for (int k = 0; k < n; k++) if (out[k] < 0) out[k] = 0;
+    spec_free(&R);
+    return rc;
+}
+int dfl_engine_icdf_ext(int n, const double *p, const dfl_spec *S, double c, double c0, int engine, int method, double tol,
+                        const dfl_vol *vol, double rho, double *q, char *err, size_t errlen)
+{
+    if (!vol && rho == 1) return dfl_engine_icdf(n, p, S, c, c0, engine, method, tol, q, err, errlen);
+    warn_entry();
+    if (engine < 0 || engine > 2) { snprintf(err, errlen, "engine must be auto (0), classical (1) or general (2)"); return 1; }
+    if (engine == DFL_ENGINE_CLASSICAL) { snprintf(err, errlen, EXT_CLASSICAL_MSG); return 1; }
+    spec_t R; if (resolve(S, &R, err, errlen)) return 1;
+    if (!(tol > 0)) tol = 1e-10;
+    double cm = c;
+    if (vol && vol->c && vol->nreg > 0) { cm = 0; for (int i = 0; i < vol->nreg; i++) cm += vol->c[i]; cm /= vol->nreg; }
+    double m[2], mu = -2.0 * rho, sd = 1.0; int have = 0;
+    if (isfinite(cm) && isfinite(rho) && fabs(rho) <= 1 && isnan(R.gls) && !R.D->first) {
+        char e2[512];
+        int cv = R.model != 0 && R.model != 4 && classical_valid(&R, cm, c0, 0);
+        if (cv) have = dfl_mom_start(2, R.model, R.stat, cm, c0, R.start == 1 ? R.g0 : 0.0, m);
+        if (!have) { dfl_det_opts om; det_opts_of(&R, c0, 0, &om); have = dfl_det_moments(R.D, cm, 2, &om, m, NULL, e2, sizeof e2) == 0; }
+        det_warn_clear();
+    }
+    if (have) { mu = rho * m[0]; sd = sqrt(dmax(rho * rho * (m[1] - m[0] * m[0]) + 1 - rho * rho, 1e-6)); }
+    dfl_det_opts o; det_opts_of(&R, c0, 0, &o); o.method = ext_method(method); o.vol = vol; o.rho = rho;
+    int rc = 0;
+    det_warn_hold(1);
+    for (int k = 0; k < n && !rc; k++) {
+        if (!(p[k] > 0 && p[k] < 1)) { snprintf(err, errlen, "p must lie in (0, 1)"); rc = 1; break; }
+        rc = dfl_det_quantile(R.D, 1, &p[k], c, mu + sd * sqrt(2) * erfinv_(2 * p[k] - 1), tol, &o, &q[k], err, errlen);
+    }
+    det_warn_hold(0);
+    spec_free(&R);
+    return rc;
+}
 /* F and f at a point x of the Newton steps of the classical search in one evaluation (route_dist2 of merged.jl): where the
  * rule gives the point to the general engine (method 0), its paths return both from one pass (dfl_det_dist_both), the
  * values of dfl_engine_dist bit for bit; 0 elsewhere (the classical engine, the tails that go back to it, other methods),

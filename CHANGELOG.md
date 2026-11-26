@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- The extensions of the limit (the C engine of dflimit-matlab, branch extensions): volatility and persistence regimes
+  (`volpath`, `VolPath` and the keyword `vol` of `dist_cdf`, `dist_pdf`, `dist_quantile`, `ltratio_cdf`, `ltratio_pdf`,
+  `ltratio_icdf`, with `c` a sequence of one value per regime), a normal component (the keyword `rho` of the same
+  functions: the covariate-augmented t-ratio and the predictive regression, `cadf_c0`, `predictive_c0`;
+  `method="lines"` or `"mixture"`), and the first seasonal t-ratio of Hylleberg, Engle, Granger and Yoo (`hegy_t3_cdf`,
+  `hegy_t3_pdf`, `hegy_t3_quantile`). Calls without them are unchanged. The general engine's outer contour is steepened
+  while either group of roots leaves its side of the imaginary axis (the engine's designs are not affected). Tests
+  against the reference values of the Julia engine (`tests/ref/ext_ref.txt`).
 - The C engine of dflimit-matlab, branch engine-rules: the choice of engine (`engine="auto"`) re-derived after the
   thinner rules of one evaluation from interleaved timings of the two C engines (a cell moved where the other engine was
   at least 1.5 times faster): the general engine also with a zero start and c0 > 0 at c = -100 and in case DT up to

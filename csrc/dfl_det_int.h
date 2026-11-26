@@ -196,10 +196,59 @@ int det_tstar(const det_model *Mo, double c, double *ts, int *mult, char *err, s
  * of N x N, Sc of N0 x N0 complex entries and piv of N ints are the caller's work space; W->M is overwritten */
 cdouble det_detlog_piv(det_work *W, double c, cdouble s, cdouble t, cdouble th, cdouble *K, cdouble *Sl, cdouble *Sc, int *piv);
 
-/* the two largest eigenvalues of the Nystrom estimates (eigtop, eigtop_q) */
+/* the two largest eigenvalues of the Nystrom estimates (eigtop, eigtop_q; det_eigtop_k with the covariance kernel
+ * kern(r, u, ctx) in place of the Ornstein-Uhlenbeck one) */
 int det_eigtop(const det_prep *P, double c, int m, int stat, double *l1, double *l2);
+int det_eigtop_k(const det_prep *P, int m, double (*kern)(double r, double u, const void *ctx), const void *ctx, double *l1, double *l2);
 int det_eigtop_q(const det_prep *P, double c, int m, double *l1, double *l2);
 double det_e0r(double z);
+
+/* ---- the volatility and persistence regimes (src/DFDet_vol.jl): the model (dfl_det_path.c) and its transform
+ * (dfl_det_mgf.c) ----
+ * The design refined at the regime boundaries (its prepared design P and zero-start model, the inner model of the paths, in
+ * mr), np pieces of lengths L with omega^2 and c on each, the vector ell = (J(1), J at the jumps of d, z = int g J, J at the
+ * regime boundaries that are not jumps of d) of dimension Ne, bpos[j] (j < np - 1) the position in ell of J at the boundary
+ * between pieces j and j + 1 (-1: not in ell), the padded matrices A, B (Ne x Ne) and Lx (Ne x r) of the design and the
+ * eigenvalues Dv.  The path: nreg regimes, lam (nreg + 1) the boundaries, om the scaled standard deviations, cr the c. */
+struct det_model_ref;
+typedef struct det_vmodel {
+    struct det_model_ref *mr;
+    const det_prep *P;
+    int nreg; double *lam, *om, *cr;
+    int np; double *L, *om2, *c;
+    int Ne; int *bpos;
+    double *A, *B, *Lx, *Dv;
+    int r, rp, rm;
+    double cmin;
+    unsigned long long key;
+    int refs;
+} det_vmodel;
+/* the work space of the volatility transform at one t (VolWork) */
+typedef struct {
+    const det_vmodel *VM;
+    int nq; const double *zq, *wq;
+    cdouble *e, *F, *Rb, *Ib, *S, *M, *th, *v, *gam, *X, *Hm, *v1;
+    double *a;
+    int *piv;
+    void *heap;
+} det_vwork;
+int det_vwork_init(det_vwork *W, const det_vmodel *VM, void *buf, size_t bytes);
+void det_vwork_free(det_vwork *W);
+/* the transform at t (mgfparts of a VolModel): log D_V(t) = sum_j (c_j + theta_j) L_j + log det{I - 2 (t B + Gamma) Sigma}
+ * and the r reciprocal roots mu; 1 if the eigenvalue routine fails */
+int det_vol_parts(det_vwork *W, cdouble t, cdouble *ld, cdouble *mu);
+/* D(s, t) = exp{sum_j (c_j + theta_j) L_j} det{I - 2 (s A + t B + Gamma) Sigma} (vol_dval) */
+cdouble det_vol_dval(const det_vmodel *VM, cdouble s, cdouble t);
+/* t_* of the volatility model (vol_tstar) */
+int det_vol_tstar(const det_vmodel *VM, double *ts, int *mult, char *err, size_t errlen);
+/* the cached model of the design D (least squares, the one-step regression) with the regimes of v at the c of the regimes
+ * (cr, nreg values); a reference (det_vol_release) */
+det_vmodel *det_vol_model(const dfl_design *D, const dfl_vol *v, const double *cr, char *err, size_t errlen);
+void det_vol_release(det_vmodel *VM);
+
+/* a transform model of the outer contour (TransformModel of DFDet.jl): the engine's model Mo (vm NULL) or the volatility
+ * model vm; r, rp, rm, start, g0 the fields the contour reads */
+typedef struct { const det_model *Mo; const det_vmodel *vm; int r, rp, rm, start; double g0; } det_tm;
 
 /* ---- the outer paths (dfl_det_path.c) ---- */
 typedef struct det_path {
@@ -214,6 +263,7 @@ typedef struct det_path {
     double *cuts;
     int refs;                                 /* references (the cache and the users) */
     struct det_model_ref *mref;
+    det_vmodel *vm;                           /* the volatility model of the path (a reference), NULL for the engine's model */
 } det_path;
 typedef struct det_model_ref { det_prep *P; det_model Mo; int refs; } det_model_ref;
 /* the cached outer path of the design with its start at c (cpath_cached): phi NaN and hfac 1 for the default */
@@ -228,6 +278,8 @@ det_path *det_v_path_prep(det_prep *P, int start, double g0, double c, char *err
  * reference) where nothing is refined */
 det_path *det_line_refined(det_path *CP, int nx, const double *xs, int na, const double *amax, int nc0, const double *c0s, char *err, size_t errlen);
 det_path *det_variant_path(det_path *CP, int level, char *err, size_t errlen);
+/* the cached outer contour of the volatility model (vol_path: phi NaN the default rule, hfac its step factor) */
+det_path *det_vol_path(det_vmodel *VM, double phi, double hfac, char *err, size_t errlen);
 det_path *det_v_path(const dfl_design *D, double cbar, int start, double g0, double c, double phi, double hfac, char *err, size_t errlen);
 double det_default_rmax(double c);
 /* the c below which the engine takes its rules far from the unit root (FAR_CMIN of DFDet.jl; until November 2026 c = -100):
@@ -256,6 +308,25 @@ int det_contour_eval(const det_path *CP, int nx, const double *xs, double c0, in
 int det_contour_eval_specs(const det_path *CP, int ne, const int *nt, const det_xspec *specs, const det_eval_opts *o,
                            double *F, double *f, double *eF, double *ef, char *err, size_t errlen);
 double det_vsum(const det_path *CP, double y, int cdf);
+
+/* ---- the extensions of the limit (dfl_det_api.c, dfl_det_ext.c, dfl_det_inner.c) ---- */
+/* the checks of the arguments with a volatility path (o->vol) and its model (*VM, a reference; NULL for one regime, which
+ * the engine itself computes at *c1) */
+int det_vol_args(const char *fn, const dfl_design *D, double c, const dfl_det_opts *o, det_vmodel **VM, double *c1, char *err, size_t errlen);
+/* the t-ratio with a normal component (cov_eval, cov_quantile): o->rho != 1, o->vol NULL */
+int det_cov_dist(int kind, const dfl_design *D, int n, const double *x, double c, const dfl_det_opts *o, double *out, char *err, size_t errlen);
+int det_cov_quantile(const dfl_design *D, int n, const double *p, double c, double x0, double tol, const dfl_det_opts *o, double *q, char *err, size_t errlen);
+/* the safeguarded Newton's method of the quantile searches (newton_safe): ff(x) -> (F, f) */
+typedef int (*det_ff_t)(double x, void *ctx, double *F, double *f, char *err, size_t errlen);
+int det_newton_safe(det_ff_t ff, void *ctx, double p, double x0, double step, double tol, double *xout, char *err, size_t errlen);
+/* the inversion on two lines with the normal component in the kernel (lines_both) on the outer contour CP of the design
+ * with its start (zero or stationary): F and f of rho tau_c0 + sqrt(1 - rho^2) Z, 0 < rho < 1, at the finite points x */
+int det_lines_both(const det_path *CP, int nx, const double *x, double rho, double c0, double *F, double *f, char *err, size_t errlen);
+/* the panels of [A, B] graded toward the points pos[i] with the smallest panels h[i] (graded_panels): *ab two ends per panel
+ * (malloc'd), the number of panels returned */
+int det_graded_panels(double A, double B, int nf, const double *pos, const double *h, double **ab);
+/* the first seasonal t-ratio by the sum of the residues (t3_residues) on the outer contour CP (zero start) */
+int det_t3_residues(const det_path *CP, int nx, const double *x, double c0, double *F, double *f, char *err, size_t errlen);
 
 /* ---- the devices of Bao and Kan for the general engine (dfl_det_kan.c; src/DFKan_det.jl) ----
  * The transform of a model with a zero or stationary start at c with the branch of the square root of its determinant from

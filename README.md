@@ -175,6 +175,34 @@ b <= 0.
 Points of one call share the paths of the inversion, so pass a whole vector in one call. The engine caches up to 64
 prepared designs, paths and refined lines; `empty_caches()` frees them.
 
+## The extensions of the limit
+
+Three extensions of the limit, ported from DFLimit.jl to the C engine, with the same names and arguments as in Julia, R
+and MATLAB:
+
+- **Volatility and persistence regimes**: `volpath(breaks, omega)` and the keyword `vol` of `dist_cdf`, `dist_pdf`,
+  `dist_quantile`, `ltratio_cdf`, `ltratio_pdf`, `ltratio_icdf`: the limit of the t-ratio when the process is
+  dJ = c(r) J dr + omega(r) dW with the standard deviation omega and, with `c` a sequence of one value per regime, the
+  local-to-unity parameter piecewise constant between known dates (zero start, least squares detrending, every `c` in
+  [-480, 0]; the inversion on paths of the volatility transform).
+- **A normal component**: the keyword `rho` of the same functions, the limit rho tau_c0 + sqrt(1 - rho^2) Z of the
+  covariate-augmented t-ratio of Hansen (1995) at `c0=cadf_c0(c, rho, R)` and of the t-ratio of the slope in a
+  predictive regression with a regressor local to unity at `c0=predictive_c0(c, rho, b)` (`method` `"auto"`, `"lines"`,
+  the inversion on two lines with the normal component in the kernel, or `"mixture"`, the normal average of the t-ratio's
+  distribution function).
+- **The first seasonal t-ratio** of Hylleberg, Engle, Granger and Yoo at a harmonic frequency (the t-ratio of pi_3 for
+  quarterly data), for any design: `hegy_t3_cdf`, `hegy_t3_pdf`, `hegy_t3_quantile`, by the sum of the residues at the
+  roots of the engine's determinant on its outer contour, with `c0` and `vol`.
+
+```python
+from dflimit import volpath, dist_cdf, dist_quantile, ltratio_cdf, predictive_c0, hegy_t3_quantile, trend
+V = volpath([0.3], [1, 3])                           # the standard deviation triples at 30% of the sample
+dist_cdf(trend(0), -2.86, 0, vol=V)
+dist_quantile(trend(1), 0.05, [-3, 0, -10], vol=volpath([0.2, 0.7], [2, 1, 0.5]))
+ltratio_cdf(1.645, "DU", 0, predictive_c0(0, -0.95), rho=-0.95)   # the predictive regression
+hegy_t3_quantile(trend(0), 0.05)                     # the 5% critical value with seasonal dummies
+```
+
 ## The devices of Bao and Kan
 
 The half-plane statistics of the six classical cases and the moments of the t-ratio are computed by default with the

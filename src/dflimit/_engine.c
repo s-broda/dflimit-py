@@ -291,19 +291,51 @@ static PyObject *design_out(const dfl_design *D)
                          D->K, D->deg, D->loc, D->first);
 }
 
+/* the volatility path of the extensions of the limit from the doubles of vb (nreg, breaks (nreg - 1), omega (nreg), c
+ * (nreg, or left out)), into thread-local buffers held until the next parse on the thread (the engine call that follows
+ * runs on it): *vol NULL without a path (nreg 0, or vb None) */
+#define PY_MAXREG 64
+static _Thread_local double VOLB[PY_MAXREG], VOLO[PY_MAXREG], VOLC[PY_MAXREG];
+static _Thread_local dfl_vol VOLP;
+static int vol_in(PyObject *vb, const dfl_vol **vol)
+{
+    *vol = NULL;
+    if (vb == NULL || vb == Py_None) return 0;
+    int m = 0; double *vc = NULL;
+    const double *v = in_doubles(vb, "the volatility path", &m, &vc);
+    if (v == NULL) return -1;
+    int rc = 0;
+    if (m > 0 && v[0] > 0) {
+        int nreg = (int) v[0], rest = m - 1 - (2 * nreg - 1);
+        if (nreg != v[0] || nreg > PY_MAXREG || !(rest == 0 || rest == nreg)) { PyErr_Format(PyExc_ValueError, "the volatility path: nreg (at most %d), the break dates, the standard deviations and the c of the regimes", PY_MAXREG); rc = -1; }
+        else {
+            const double *q = v + 1;
+            for (int i = 0; i < nreg - 1; i++) VOLB[i] = q[i];
+            for (int i = 0; i < nreg; i++) VOLO[i] = q[nreg - 1 + i];
+            for (int i = 0; rest && i < nreg; i++) VOLC[i] = q[2 * nreg - 1 + i];
+            VOLP.nreg = nreg; VOLP.breaks = VOLB; VOLP.omega = VOLO; VOLP.c = rest ? VOLC : NULL;
+            *vol = &VOLP;
+        }
+    }
+    PyMem_Free(vc);
+    return rc;
+}
 /* the options of the general engine: the tuple (c0, start, gamma0, gls, verified), (c0, start, gamma0, gls, verified,
  * method) or (c0, start, gamma0, gls, verified, method, rule), gls NaN for least squares, method 0 auto, 1 the line
- * integral with the explicit kernel, 2 the inversion on paths around the roots, rule the rule of one evaluation of the
- * paths (DFL_RULE_*: 0 auto, 1 present, 2 thin, 3 inner, 4 outer, 5 fine, 6 finestep) */
+ * integral with the explicit kernel, 2 the inversion on paths around the roots, 3 the inversion on two lines and 4 the
+ * normal average with rho, rule the rule of one evaluation of the paths (DFL_RULE_*: 0 auto, 1 present, 2 thin, 3 inner,
+ * 4 outer, 5 fine, 6 finestep), then the extensions of the limit: rho (1 none) and the volatility path (vol_in; None) */
 static int detopts_in(PyObject *t, dfl_det_opts *o)
 {
     int start, verified, method = DFL_DET_AUTO, rule = DFL_RULE_AUTO;
-    double c0, g0, gls;
+    double c0, g0, gls, rho = 1;
+    PyObject *vb = NULL;
     dfl_det_defaults(o);
-    if (!PyTuple_Check(t)) { PyErr_SetString(PyExc_TypeError, "the options must be a tuple (c0, start, gamma0, gls, verified[, method[, rule]])"); return -1; }
-    if (!PyArg_ParseTuple(t, "diddi|ii:opts", &c0, &start, &g0, &gls, &verified, &method, &rule)) return -1;
+    if (!PyTuple_Check(t)) { PyErr_SetString(PyExc_TypeError, "the options must be a tuple (c0, start, gamma0, gls, verified[, method[, rule[, rho[, vol]]]])"); return -1; }
+    if (!PyArg_ParseTuple(t, "diddi|iidO:opts", &c0, &start, &g0, &gls, &verified, &method, &rule, &rho, &vb)) return -1;
     o->c0 = c0; o->start = start; o->gamma0 = g0; o->gls = gls; o->verified = verified != 0; o->method = method; o->rule = rule;
-    return 0;
+    o->rho = rho;
+    return vol_in(vb, &o->vol);
 }
 
 /* a computation of the router: the tuple (design or None, model, start, g0, gls) */
@@ -521,7 +553,8 @@ enum {
     DET_CDF = 1, DET_PDF, DET_COEF_CDF, DET_COEF_PDF, DET_COEF_GP, DET_LIN_CDF, DET_LIN_PDF, DET_ADF_CDF, DET_ADF_PDF,
     DET_LPOW, DET_ENV, DET_PT_CDF, DET_PT_PDF, DET_PT_ENV, DET_LM_CDF, DET_MZA_CDF, DET_MSB_CDF,
     DET_Q = 30, DET_COEF_Q, DET_LIN_Q, DET_ADF_Q, DET_PT_Q, DET_LM_Q, DET_MZA_Q, DET_MSB_Q,
-    DET_PT_POW = 50, DET_LM_POW
+    DET_PT_POW = 50, DET_LM_POW,
+    DET_T3_CDF = 60, DET_T3_PDF, DET_T3_Q
 };
 /* one operation of the general engine on the points x: the engine call (0 or 1, the message in err); the scalar
  * functions of the engine (the quantiles of the linear form, ADFmax, the point-optimal statistic, the LM statistic,
@@ -548,6 +581,8 @@ static int det_run(int op, const dfl_design *D, int n, const double *x, double c
     case DET_COEF_Q: return dfl_det_coef_quantile(D, n, x, c, p0, p1, o, out, err, errlen);
     case DET_PT_POW: return dfl_det_pt_power(D, p0, c, p1, ipar(p2), p3, &out[0], &out[1], err, errlen);
     case DET_LM_POW: return dfl_det_lm_power(D, n, x, p0, &out[0], out + 1, err, errlen);
+    case DET_T3_CDF: case DET_T3_PDF: return dfl_hegy_t3(op == DET_T3_CDF ? 2 : 1, D, n, x, c, o, out, err, errlen);
+    case DET_T3_Q: return dfl_hegy_t3_quantile(D, n, x, c, p0, p1, o, out, err, errlen);
     default: break;
     }
     for (int k = 0; k < n && !rc; k++) {
@@ -631,7 +666,12 @@ static PyObject *py_route(PyObject *self, PyObject *args)
     spec_arg s;
     char err[ERRLEN] = "";
     warn_t w = {"", ""};
-    if (!PyArg_ParseTuple(args, "iOOddiiid:route", &op, &st, &xb, &c, &c0, &engine, &method, &verified, &tol)) return NULL;
+    double rho = 1;
+    PyObject *vb = NULL;
+    const dfl_vol *vol = NULL;
+    if (!PyArg_ParseTuple(args, "iOOddiiid|dO:route", &op, &st, &xb, &c, &c0, &engine, &method, &verified, &tol, &rho, &vb)) return NULL;
+    if (vol_in(vb, &vol)) return NULL;
+    int ext = vol != NULL || rho != 1;
     if (spec_in(st, &s)) return NULL;
     const double *x = in_doubles(xb, "x", &n, &xc);
     if (x == NULL) goto done;
@@ -642,8 +682,14 @@ static PyObject *py_route(PyObject *self, PyObject *args)
     }
     if ((out = scratch(nout, sizeof(double))) == NULL) goto done;
     switch (op) {
-    case R_CDF: case R_PDF: WARN_CALL(rc = dfl_engine_dist(op == R_CDF ? 2 : 1, n, x, &s.S, c, c0, engine, method, verified, out, err, sizeof err), &w); break;
-    case R_ICDF: WARN_CALL(rc = dfl_engine_icdf(n, x, &s.S, c, c0, engine, method, tol, out, err, sizeof err), &w); break;
+    case R_CDF: case R_PDF:
+        if (ext) WARN_CALL(rc = dfl_engine_dist_ext(op == R_CDF ? 2 : 1, n, x, &s.S, c, c0, engine, method, verified, vol, rho, out, err, sizeof err), &w);
+        else WARN_CALL(rc = dfl_engine_dist(op == R_CDF ? 2 : 1, n, x, &s.S, c, c0, engine, method, verified, out, err, sizeof err), &w);
+        break;
+    case R_ICDF:
+        if (ext) WARN_CALL(rc = dfl_engine_icdf_ext(n, x, &s.S, c, c0, engine, method, tol, vol, rho, out, err, sizeof err), &w);
+        else WARN_CALL(rc = dfl_engine_icdf(n, x, &s.S, c, c0, engine, method, tol, out, err, sizeof err), &w);
+        break;
     case R_MOM: WARN_CALL(rc = dfl_engine_mom(nout, &s.S, c, c0, engine, out, err, sizeof err), &w); break;
     case R_COEF: WARN_CALL(rc = dfl_engine_coef(n, x, &s.S, c, c0, engine, out, err, sizeof err), &w); break;
     case R_COEF_ICDF: WARN_CALL(rc = dfl_engine_coef_icdf(n, x, &s.S, c, c0, engine, tol, out, err, sizeof err), &w); break;
@@ -846,7 +892,7 @@ static PyMethodDef METHODS[] = {
     {"det", py_det, METH_VARARGS, "det(op, design, x, c, opts, p0, p1, p2, p3) -> (out, warning): the general engine"},
     {"det_moments", py_det_moments, METH_VARARGS, "det_moments(design, c, pmax, opts) -> (m, err, warning): dfl_det_moments"},
     {"det_empty", py_det_empty, METH_VARARGS, "det_empty() -> None: dfl_det_empty_caches"},
-    {"route", py_route, METH_VARARGS, "route(op, spec, x, c, c0, engine, method, verified, tol) -> (out, warning, warning): dfl_engine_*"},
+    {"route", py_route, METH_VARARGS, "route(op, spec, x, c, c0, engine, method, verified, tol[, rho, vol]) -> (out, warning, warning): dfl_engine_* (with rho or vol: dfl_engine_dist_ext, dfl_engine_icdf_ext)"},
     {"route_lin", py_route_lin, METH_VARARGS, "route_lin(b, a, model, c, cbar, engine) -> (out, warning, warning): dfl_engine_lincdf"},
     {"route_env", py_route_env, METH_VARARGS, "route_env(c, model, alpha, engine) -> (out, warning, warning): dfl_engine_envelope"},
     {"route_x", py_route_x, METH_VARARGS, "route_x(op, spec, x, c, c0, engine, imethod, tol, verified, p0, p1, p2) -> (out, errest, warning, warning): the devices of Bao and Kan through the router"},

@@ -475,6 +475,17 @@ void dfl_design_regmat(const dfl_design *D, int n, double *X);
 #define DFL_START_ZERO 0
 #define DFL_START_FIXED 1
 #define DFL_START_STAT 2
+/* Volatility and persistence regimes (volpath and the keyword vol of DFLimit.jl): nreg >= 1 regimes between the break
+ * dates breaks[0..nreg-2] (strictly increasing in (0, 1)); omega[0..nreg-1] the standard deviations of the innovations on
+ * the regimes (any positive scale: they are scaled so that the integral of omega^2 is one; NULL: all equal); c (NULL: the
+ * c of the call on every regime) or c[0..nreg-1] the local-to-unity parameter of each regime.  One regime with the c of
+ * the call is the engine itself. */
+typedef struct {
+    int nreg;
+    const double *breaks;
+    const double *omega;
+    const double *c;
+} dfl_vol;
 typedef struct {
     double c0;           /* the local null value: the t-ratio of phi = 1 + c0/n (0) */
     int start;           /* DFL_START_ZERO (J(0) = 0), DFL_START_FIXED (J(0) = gamma0), DFL_START_STAT (J(0) ~ N(0, -1/(2c)), c < 0) */
@@ -487,6 +498,10 @@ typedef struct {
     int method;          /* the t-ratio of dfl_det_dist, dfl_det_quantile: DFL_DET_AUTO (the default), DFL_DET_LINE, DFL_DET_PATHS */
     int rule;            /* the rule of one evaluation of the t-ratio's inversion on paths (DFL_RULE_AUTO, the default; below) */
     int n, ntail;        /* the Gauss-Legendre nodes per panel of the U-shapes and on the tails of their rays (<= 0: by the rule) */
+    /* the extensions of the limit (the t-ratio's dfl_det_dist and dfl_det_quantile; vol also dfl_hegy_t3*): */
+    const dfl_vol *vol;  /* volatility and persistence regimes (NULL: none, the default) */
+    double rho;          /* a normal component: the limit rho tau_c0 + sqrt(1 - rho^2) Z, Z standard normal and independent, rho in
+                          * [-1, 1] (1: the t-ratio itself, the default; 0: the standard normal law) */
 } dfl_det_opts;
 /* The rules of one evaluation of the t-ratio's inversion on paths (dfl_det_dist, dfl_det_quantile, and the paths that the
  * line integral leaves to them; PATH_RULES and path_region of DFDet.jl, November 2026): (hfac, n, ntail, and n, ntail with a
@@ -514,10 +529,14 @@ int dfl_det_path_region(int fixed, int rank1, double c, double c0);
  * the start or the options: no deterministic terms, continuous designs that do not vanish at the origin and whose span is
  * closed under differentiation, such as polynomial trends and an intercept with sines and cosines, the statistic that
  * detrends first for continuous designs that do not vanish at the origin; a zero or a stationary start; least squares
- * detrending); DFL_DET_PATHS the inversion on paths */
+ * detrending); DFL_DET_PATHS the inversion on paths.  With a volatility path (vol) DFL_DET_AUTO and DFL_DET_PATHS (the
+ * inversion on paths of the volatility transform); with rho != 1 DFL_DET_AUTO, DFL_DET_LINES (the inversion on two lines
+ * with the normal component in the kernel) and DFL_DET_MIXTURE (the normal average of the t-ratio's distribution function) */
 #define DFL_DET_AUTO 0
 #define DFL_DET_LINE 1
 #define DFL_DET_PATHS 2
+#define DFL_DET_LINES 3
+#define DFL_DET_MIXTURE 4
 void dfl_det_defaults(dfl_det_opts *o);
 /* the largest c at which the general engine computes: DFL_DET_CMAX0 = 20 without deterministic terms (K = 0), with any
  * start; with them DFL_DET_CMAX = 16, and DFL_DET_CMAX_FIXED = 10 with a fixed start (dfl_det_cmax); above, every function
@@ -600,6 +619,31 @@ int dfl_det_mza_quantile(const dfl_design *D, double p, double c, double gls, do
 int dfl_det_msb_cdf(const dfl_design *D, int n, const double *x, double c, double gls, double *out, char *err, size_t errlen);
 int dfl_det_msb_quantile(const dfl_design *D, double p, double c, double gls, double *q, char *err, size_t errlen);
 
+/* ---- the extensions of the limit (dfl_det_ext.c; src/DFDet_vol.jl, src/DFDet_cov.jl, src/DFDet_seas.jl of DFLimit.jl) ----
+ * Volatility and persistence regimes (o->vol of dfl_det_dist, dfl_det_quantile): the limit (U - c0 V)/sqrt(V) of the
+ * process dJ = c(r) J dr + omega(r) dW with c and omega piecewise constant between known dates, by the inversion on paths
+ * of its transform (zero start, least squares detrending, the one-step regression, every c in [-480, 0]; method DFL_DET_AUTO
+ * or DFL_DET_PATHS; the rules of one evaluation and verified as without it).  A normal component (o->rho): the limit
+ * rho tau_c0 + sqrt(1 - rho^2) Z of the covariate-augmented t-ratio of Hansen (1995) at c0 = dfl_cadf_c0(c, rho, R) and
+ * of the t-ratio of the slope in a predictive regression with a regressor local to unity at c0 = dfl_predictive_c0(c,
+ * rho, b) (least squares detrending, the one-step regression; method DFL_DET_AUTO, DFL_DET_LINES or DFL_DET_MIXTURE;
+ * negative rho by the reflection, rho = 0 the normal law).  The two are not implemented together. */
+/* the checks of a volatility path (volpath): 0, or 1 with the message in err */
+int dfl_vol_check(const dfl_vol *v, char *err, size_t errlen);
+/* the local null value of the covariate-augmented t-ratio, c (1 - 1/(rho R)) (0 at c = 0; R NaN: |rho|), and of the
+ * predictive regression, c - b/rho (rho in [-1, 1] and not 0) */
+int dfl_cadf_c0(double c, double rho, double R, double *c0, char *err, size_t errlen);
+int dfl_predictive_c0(double c, double rho, double b, double *c0, char *err, size_t errlen);
+/* the first t-ratio of the regression of Hylleberg, Engle, Granger and Yoo at a harmonic frequency (hegy_t3_cdf,
+ * hegy_t3_pdf, hegy_t3_quantile): t3 = (R - c0 V)/sqrt(V) of the complex Ornstein-Uhlenbeck process and its residual on the
+ * deterministic terms of the design D (any design of the engine; trend(-1) no seasonal terms, trend(0) seasonal dummies,
+ * trend(1) seasonal dummies and seasonal trends), distribution function (kind 2) or density (kind 1), by the sum of the
+ * residues at the roots of the engine's determinant along the outer contour; c <= 0 (with o->vol: the c of the regimes,
+ * c[] of the path or the c of the call), zero start; o supplies c0, vol, verified and vtol (NULL: the defaults).  The
+ * quantiles by Newton's method from x0 (NaN: -2) to tol (NaN or <= 0: 1e-10) */
+int dfl_hegy_t3(int kind, const dfl_design *D, int n, const double *x, double c, const dfl_det_opts *o, double *out, char *err, size_t errlen);
+int dfl_hegy_t3_quantile(const dfl_design *D, int n, const double *p, double c, double x0, double tol, const dfl_det_opts *o, double *q, char *err, size_t errlen);
+
 /* ---- one interface over the two engines (dfl_det_route.c; merged.jl of DFLimit.jl) ----
  * A computation names a classical case (D NULL: model 1 DK/SK, 2 DU/SU, 3 DT/ST, 4 DG, with start 0, 1 (g0 != 0) or 2) or a
  * design D (with start, g0 and gls: NaN for least squares, cbar for GLS detrending).  engine: DFL_ENGINE_AUTO (the default
@@ -638,6 +682,18 @@ int dfl_autoengine(int f, int model, int stat, double g0, double gls, double c, 
 int dfl_engine_dist(int kind, int n, const double *x, const dfl_spec *S, double c, double c0, int engine, int method, int verified, double *out, char *err, size_t errlen);
 /* its p-quantiles to tol (1e-10) */
 int dfl_engine_icdf(int n, const double *p, const dfl_spec *S, double c, double c0, int engine, int method, double tol, double *q, char *err, size_t errlen);
+/* the same with the extensions of the limit (ltratio_cdf, ltratio_pdf, ltratio_icdf with vol and rho; ext_dist, ext_icdf of
+ * merged.jl): vol (NULL: none) a volatility path, rho a normal component (1: none); with either the general engine computes
+ * (dfl_det_dist, dfl_det_quantile with o->vol, o->rho) the case or design of S, engine classical is refused, and method is 0
+ * automatic, 1 (the line integral, refused with either), DFL_METHOD_PATHS, DFL_METHOD_LINES or DFL_METHOD_MIXTURE (the methods
+ * of rho); the quantiles start at the normal approximation from the moments of the t-ratio (at the mean of the c of the
+ * regimes; with rho those of rho tau + sqrt(1 - rho^2) Z).  Without vol and rho the functions above. */
+#define DFL_METHOD_LINES 8
+#define DFL_METHOD_MIXTURE 9
+int dfl_engine_dist_ext(int kind, int n, const double *x, const dfl_spec *S, double c, double c0, int engine, int method, int verified,
+                        const dfl_vol *vol, double rho, double *out, char *err, size_t errlen);
+int dfl_engine_icdf_ext(int n, const double *p, const dfl_spec *S, double c, double c0, int engine, int method, double tol,
+                        const dfl_vol *vol, double rho, double *q, char *err, size_t errlen);
 /* The single inversion of Bao and Kan and the moments from jets in the router (dfl_det_route.c; inv_* of merged.jl): the
  * coefficient statistic (dfl_engine_coef, dfl_engine_coef_icdf, dfl_engine_coef_pdf, dfl_engine_coef_mom), the linear form
  * (dfl_engine_lincdf), the power envelope (dfl_engine_envelope) and the moments of the t-ratio (dfl_engine_mom) take them by

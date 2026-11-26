@@ -8,7 +8,7 @@
 void dfl_det_defaults(dfl_det_opts *o)
 {
     o->c0 = 0; o->start = DFL_START_ZERO; o->gamma0 = 0; o->gls = NAN; o->verified = 0; o->vtol = 1e-9; o->phi = NAN; o->hfac = NAN;
-    o->method = DFL_DET_AUTO; o->rule = DFL_RULE_AUTO; o->n = 0; o->ntail = 0;
+    o->method = DFL_DET_AUTO; o->rule = DFL_RULE_AUTO; o->n = 0; o->ntail = 0; o->vol = NULL; o->rho = 1;
 }
 static const dfl_det_opts *opts_or_default(const dfl_det_opts *o, dfl_det_opts *d) { if (o) return o; dfl_det_defaults(d); return d; }
 /* the largest c at which the general engine computes (gen_cmax of DFDet.jl): DFL_DET_CMAX0 without deterministic terms,
@@ -180,10 +180,12 @@ int dfl_det_path_region(int fixed, int rank1, double c, double c0)
  * hyperbola is flatter than 70 degrees (at c = 0.5, g0 = 1, c0 = -20 the present step was off by 0.86, half of it by 0.31,
  * this one by 7e-12; on the steep hyperbolas of g0 = 2, 88 degrees, the present step is within 1e-12 and the thin inner rule
  * is not); on the vertical line the line itself.  *rl the rule taken (DET_RULE_GIVEN where hfac is given) */
-static det_path *rule_path(const dfl_design *D, double c, const dfl_det_opts *o, int verified, int *n, int *ntail, int *rl, char *err, size_t errlen)
+/* (VM: the paths of the volatility model, whose rule is that of its inner model, a zero start: vol_rule_path) */
+static det_path *rule_path_x(const dfl_design *D, det_vmodel *VM, double c, const dfl_det_opts *o, int verified, int *n, int *ntail, int *rl, char *err, size_t errlen)
 {
     if (o->rule < DFL_RULE_AUTO || o->rule > DFL_RULE_FINESTEP) { snprintf(err, errlen, "%s", DET_RULE_MSG); return NULL; }
-    int fixed = o->start == DFL_START_FIXED && o->gamma0 != 0, r = o->rule;
+    int fixed = !VM && o->start == DFL_START_FIXED && o->gamma0 != 0, r = o->rule;
+#define GETPATH(ph, hf) (VM ? det_vol_path(VM, (ph), (hf), err, errlen) : det_path_cached(D, o->gls, o->start, o->gamma0, c, (ph), (hf), err, errlen))
     if (verified) r = DFL_RULE_PRESENT;
     else if (r == DFL_RULE_AUTO) {
         int rank1 = 0;
@@ -203,14 +205,19 @@ static det_path *rule_path(const dfl_design *D, double c, const dfl_det_opts *o,
     *ntail = o->ntail > 0 ? o->ntail : fixed ? R->ntf : R->ntail;
     if (rl) *rl = r;
     if (isnan(phi) && (r == DFL_RULE_FINE || r == DFL_RULE_FINESTEP)) {
-        det_path *CP1 = det_path_cached(D, o->gls, o->start, o->gamma0, c, NAN, 1.0, err, errlen);
+        det_path *CP1 = GETPATH(NAN, 1.0);
         if (!CP1) return NULL;
         if (isnan(CP1->h)) return CP1;
         phi = CP1->phi;
-        if (r == DFL_RULE_FINESTEP) hf = CP1->phi < DET_FINESTEP_PHI ? dmin(0.5, 2.5 / (fabs(CP1->Mo->g0) * fabs(o->c0))) : 1.0;
+        if (r == DFL_RULE_FINESTEP && !VM) hf = CP1->phi < DET_FINESTEP_PHI ? dmin(0.5, 2.5 / (fabs(CP1->Mo->g0) * fabs(o->c0))) : 1.0;
         det_path_release(CP1);
     }
-    return det_path_cached(D, o->gls, o->start, o->gamma0, c, phi, hf, err, errlen);
+    return GETPATH(phi, hf);
+#undef GETPATH
+}
+static det_path *rule_path(const dfl_design *D, double c, const dfl_det_opts *o, int verified, int *n, int *ntail, int *rl, char *err, size_t errlen)
+{
+    return rule_path_x(D, NULL, c, o, verified, n, ntail, rl, err, errlen);
 }
 
 /* the values at the finite points xf by the inversion on paths (one evaluation with the inner nodes n, ntail, or the checked
@@ -307,11 +314,15 @@ static void far_above_warn(const char *fn, const dfl_design *D, double c, const 
     det_warn("%s: far above the unit root (c = %g > %g) the inversion on paths by one evaluation may be off by more than 1e-5 in the upper tail for a design beyond the classical cases or a fixed start with deterministic terms (Perron's model C at c = 7 by 1.5e-5 in F, the linear trend with a fixed start at c = 7 by 8.7e-5); verified = 1 checks it",
              fn, c, DET_FAR_ABOVE_CMIN);
 }
+static int ext_dist(int kind, const dfl_design *D, int n, const double *x, double c, const dfl_det_opts *o, double *out, char *err, size_t errlen);
+static int ext_quantile(const dfl_design *D, int n, const double *p, double c, double x0, double tol, const dfl_det_opts *o, double *q, char *err, size_t errlen);
 int dfl_det_dist(int kind, const dfl_design *D, int n, const double *x, double c, const dfl_det_opts *o0, double *out, char *err, size_t errlen)
 {
     dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
     det_warn_clear();
     if (kind != 1 && kind != 2) { snprintf(err, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
+    if (o->vol || o->rho != 1) return ext_dist(kind, D, n, x, c, o, out, err, errlen);
+    if (o->method == DFL_DET_LINES || o->method == DFL_DET_MIXTURE) { snprintf(err, errlen, "%s: method 'lines' and 'mixture' are the methods of a normal component (rho != 1); without it the method is 'auto', 'line' or 'paths'", kind == 2 ? "dist_cdf" : "dist_pdf"); return 1; }
     if (check_common(D, c, o, kind == 2 ? "the t-ratio (dist_cdf)" : "the t-ratio (dist_pdf)", err, errlen)) return 1;
     if (o->rule < DFL_RULE_AUTO || o->rule > DFL_RULE_FINESTEP) { snprintf(err, errlen, "%s", DET_RULE_MSG); return 1; }
     dfl_prov *pv;
@@ -444,6 +455,15 @@ int dfl_det_quantile(const dfl_design *D, int n, const double *p, double c, doub
 {
     dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
     det_warn_clear();
+    if (o->vol || o->rho != 1) {
+        /* (the order of dist_quantile of DFDet.jl: p, x0 and tol first) */
+        for (int k = 0; k < n; k++) if (!(p[k] > 0 && p[k] < 1)) { snprintf(err, errlen, "dist_quantile: p must lie in (0, 1)"); return 1; }
+        if (isnan(x0)) x0 = -2.0;
+        if (start_tol_check("dist_quantile", "x0", x0, tol, err, errlen)) return 1;
+        if (!(tol > 0)) tol = 1e-9;
+        return ext_quantile(D, n, p, c, x0, tol, o, q, err, errlen);
+    }
+    if (o->method == DFL_DET_LINES || o->method == DFL_DET_MIXTURE) { snprintf(err, errlen, "dist_quantile: method 'lines' and 'mixture' are the methods of a normal component (rho != 1); without it the method is 'auto', 'line' or 'paths'"); return 1; }
     if (check_common(D, c, o, "the quantiles of the t-ratio (dist_quantile)", err, errlen)) return 1;
     for (int k = 0; k < n; k++) if (!(p[k] > 0 && p[k] < 1)) { snprintf(err, errlen, "dist_quantile: p must lie in (0, 1)"); return 1; }
     if (isnan(x0)) x0 = -2.0;
@@ -477,6 +497,128 @@ int dfl_det_quantile(const dfl_design *D, int n, const double *p, double c, doub
     }
     free(todo);
     return rc;
+}
+
+/* ---------- the extensions of the limit: volatility and persistence regimes (vol_args, vol_eval, vol_quantile of
+ * DFDet_vol.jl), the dispatch to the normal component (ext_eval, ext_quantile of DFDet_cov.jl) ---------- */
+#define VOL_START_MSG "a volatility path (vol) is implemented for the zero start only (J(0) = 0); a fixed or a stationary start is not supported with it"
+#define VOL_GLS_MSG "a volatility path (vol) is implemented for least squares detrending only; GLS detrending (gls) is not supported with it"
+#define VOL_FIRST_MSG "a volatility path (vol) is implemented for the one-step regression only; the statistic that detrends first (detrend_first) is not supported with it"
+#define EXT_BOTH_MSG "rho and vol together are not implemented (the limit with a normal component under a volatility path is not derived)"
+/* the c below which the volatility extension refuses (the general engine's range below the unit root) */
+#define VOL_CMIN (-480.0)
+static void cr_str(char *buf, size_t len, int k, const double *cr, int vec)
+{
+    if (!vec) { snprintf(buf, len, "%g", cr[0]); return; }
+    size_t o = (size_t) snprintf(buf, len, "[");
+    for (int i = 0; i < k && o < len; i++) o += (size_t) snprintf(buf + o, len - o, "%s%g", i ? ", " : "", cr[i]);
+    if (o < len) snprintf(buf + o, len - o, "]");
+}
+/* the checks of the arguments of the volatility extension (vol_args) and its model (*VM, a reference); *VM NULL for one
+ * regime, which the engine itself computes at *c1 */
+int det_vol_args(const char *fn, const dfl_design *D, double c, const dfl_det_opts *o, det_vmodel **VM, double *c1, char *err, size_t errlen)
+{
+    const dfl_vol *v = o->vol;
+    *VM = NULL;
+    if (dfl_vol_check(v, err, errlen)) return 1;
+    int k = v->nreg;
+    double *cr = malloc(k * sizeof(double));
+    if (!cr) { snprintf(err, errlen, "out of memory"); return 1; }
+    for (int i = 0; i < k; i++) cr[i] = v->c ? v->c[i] : c;
+    char cs[200]; cr_str(cs, sizeof cs, k, cr, v->c != NULL);
+    int rc = 1, le = 1, ge = 1, fin = 1;
+    for (int i = 0; i < k; i++) { if (!isfinite(cr[i])) fin = 0; if (!(cr[i] <= 0)) le = 0; if (!(cr[i] >= VOL_CMIN)) ge = 0; }
+    if (!fin) snprintf(err, errlen, "%s: c must be finite", fn);
+    else if (!(o->start == DFL_START_ZERO || (o->start == DFL_START_FIXED && o->gamma0 == 0))) snprintf(err, errlen, "%s: " VOL_START_MSG, fn);
+    else if (!isnan(o->gls)) snprintf(err, errlen, "%s: " VOL_GLS_MSG, fn);
+    else if (D->first) snprintf(err, errlen, "%s: " VOL_FIRST_MSG, fn);
+    else if (!(o->method == DFL_DET_AUTO || o->method == DFL_DET_PATHS))
+        snprintf(err, errlen, "%s: with a volatility path (vol) the method is the inversion on paths: method must be 'auto' or 'paths' (the line integral is not implemented for the volatility transform)", fn);
+    else if (!le) snprintf(err, errlen, "%s: with a volatility path (vol) every c must be at most 0 (above the unit root the extension is not implemented); c = %s", fn, cs);
+    else if (!ge) snprintf(err, errlen, "%s: with a volatility path (vol) every c must be at least %g (the range of the general engine); c = %s", fn, VOL_CMIN, cs);
+    else rc = 0;
+    if (!rc) {
+        if (k == 1) *c1 = cr[0];
+        else if (!(*VM = det_vol_model(D, v, cr, err, errlen))) rc = 1;
+    }
+    free(cr);
+    return rc;
+}
+/* the values of dist_cdf (kind 2) or dist_pdf (kind 1) with a volatility path: one evaluation of the inversion on paths on the
+ * volatility model's outer contour by the rule of path_region of its inner model at the smallest c, or the checked
+ * computation (vol_eval) */
+static int vol_dist(int kind, const dfl_design *D, det_vmodel *VM, int n, const double *x, const dfl_det_opts *o, double *out, char *err, size_t errlen)
+{
+    if (!isfinite(o->c0)) { snprintf(err, errlen, "c0 must be a finite real scalar"); return 1; }
+    int nr = 0, ntr = 0;
+    det_path *CP = rule_path_x(D, VM, VM->cmin, o, o->verified, &nr, &ntr, NULL, err, errlen);
+    if (!CP) return 1;
+    double *xf = malloc((n + 1) * sizeof(double)); int *ix = malloc((n + 1) * sizeof(int));
+    int m = split_finite(n, x, kind == 2, out, xf, ix), rc = 0;
+    if (m > 0) {
+        double *v = malloc(m * sizeof(double));
+        rc = paths_values(kind, CP, m, xf, o, o->verified, nr, ntr, v, err, errlen);
+        if (!rc) for (int j = 0; j < m; j++) out[ix[j]] = v[j];
+        if (!rc && kind == 2) rc = range_check("dist_cdf", D, VM->cmin, o, "x", m, xf, v, err, errlen);
+        free(v);
+    }
+    free(xf); free(ix); det_path_release(CP);
+    return rc;
+}
+static int vol_quantile(const dfl_design *D, det_vmodel *VM, int n, const double *p, double x0, double tol, const dfl_det_opts *o, double *q, char *err, size_t errlen)
+{
+    if (!isfinite(o->c0)) { snprintf(err, errlen, "c0 must be a finite real scalar"); return 1; }
+    int nr = 0, ntr = 0;
+    det_path *CP = rule_path_x(D, VM, VM->cmin, o, 0, &nr, &ntr, NULL, err, errlen);
+    if (!CP) return 1;
+    q_ctx qc = {CP, o->c0, 2, 0, nr, ntr};
+    int rc = 0;
+    for (int k = 0; k < n && !rc; k++) rc = quantile_search(&qc, p[k], x0, tol, 30, 1.0, &q[k], err, errlen);
+    det_path_release(CP);
+    return rc;
+}
+static int ext_dist(int kind, const dfl_design *D, int n, const double *x, double c, const dfl_det_opts *o, double *out, char *err, size_t errlen)
+{
+    const char *fn = kind == 2 ? "dist_cdf" : "dist_pdf";
+    if (!D) { snprintf(err, errlen, "no design"); return 1; }
+    if (!o->vol) {
+        if (!isnan(o->phi) || !isnan(o->hfac) || o->rule != DFL_RULE_AUTO) { snprintf(err, errlen, "%s: with rho != 1 the options phi, hfac and rule of the inversion on paths do not apply", fn); return 1; }
+        int rc = det_cov_dist(kind, D, n, x, c, o, out, err, errlen);
+        if (!rc && kind == 2) {
+            double *xf = malloc((n + 1) * sizeof(double)), *vf = malloc((n + 1) * sizeof(double)); int m = 0;
+            for (int k = 0; k < n; k++) if (isfinite(x[k])) { xf[m] = x[k]; vf[m++] = out[k]; }
+            rc = range_check("dist_cdf", D, c, o, "x", m, xf, vf, err, errlen);
+            free(xf); free(vf);
+        }
+        return rc;
+    }
+    if (o->rho != 1) { snprintf(err, errlen, "%s: " EXT_BOTH_MSG, fn); return 1; }
+    det_vmodel *VM; double c1 = c;
+    if (det_vol_args(fn, D, c, o, &VM, &c1, err, errlen)) return 1;
+    if (!VM) { dfl_det_opts o1 = *o; o1.vol = NULL; return dfl_det_dist(kind, D, n, x, c1, &o1, out, err, errlen); }
+    int rc = vol_dist(kind, D, VM, n, x, o, out, err, errlen);
+    det_vol_release(VM);
+    return rc;
+}
+static int ext_quantile(const dfl_design *D, int n, const double *p, double c, double x0, double tol, const dfl_det_opts *o, double *q, char *err, size_t errlen)
+{
+    const char *fn = "dist_quantile";
+    if (!D) { snprintf(err, errlen, "no design"); return 1; }
+    if (!o->vol) {
+        if (!isnan(o->phi) || !isnan(o->hfac) || o->rule != DFL_RULE_AUTO) { snprintf(err, errlen, "%s: with rho != 1 the options phi, hfac and rule of the inversion on paths do not apply", fn); return 1; }
+        return det_cov_quantile(D, n, p, c, x0, tol, o, q, err, errlen);
+    }
+    if (o->rho != 1) { snprintf(err, errlen, "%s: " EXT_BOTH_MSG, fn); return 1; }
+    det_vmodel *VM; double c1 = c;
+    if (det_vol_args(fn, D, c, o, &VM, &c1, err, errlen)) return 1;
+    if (!VM) { dfl_det_opts o1 = *o; o1.vol = NULL; return dfl_det_quantile(D, n, p, c1, x0, tol, &o1, q, err, errlen); }
+    int rc = vol_quantile(D, VM, n, p, x0, tol, o, q, err, errlen);
+    det_vol_release(VM);
+    return rc;
+}
+int det_newton_safe(det_ff_t ff, void *ctx, double p, double x0, double step, double tol, double *xout, char *err, size_t errlen)
+{
+    return newton_safe((ff_t) ff, ctx, p, x0, step, tol, xout, err, errlen);
 }
 
 /* ---------- the coefficient statistic ---------- */

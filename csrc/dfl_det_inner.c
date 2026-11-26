@@ -1069,3 +1069,251 @@ double det_vsum(const det_path *CP, double y, int cdf)
     }
     return acc;
 }
+
+/* =====================================================================================================================
+ * A normal component (src/DFDet_cov.jl): the inversion on two lines with the normal component in the kernel.  For T = rho
+ * tau_c0 + sqrt(1 - rho^2) Z, 0 < rho < 1, with vp = (1 - rho^2)/(2 rho^2) and p = t + c0 s - vp s^2,
+ *     P(T > x) = (2 pi i)^{-2} int int M(s,t) (2/s) E_1(x s/rho, p) dt ds   (Re s = sigma > 0),
+ *     f_T(x)   = (2 pi i)^{-2} int int M(s,t) (2/rho) E_2(x s/rho, p) dt ds,   E_m(b, p) = int_0^inf v^m e^{-b v - p v^2} dv,
+ * the first -P(T <= x) for sigma < 0.  The outer integral on the engine's outer contour (its roots and log P), the inner one
+ * on the line Re s = sigma between the origin and the nearest root on the side given by the sign of x, its two ends turned
+ * into the right half-plane (lines_both).
+ * ===================================================================================================================== */
+/* h_m(z) = int_0^inf u^m exp(-u^2 - 2 z u) du, m = 0, 1, 2, for any complex z: ctr_h for Re z >= 0, the full-line Gaussian
+ * integral minus the reflected function for Re z < 0 (hfull) */
+static void hfull(cdouble z, cdouble *h)
+{
+    if (creal(z) >= 0) { ctr_h(z, h); return; }
+    cdouble hh[3]; ctr_h(cneg(z), hh);
+    cdouble g = cscale(sqrt(M_PI), cexp(cmul(z, z)));
+    h[0] = csub(g, hh[0]); h[1] = cadd(cneg(cmul(z, g)), hh[1]); h[2] = csub(cmul(caddr(cmul(z, z), 0.5), g), hh[2]);
+}
+/* the abscissa of the inner line on the side (+1: between the origin and the positive roots; -1: between the negative roots
+ * and the origin): the fraction frac of the way to the nearest root of the side, no farther than the point at which the
+ * real part of p at Im s = 0 has fallen to half the real part of t, and on the left no farther than -6 frac/a
+ * (lines_abscissa); 1 if a root group has left its half-plane */
+static int lines_abscissa(int side, const cdouble *rts, int r, int rp, double tr, double c0, double vp, double frac, double a, double *sig)
+{
+    double cap = vp > 0 ? (c0 + side * sqrt(c0 * c0 + 2 * vp * tr)) / (2 * vp) : (side * c0 < 0 ? -tr / (2 * c0) : side * INFINITY);
+    if (side == 1) {
+        double mp = INFINITY;
+        for (int k = 0; k < rp; k++) mp = dmin(mp, creal(rts[k]));
+        if (!(mp > 0)) return 1;
+        *sig = dmin(frac * mp, cap);
+        return 0;
+    }
+    double mm = -INFINITY;
+    for (int k = rp; k < r; k++) mm = dmax(mm, creal(rts[k]));
+    if (!(mm < 0)) return 1;
+    *sig = dmax(dmax(frac * mm, cap), -6 * frac / a);
+    return 0;
+}
+/* the nodes S and weights W of (1/2 pi i) int ds along the inner path (lines_rule!): the segment of Re s = sigma with
+ * |Im s| <= Y, graded toward the levels of the singular points (the roots, the origin, the two zeros of p), each with its
+ * horizontal distance from the line as the smallest panel, a panel split where it is longer than 4/a or where the phase
+ * x^2 s^2/(4 rho^2 p) of the kernel turns by more than 4 radians at x = xmax; from its ends the rays s = sigma +- i Y +
+ * r e^{+- i theta} into the right half-plane, panels doubling from the scale at their start up to 4/a, to r = 40/(a cos theta) */
+static double lines_phase(double ph, double sig, double u, cdouble t, double c0, double vp)
+{
+    cdouble s = CPX(sig, u), s2 = cmul(s, s);
+    return ph * cimag(cdiv(s2, csub(cadd(t, cscale(c0, s)), cscale(vp, s2))));
+}
+static void lines_rule(cvec *S, cvec *W, double sig, const cdouble *rts, int r, cdouble t, double c0, double vp, double a, double xmax, double rho, int n, double th)
+{
+    S->n = W->n = 0;
+    const double *w, *z = det_gl(n, &w);
+    foc_t foc[70]; int nf = 0;
+    foc[nf].pos = 0; foc[nf].h = fabs(sig); nf++;
+    double Y = 4 * fabs(sig), dm = 4 * fabs(sig);
+    for (int j = 0; j < r; j++) {
+        double d = fabs(creal(rts[j]) - sig);
+        foc[nf].pos = cimag(rts[j]); foc[nf].h = d; nf++; Y = dmax(Y, fabs(cimag(rts[j])) + 2 * d); dm = dmin(dm, 2 * d);
+    }
+    if (vp > 0) {
+        cdouble sq = csq(cadd(CPX(c0 * c0, 0), cscale(4 * vp, t)));
+        cdouble zs[2] = {cdivr(caddr(sq, c0), 2 * vp), cdivr(caddr(cneg(sq), c0), 2 * vp)};
+        for (int j = 0; j < 2; j++) {
+            double d = fabs(creal(zs[j]) - sig);
+            foc[nf].pos = cimag(zs[j]); foc[nf].h = d; nf++; Y = dmax(Y, fabs(cimag(zs[j])) + 2 * d); dm = dmin(dm, 2 * d);
+        }
+    }
+    double cap = 4 / a, ph = xmax * xmax / (4 * rho * rho);
+    panv pv = {0};
+    graded_panels(-Y, Y, foc, nf, &pv);
+    for (int k = 0; k < pv.n; k++) {
+        double a0 = pv.v[k].a, b0 = pv.v[k].b, mid = (a0 + b0) / 2;
+        double pa = lines_phase(ph, sig, a0, t, c0, vp), pm = lines_phase(ph, sig, mid, t, c0, vp), pb = lines_phase(ph, sig, b0, t, c0, vp);
+        double m1 = ceil((b0 - a0) / cap), m2 = ceil(dmax(fabs(pb - pm), fabs(pm - pa)) / 4), mf = dmax(m1, m2);
+        int m = !(mf >= 1) ? 1 : mf > 4096 ? 4096 : (int) mf;
+        for (int i = 0; i < m; i++) {
+            double a1 = a0 + (b0 - a0) * i / m, b1 = a0 + (b0 - a0) * (i + 1) / m;
+            for (int q = 0; q < n; q++) { cvec_push(S, CPX(sig, a1 + (b1 - a1) * z[q])); cvec_push(W, CPX((b1 - a1) * w[q] / (2 * M_PI), 0)); }
+        }
+    }
+    free(pv.v);
+    double rmax = 40 / (a * cos(th));
+    for (int dir = 1; dir >= -1; dir -= 2) {
+        cdouble e = cis_(dir * th), s0 = CPX(sig, dir * Y);
+        double r0 = 0, h = dmin(dmax(dm, 1e-3), cap);
+        while (r0 < rmax) {
+            for (int q = 0; q < n; q++) {
+                cvec_push(S, cadd(s0, cscale(r0 + h * z[q], e)));
+                /* dir e h w / (2 pi i) */
+                cdouble wq = cscale(dir * h * w[q] / (2 * M_PI), e);
+                cvec_push(W, CPX(cimag(wq), -creal(wq)));
+            }
+            r0 += h; h = dmin(2 * h, cap);
+        }
+    }
+}
+typedef struct {
+    const det_path *CP; const double *x; const int *ipos, *ineg; int npos, nneg, nx; double xmp, xmn, rho, c0, vp, a, frac, th; int n;
+    double *GF, *Gf; int k0; det_status st;
+} lines_ctx;
+static void lines_body(int j, void *v)
+{
+    lines_ctx *o = v;
+    if (det_failed(&o->st)) return;
+    int k = o->k0 + j;
+    const det_path *CP = o->CP;
+    int r = CP->r, rp = CP->Mo->rp;
+    cdouble t = CP->t[k], dt = CP->dt[k], lP = CP->lP[k];
+    double wk = CP->wt[k];
+    const cdouble *rts = CP->R + (size_t) k * r;
+    cvec S = {0}, W = {0};
+    cdouble *IF = malloc((o->nx + 1) * sizeof(cdouble)), *If = malloc((o->nx + 1) * sizeof(cdouble));
+    for (int side = 1; side >= -1; side -= 2) {
+        const int *idx = side == 1 ? o->ipos : o->ineg; int ni = side == 1 ? o->npos : o->nneg;
+        double xm = side == 1 ? o->xmp : o->xmn, sig;
+        if (ni == 0) continue;
+        if (lines_abscissa(side, rts, r, rp, creal(t), o->c0, o->vp, o->frac, o->a, &sig)) {
+            det_fail(&o->st, "the inversion on two lines: a root of the %s group has left the %s half-plane at a node of the outer contour", side == 1 ? "positive" : "negative", side == 1 ? "right" : "left");
+            break;
+        }
+        lines_rule(&S, &W, sig, rts, r, t, o->c0, o->vp, o->a, xm, o->rho, o->n, o->th);
+        for (int i = 0; i < ni; i++) IF[i] = If[i] = DZERO;
+        for (int q = 0; q < S.n; q++) {
+            cdouble s = S.v[q];
+            cdouble m = cmul(cexp(csub(det_logMtilde(rts, r, rp, lP, s), cscale(o->a, s))), W.v[q]);
+            cdouble p = csub(cadd(t, cscale(o->c0, s)), cmul(cscale(o->vp, s), s));
+            if (!(creal(p) > 0 || o->th < M_PI / 4)) { det_fail(&o->st, "the inversion on two lines: the real part of the kernel's second argument is not positive on the inner path (node %d)", k + 1); break; }
+            cdouble sp = csq(p), ip = cinv(p), ip32 = cdiv(ip, sp);
+            cdouble hz = cdiv(s, cscale(2 * o->rho, sp));
+            cdouble mF = cmul(cdiv(cscale(2, m), s), ip), mf = cmul(cdivr(cscale(2, m), o->rho), ip32);
+            for (int i = 0; i < ni; i++) {
+                cdouble h[3]; hfull(cscale(o->x[idx[i]], hz), h);
+                IF[i] = cadd(IF[i], cmul(mF, h[1])); If[i] = cadd(If[i], cmul(mf, h[2]));
+            }
+        }
+        if (det_failed(&o->st)) break;
+        for (int i = 0; i < ni; i++) {
+            o->GF[(size_t) k * o->nx + idx[i]] = wk * cimag(cmul(dt, IF[i]));
+            o->Gf[(size_t) k * o->nx + idx[i]] = wk * cimag(cmul(dt, If[i]));
+        }
+    }
+    cvec_free(&S); cvec_free(&W); free(IF); free(If);
+}
+int det_lines_both(const det_path *CP, int nx, const double *x, double rho, double c0, double *F, double *f, char *err, size_t errlen)
+{
+    const int n = 24; const double tol = 1e-17, frac = 0.5, th = 0.3 * M_PI;
+    int K1 = CP->K;
+    double vp = (1 - rho * rho) / (2 * rho * rho);
+    double *GF = calloc((size_t) K1 * nx + 1, sizeof(double)), *Gf = calloc((size_t) K1 * nx + 1, sizeof(double));
+    int *ipos = malloc((nx + 1) * sizeof(int)), *ineg = malloc((nx + 1) * sizeof(int)), np = 0, nn = 0;
+    if (!GF || !Gf || !ipos || !ineg) { free(GF); free(Gf); free(ipos); free(ineg); snprintf(err, errlen, "out of memory"); return 1; }
+    double xmp = 0, xmn = 0;
+    for (int i = 0; i < nx; i++) { if (x[i] >= 0) { ipos[np++] = i; xmp = dmax(xmp, fabs(x[i])); } else { ineg[nn++] = i; xmn = dmax(xmn, fabs(x[i])); } }
+    lines_ctx o = {CP, x, ipos, ineg, np, nn, nx, xmp, xmn, rho, c0, vp, CP->Mo->a, frac, th, n, GF, Gf, 0, {0, ""}};
+    int done = 0;
+    while (done < K1) {
+        int k1 = done, k2 = imin(done + 32, K1);
+        o.k0 = k1;
+        dfl_parfor(k2 - k1, lines_body, &o);
+        if (det_failed(&o.st)) { snprintf(err, errlen, "%s", o.st.msg); free(GF); free(Gf); free(ipos); free(ineg); return 1; }
+        done = k2;
+        double mx = 0;
+        for (size_t i = (size_t) k1 * nx; i < (size_t) k2 * nx; i++) mx = dmax(mx, dmax(fabs(GF[i]), fabs(Gf[i])));
+        if (mx < tol) break;
+    }
+    for (int i = 0; i < nx; i++) {
+        double sF = 0, sf = 0;
+        for (int k = 0; k < done; k++) { sF += GF[(size_t) k * nx + i]; sf += Gf[(size_t) k * nx + i]; }
+        F[i] = x[i] >= 0 ? 1 - sF : -sF;
+        f[i] = sf;
+    }
+    free(GF); free(Gf); free(ipos); free(ineg);
+    return 0;
+}
+/* graded_panels for the other files: the panels of [A, B] graded toward the points pos[i] with the smallest panels h[i]
+ * (*ab: 2 per panel, malloc'd; returns their number) */
+int det_graded_panels(double A, double B, int nf, const double *pos, const double *h, double **ab)
+{
+    foc_t *foc = malloc((nf + 1) * sizeof(foc_t));
+    for (int i = 0; i < nf; i++) { foc[i].pos = pos[i]; foc[i].h = h[i]; }
+    panv pv = {0};
+    graded_panels(A, B, foc, nf, &pv);
+    free(foc);
+    *ab = malloc((2 * pv.n + 1) * sizeof(double));
+    for (int k = 0; k < pv.n; k++) { (*ab)[2 * k] = pv.v[k].a; (*ab)[2 * k + 1] = pv.v[k].b; }
+    free(pv.v);
+    return pv.n;
+}
+
+/* =====================================================================================================================
+ * The first seasonal t-ratio (src/DFDet_seas.jl): t3 = (R - c0 V)/sqrt(V), (R, V) the sum of two independent copies of the
+ * lead paper's (U, V), so that e^{s} E exp(sR + tV) = P(t)^2 prod_+ (s_k - s)^{-1} prod_- (s - s_k)^{-1}, whose partial
+ * fractions sum_+ w_k/(s_k - s) + sum_- w_k/(s - s_k) make the inner integral of the inversion on paths a sum of residues:
+ *     f(x)      = (1/2 pi i) int sum_k w_k(t) K^f(s_k(t), t) dt,
+ *     P(t3 > x) = P{X(sqrt V) < 0} + (1/2 pi i) int sum_k w_k(t) K^F(s_k(t), t) dt,
+ * X(v) = c0 v^2 + x v + 1, K^f = int 2 v^2 e^{-t v^2 - s X(v)} dv, K^F = (1/s) int 2 v e^{-t v^2 - s X(v)} dv over the part
+ * of v > 0 on which X has the sign of the root's group; the first term of the second line a single inversion of M_V(t) =
+ * P^2 prod_+ (1/s_k) prod_- (-1/s_k) (t3_residues).  The nodes serially in chunks of 32 until a chunk whose terms all stay
+ * below 1e-17.
+ * ===================================================================================================================== */
+int det_t3_residues(const det_path *CP, int nx, const double *x, double c0, double *F, double *f, char *err, size_t errlen)
+{
+    const double tol = 1e-17;
+    int r = CP->r, rp = CP->Mo->rp, K1 = CP->K;
+    pcs_t *PL = malloc((nx + 1) * sizeof(pcs_t)), *MI = malloc((nx + 1) * sizeof(pcs_t));
+    cdouble *wk = malloc((r + 1) * sizeof(cdouble));
+    if (!PL || !MI || !wk) { free(PL); free(MI); free(wk); snprintf(err, errlen, "out of memory"); return 1; }
+    for (int i = 0; i < nx; i++) { xpieces(x[i], c0, 1.0, &PL[i], &MI[i]); F[i] = 0; f[i] = 0; }
+    int k = 0;
+    while (k < K1) {
+        double mx = 0; int kend = imin(k + 32, K1);
+        for (int kk = k; kk < kend; kk++) {
+            cdouble t = CP->t[kk], P2 = cexp(cscale(2, CP->lP[kk]));
+            const cdouble *R = CP->R + (size_t) kk * r;
+            cdouble MV = P2;
+            for (int j = 0; j < r; j++) MV = cdiv(MV, j < rp ? R[j] : cneg(R[j]));
+            for (int j = 0; j < r; j++) {
+                cdouble w = P2, sj = R[j];
+                for (int i = 0; i < r; i++) { if (i == j) continue; w = cdiv(w, i < rp ? csub(R[i], sj) : csub(sj, R[i])); }
+                wk[j] = w;
+            }
+            for (int ix = 0; ix < nx; ix++) {
+                cdouble gF = DZERO, gf = DZERO, M[3];
+                for (int j = 0; j < r; j++) {
+                    const pcs_t *pc = j < rp ? &PL[ix] : &MI[ix];
+                    if (pc->n == 0) continue;
+                    cdouble sj = R[j];
+                    ctr_moments(t, sj, c0, x[ix], 1.0, pc, M);
+                    gf = cadd(gf, cmul(cscale(2, wk[j]), M[2])); gF = cadd(gF, cdiv(cmul(cscale(2, wk[j]), M[1]), sj));
+                }
+                for (int i = 0; i < MI[ix].n; i++) {
+                    double a = MI[ix].a[i], b = MI[ix].b[i];
+                    cdouble ea = cexp(cscale(-a * a, t)), eb = isfinite(b) ? cexp(cscale(-b * b, t)) : DZERO;
+                    gF = cadd(gF, cdiv(cmul(MV, csub(ea, eb)), t));
+                }
+                double tF = CP->wt[kk] * cimag(cmul(gF, CP->dt[kk])), tf = CP->wt[kk] * cimag(cmul(gf, CP->dt[kk]));
+                F[ix] += tF; f[ix] += tf;
+                mx = dmax(mx, dmax(fabs(tF), fabs(tf)));
+            }
+        }
+        k = kend;
+        if (mx < tol) break;
+    }
+    for (int i = 0; i < nx; i++) F[i] = 1 - F[i];
+    free(PL); free(MI); free(wk);
+    return 0;
+}

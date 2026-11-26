@@ -33,6 +33,14 @@ of the joint moment generating function):
   `lm_cdf`, `lm_quantile`, `lm_power` (the LM statistic), `mza_cdf`, `mza_quantile` (MZ_alpha), `msb_cdf`,
   `msb_quantile` (MSB); `empty_caches`.
 
+The extensions of the limit, computed by the general engine:
+
+- `volpath` (`VolPath`) and the keyword ``vol`` of `dist_cdf`, `dist_pdf`, `dist_quantile`, `ltratio_cdf`,
+  `ltratio_pdf`, `ltratio_icdf`: volatility and persistence regimes (``c`` a sequence of one value per regime);
+- the keyword ``rho`` of the same functions: a normal component, the covariate-augmented t-ratio (`cadf_c0`) and the
+  predictive regression (`predictive_c0`);
+- `hegy_t3_cdf`, `hegy_t3_pdf`, `hegy_t3_quantile`: the first seasonal t-ratio of Hylleberg, Engle, Granger and Yoo.
+
 Not in the package, because the C engine does not have it: the boundary type ``"fun"`` (any function g) of
 ``ltratio_region``.  (A new entry point of the engine: a function in _engine.c, see the comment at its top, and a
 function in a module like _lincdf.py, exported here.)
@@ -40,8 +48,10 @@ function in a module like _lincdf.py, exported here.)
 from ._adfmax import adfmax_cdf, adfmax_icdf, adfmax_pdf
 from ._coef import coef_cdf, coef_icdf, coef_mom
 from ._design import Design, design_from_matrix, detrend_first, fdesign, ltrend, perron, trend
+from ._ext import VolPath, cadf_c0, predictive_c0, volpath
 from ._general import (adfmax_quantile, coef_cdf_gp, coef_pdf, coef_quantile, dist_cdf, dist_moments, dist_pdf,
-                       dist_quantile, empty_caches, lin_cdf, lin_pdf, lin_quantile, lm_cdf, lm_power, lm_quantile,
+                       dist_quantile, empty_caches, hegy_t3_cdf, hegy_t3_pdf, hegy_t3_quantile, lin_cdf, lin_pdf,
+                       lin_quantile, lm_cdf, lm_power, lm_quantile,
                        local_power, msb_cdf, msb_quantile, mza_cdf, mza_quantile, pt_cdf, pt_envelope, pt_pdf, pt_power,
                        pt_quantile, region_prob, v_cdf, v_pdf)
 from ._lincdf import ltratio_lincdf, power_envelope
@@ -66,6 +76,7 @@ __all__ = [
     "lin_cdf", "lin_pdf", "lin_quantile", "v_cdf", "v_pdf", "adfmax_quantile", "region_prob",
     "pt_cdf", "pt_pdf", "pt_quantile", "pt_power", "pt_envelope", "lm_cdf", "lm_quantile", "lm_power",
     "mza_cdf", "mza_quantile", "msb_cdf", "msb_quantile", "empty_caches",
+    "volpath", "VolPath", "cadf_c0", "predictive_c0", "hegy_t3_cdf", "hegy_t3_pdf", "hegy_t3_quantile",
 ]
 
 _n = _default_threads()
