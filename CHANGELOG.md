@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The C engine of dflimit-matlab 762c39c: the templates of the devices of Bao and Kan are `csrc/dfl_kan_jet.h` and
+  `csrc/dfl_kan_logcf.h` (they were `.inc` files, which `R CMD check` of the R package flagged); the sources are
+  otherwise unchanged. The README examples print the values of this version (they moved in the 12th to 13th digit).
 - The two papers: the package cites the lead paper, Bao, Broda and Kan, "The Exact Limiting Distribution of the
   Dickey-Fuller t-Ratio with General Deterministic Terms" (SSRN 7745921), the paper of the general engine and of the
   inversion formula on paths, and, for the classical engine and its representations, its companion, "Low-Rank

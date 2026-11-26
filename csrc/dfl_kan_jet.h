@@ -1,4 +1,4 @@
-/* dfl_kan_jet.inc: Taylor-mode arithmetic, after the jets of Bao and Kan: a truncated power series sum_k c[k] x^k,
+/* dfl_kan_jet.h: Taylor-mode arithmetic, after the jets of Bao and Kan: a truncated power series sum_k c[k] x^k,
  * k = 0..n-1 (n at most JCAP), with complex coefficients, the value of a quantity and its first n - 1 derivatives at a
  * point, scaled as Taylor coefficients (Jet of src/DFKan.jl).  Sums, products, quotients, sqrt, exp and the logarithms
  * (logp: the principal argument of the constant coefficient; logc: a prescribed one) are exact in the retained

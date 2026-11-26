@@ -136,13 +136,13 @@ one evaluation by default. The engine's warnings (where one evaluation may be in
 >>> ltratio_icdf([0.01, 0.05, 0.10], D)         # its asymptotic critical values
 array([-5.28735943, -4.75056961, -4.46887591])
 >>> ltratio_cdf(-4.75057, D, -10)               # the power of the 5% test at c = -10
-0.09235786644709006
+0.09235786644709337
 >>> ltratio_cdf(-2.86157, "DU", -5, engine="auto")    # a case string by the router's rule
-0.11651356209305042
+0.11651356209338493
 >>> pt_quantile(trend(1), 0.05, -13.5)          # the 5% critical value of the point-optimal test with a trend
-5.704481449371843
+5.704481449372031
 >>> mza_quantile(trend(1), 0.05)                # MZ_alpha with a trend
--16.591095285246954
+-16.591095285246947
 
 ```
 
@@ -207,23 +207,23 @@ being continued along the grids, to 4e-13 the values of before, at the same cost
 >>> ltratio_icdf([0.01, 0.05, 0.10], "DU")     # asymptotic critical values of tau_mu
 array([-3.430353  , -2.86156886, -2.56679107])
 >>> ltratio_cdf(-2.86157, "DU", -5)             # limiting power of the 5% test at c = -5
-0.11651356209305042
+0.11651356209338493
 >>> ltratio_cdf(-2.86157, "SU", -5)             # the same with a stationary start
-0.12496412271251967
+0.12496412271269253
 >>> ltratio_cdf(0, "DK", 2, c0=2)               # t-ratio centred at the true value
-0.6504355619776852
+0.6504355619776853
 >>> ltratio_cdf(-2, "DU", -5, g0=1.5)           # fixed start
-0.8649772400771647
+0.8649772400770597
 >>> ltratio_pdf(-2, "DT", -5)                   # density
-0.5088008223324625
+0.5088008223323347
 >>> ltratio_mom(4, "DT")                        # first four moments of tau_tau
 array([ -2.18135582,   5.32067592, -14.0358001 ,  39.5544305 ])
 >>> coef_cdf(-14.0936, "DU", -10)               # power of the 5% coefficient test at c = -10
-0.45925256320730823
+0.4592525632076304
 >>> ltratio_region({"type": "wap", "k": 3.6658, "omega": 10})    # size of the WAP test of the companion paper
 0.04999962283465172
 >>> ltratio_lincdf(-0.2639, -3.5, "DK", -7)     # power of the point-optimal test against cbar = -7 at c = -7
-0.4993815721046887
+0.49938157210469375
 >>> power_envelope([-5, -10], "DG")             # the power envelope of the trend case
 array([0.11484596, 0.31005163])
 

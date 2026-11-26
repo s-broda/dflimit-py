@@ -5,7 +5,7 @@
  *   - the joint characteristic function of the limit pair (U, V) in closed forms that are free of cancellation on both
  *     sides of the unit root, with the branch of the square root settled at each point from factors whose arguments are
  *     known (no tracking along a grid), in Taylor-mode arithmetic (jets), so that derivatives of any order come out of the
- *     same assembly (dfl_kan_logcf.inc, dfl_kan_jet.inc);
+ *     same assembly (dfl_kan_logcf.h, dfl_kan_jet.h);
  *   - the single inversion for statistics that reject on a half-plane (the coefficient statistic, the linear form U - aV,
  *     the power envelope): adaptive quadrature over decades and the tail completed by repeated integration by parts,
  *     the derivatives read off a jet of order eight, each value with an error estimate;
@@ -91,21 +91,21 @@ static inline cdouble s_ser(const double *cf, int ncf, cdouble z) { cdouble y = 
 #define JT dfl_jet2
 #define JCAP 2
 #define JF(f) j2_##f
-#include "dfl_kan_jet.inc"
+#include "dfl_kan_jet.h"
 #undef JT
 #undef JCAP
 #undef JF
 #define JT dfl_jet10
 #define JCAP 10
 #define JF(f) j10_##f
-#include "dfl_kan_jet.inc"
+#include "dfl_kan_jet.h"
 #undef JT
 #undef JCAP
 #undef JF
 #define JT dfl_jet32
 #define JCAP DFL_KAN_JMAX
 #define JF(f) j32_##f
-#include "dfl_kan_jet.inc"
+#include "dfl_kan_jet.h"
 #undef JT
 #undef JCAP
 #undef JF
@@ -142,7 +142,7 @@ static double dfl_kan_argtau4(cdouble z0, cdouble zc0, cdouble D2, cdouble T0)
 #define KF(f) s_##f
 #define KNAME(f) f##_s
 #define KORD(a) 1
-#include "dfl_kan_logcf.inc"
+#include "dfl_kan_logcf.h"
 #undef KT
 #undef KF
 #undef KNAME
@@ -151,21 +151,21 @@ static double dfl_kan_argtau4(cdouble z0, cdouble zc0, cdouble D2, cdouble T0)
 #define KF(f) j2_##f
 #define KNAME(f) f##_j2
 #define KORD(a) ((a).n)
-#include "dfl_kan_logcf.inc"
+#include "dfl_kan_logcf.h"
 #undef KT
 #undef KF
 #undef KNAME
 #define KT dfl_jet10
 #define KF(f) j10_##f
 #define KNAME(f) f##_j10
-#include "dfl_kan_logcf.inc"
+#include "dfl_kan_logcf.h"
 #undef KT
 #undef KF
 #undef KNAME
 #define KT dfl_jet32
 #define KF(f) j32_##f
 #define KNAME(f) f##_j32
-#include "dfl_kan_logcf.inc"
+#include "dfl_kan_logcf.h"
 #undef KT
 #undef KF
 #undef KNAME

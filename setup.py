@@ -24,11 +24,11 @@ ENGINE_C = ["dfl_special.c", "dfl_mgf.c", "dfl_single.c", "dfl_batch.c", "dfl_ge
             # the general engine (any deterministic terms) and the router over the two engines
             "dfl_det_la.c", "dfl_det_design.c", "dfl_det_mgf.c", "dfl_det_path.c", "dfl_det_inner.c", "dfl_det_api.c",
             "dfl_det_paper2.c", "dfl_det_route.c", "dfl_det_line.c", "dfl_det_tables.c",
-            # the devices of Bao and Kan (dfl_kan.c includes dfl_kan_jet.inc and dfl_kan_logcf.inc)
+            # the devices of Bao and Kan (dfl_kan.c includes dfl_kan_jet.h and dfl_kan_logcf.h)
             "dfl_kan.c", "dfl_det_kan.c"]
 ENGINE_CXX = ["Faddeeva.cc", "faddeeva_shim.cpp"]
-ENGINE_H = ["dflimit.h", "dfl_lock.h", "dfl_vmath.h", "dfl_det_int.h", "dfl_kan_int.h", "dfl_kan_jet.inc",
-            "dfl_kan_logcf.inc", "Faddeeva.h"]
+ENGINE_H = ["dflimit.h", "dfl_lock.h", "dfl_vmath.h", "dfl_det_int.h", "dfl_kan_int.h", "dfl_kan_jet.h",
+            "dfl_kan_logcf.h", "Faddeeva.h"]
 MACROS = [("DFL_QUIET", None)]
 
 LIMITED_API = not sysconfig.get_config_var("Py_GIL_DISABLED")

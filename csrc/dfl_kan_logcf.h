@@ -1,4 +1,4 @@
-/* dfl_kan_logcf.inc: the logarithm of the joint characteristic function of the limit pair of the classical cases, the
+/* dfl_kan_logcf.h: the logarithm of the joint characteristic function of the limit pair of the classical cases, the
  * closed forms of Bao and Kan (their AR1LIM_LOGCF; _logcf and trendlim of src/DFKan.jl), written once for numbers and jets:
  * included by dfl_kan.c with KT the type (cdouble or a jet type), KF(name) its operations and KNAME(name) the names of the
  * functions defined here.  For a number the operations are those of complex arithmetic, so that the scalar and the jet

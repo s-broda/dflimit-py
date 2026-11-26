@@ -95,7 +95,7 @@ def adfmax_cdf(x, cas, c=0, info=False, *, engine="auto", start=None, g0=0):
     Examples
     --------
     >>> from dflimit import adfmax_cdf
-    >>> adfmax_cdf(-2.43542, "DU")       # 0.05 (the quantiles of the ADFmax statistic in the companion paper)
+    >>> adfmax_cdf(-2.43542, "DU")       # 0.05 (the ADFmax quantiles of the companion paper)
     0.0499995786...
     >>> from dflimit import perron
     >>> adfmax_cdf(-3.0, perron("C", 0.3))   # ADFmax with a break in level and slope (the general engine)
