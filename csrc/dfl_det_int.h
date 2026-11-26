@@ -278,9 +278,17 @@ int det_gcoef_cdf1(det_cf *F, double y, double c0, double tol, double *P, double
 
 /* ---- the line integral with the explicit kernel for the designs of rank one or two (dfl_det_line.c) ---- */
 typedef struct dfl_prov dfl_prov;
-/* method auto takes the line integral at c0 = 0 from this c on (the C timings: det_line_auto) */
+/* method auto takes the line integral at c0 = 0 from this c on (the C timings: det_line_auto), except above the unit root
+ * up to DET_LINE_PATHS_CMAX with deterministic terms, where it takes the paths */
 #define DET_LINE_AUTO_CMIN (-20.0)
-int det_line_auto(double c, double c0);
+/* above this c the inversion on paths by one evaluation warns for designs beyond the classical cases and for a fixed start
+ * with deterministic terms (far_above_warn of dfl_det_api.c) */
+#define DET_FAR_ABOVE_CMIN 5.5
+#define DET_LINE_PATHS_CMAX 0.5
+int det_line_auto(const dfl_design *D, double c, double c0);
+/* (and with c0 > 0 above the unit root on the vertical line of the paths, where the paths do not resolve the two roots of a
+ * point x < 0: det_line_vline) */
+int det_line_vline(const dfl_design *D, double c, const dfl_det_opts *o);
 /* the provider when the method (o->method auto or line) takes the line integral (*out, a reference: det_line_release), NULL
  * when the paths compute; 1 with the error in err where method line is refused (the reason) or the provider fails */
 int det_line_select(const dfl_design *D, double c, const dfl_det_opts *o, dfl_prov **out, char *err, size_t errlen);

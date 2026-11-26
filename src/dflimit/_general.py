@@ -107,10 +107,14 @@ METHOD_DOC = """method : {"auto", "line", "paths"}, default "auto"
         vanish at the origin and whose span is closed under differentiation (polynomial trends of any order, an
         intercept with sines and cosines), and `detrend_first` of a continuous design that does not vanish at the
         origin, with a zero or a stationary start and least squares detrending. ``"auto"`` takes it at ``c0 = 0`` for
-        ``c >= -20``, where it is 1.1 to 1.7 times faster than the paths per value for ``-20 <= c <= 0`` (0.9 to 1.3
-        times per quantile; at ``c = 2`` the paths are 1.35 to 2.1 times faster for designs with deterministic terms;
-        C engine, one thread, November 2026), and the paths otherwise; ``"line"`` raises ``ValueError`` with the reason where it does not cover the design,
-        the start or the options (GLS detrending, a fixed start, a jump)."""
+        ``c >= -20``, where it is 1.1 to 1.7 times faster than the paths per value for ``-20 <= c <= 0``, except just
+        above the unit root with deterministic terms (``0 < c <= 0.5``, where the paths are 1.5 to 2.3 times faster),
+        and with ``c0 > 0`` at the points ``x < 0`` where the outer contour of the paths is the vertical line (there the
+        paths do not resolve the two roots of the parabola of such a point; the quantiles keep the paths); C engine,
+        November 2026; the paths otherwise. Above
+        ``c = 5.5`` the paths warn for a design beyond the classical cases and a fixed start with deterministic terms,
+        where one evaluation may be off by more than 1e-5 in the upper tail. ``"line"`` raises ``ValueError`` with the
+        reason where it does not cover the design, the start or the options (GLS detrending, a fixed start, a jump)."""
 
 RULE_DOC = """rule : {"auto", "present", "thin", "inner", "outer", "fine", "finestep"}, default "auto"
         The rule of one evaluation of the inversion on paths. ``"auto"`` takes by regions the outer hyperbola with 1.5

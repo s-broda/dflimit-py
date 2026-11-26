@@ -245,7 +245,11 @@ static int paths_subset(int kind, const dfl_design *D, double c, int m, const do
 static int line_values(int kind, const dfl_design *D, dfl_prov *pv, double c, int m, const double *xf, const dfl_det_opts *o, double *v, char *err, size_t errlen)
 {
     int *fb = malloc((m + 1) * sizeof(int)), nfb = 0, rc = 0;
+    /* (where the line integral was taken only for c0 > 0 on the vertical line, det_line_vline, it computes the points x < 0,
+     * whose parabola has two positive roots, and the paths the others, as before: the line integral grows slow at large x) */
+    int vonly = o->method == DFL_DET_AUTO && !det_line_auto(D, c, o->c0);
     for (int j = 0; j < m && !rc; j++) {
+        if (vonly && !(xf[j] < 0)) { fb[nfb++] = j; continue; }
         int r = det_line_value(pv, kind, xf[j], o->c0, &v[j]);
         if (r == 0) continue;
         if (o->method == DFL_DET_LINE) { det_line_point_error(err, errlen, kind == 2 ? "dist_cdf" : "dist_pdf", pv, xf[j], o->c0, r); rc = 1; break; }
@@ -280,6 +284,29 @@ static int range_check(const char *fn, const dfl_design *D, double c, const dfl_
              c, o->c0, o->start == 2 ? "stationary" : o->start == 1 ? "fixed" : "zero", isnan(o->gls) ? "" : ", GLS-detrended");
     return dfl_cdf_range_check(fn, args, xname, m, xs, v, err, errlen);
 }
+/* the brittle region far above the unit root (far_above_warn of DFDet.jl): above c = DET_FAR_ABOVE_CMIN (5.5), beyond the range
+ * in which the rules of one evaluation were swept, the inversion on paths by one evaluation was off by more than 1e-5 in the
+ * upper tail for designs beyond the classical cases and for a fixed start with deterministic terms (November 26, 2026:
+ * Perron's model C at 0.3 by 1.5e-5 in F at c = 7, the linear trend with a fixed start by 8.7e-5 at c = 7); a warning where the
+ * paths compute.  The classical designs: trend(-1), trend(0), trend(1) in the one-step regression with least squares
+ * detrending, and trend(1) GLS-detrended at cbar = -13.5 with a zero start */
+static int is_trend_design(const dfl_design *D, int p)
+{
+    int K = p + 1, deg = p > 0 ? p : 0;
+    if (D->first || D->loc || D->K != K || D->np != 1 || D->br[0] != 0 || D->br[1] != 1 || D->deg != deg) return 0;
+    for (int i = 0; i < K; i++) for (int k = 0; k <= deg; k++) if (D->C[i * (deg + 1) + k] != (k == i ? 1.0 : 0.0)) return 0;
+    return 1;
+}
+static void far_above_warn(const char *fn, const dfl_design *D, double c, const dfl_det_opts *o)
+{
+    if (!(c > DET_FAR_ABOVE_CMIN)) return;
+    int fixed = o->start == DFL_START_FIXED && o->gamma0 != 0, classical = 0;
+    for (int p = -1; p <= 1 && !classical; p++)
+        if (is_trend_design(D, p)) classical = isnan(o->gls) || (p == 1 && o->gls == DFL_CBAR_GLS && o->start == DFL_START_ZERO);
+    if (classical && !(fixed && D->K >= 1)) return;
+    det_warn("%s: far above the unit root (c = %g > %g) the inversion on paths by one evaluation may be off by more than 1e-5 in the upper tail for a design beyond the classical cases or a fixed start with deterministic terms (Perron's model C at c = 7 by 1.5e-5 in F, the linear trend with a fixed start at c = 7 by 8.7e-5); verified = 1 checks it",
+             fn, c, DET_FAR_ABOVE_CMIN);
+}
 int dfl_det_dist(int kind, const dfl_design *D, int n, const double *x, double c, const dfl_det_opts *o0, double *out, char *err, size_t errlen)
 {
     dfl_det_opts od; const dfl_det_opts *o = opts_or_default(o0, &od);
@@ -291,6 +318,7 @@ int dfl_det_dist(int kind, const dfl_design *D, int n, const double *x, double c
     if (det_line_select(D, c, o, &pv, err, errlen)) return 1;
     det_path *CP = NULL; int nr = 0, ntr = 0;
     if (!pv) { CP = rule_path(D, c, o, o->verified, &nr, &ntr, NULL, err, errlen); if (!CP) return 1; }
+    if (!pv && !o->verified) far_above_warn(kind == 2 ? "dist_cdf" : "dist_pdf", D, c, o);
     double *xf = malloc((n + 1) * sizeof(double)); int *ix = malloc((n + 1) * sizeof(int));
     int m = split_finite(n, x, kind == 2, out, xf, ix), rc = 0;
     if (m > 0) {
@@ -316,6 +344,7 @@ int dfl_det_dist_both(const dfl_design *D, int n, const double *x, double c, con
     int nr = 0, ntr = 0;
     det_path *CP = rule_path(D, c, &o, 0, &nr, &ntr, NULL, err, errlen);
     if (!CP) return 1;
+    far_above_warn("dist_cdf", D, c, &o);
     int rc = 0;
     if (n > 0) {
         det_path *CPr = det_line_refined(CP, n, x, 1, &CP->Mo->a, 1, &o.c0, err, errlen);
@@ -423,6 +452,9 @@ int dfl_det_quantile(const dfl_design *D, int n, const double *p, double c, doub
     if (o->rule < DFL_RULE_AUTO || o->rule > DFL_RULE_FINESTEP) { snprintf(err, errlen, "%s", DET_RULE_MSG); return 1; }
     dfl_prov *pv;
     if (det_line_select(D, c, o, &pv, err, errlen)) return 1;
+    /* (the quantiles keep the paths where the line integral was taken only for c0 > 0 on the vertical line, det_line_vline:
+     * the search may reach x > 0, where the line integral grows slow; the paths warn there) */
+    if (pv && o->method == DFL_DET_AUTO && !det_line_auto(D, c, o->c0)) { det_line_release(pv); pv = NULL; }
     int rc = 0, *todo = malloc((n + 1) * sizeof(int)), nt = 0;
     for (int k = 0; k < n && !rc; k++) {
         if (!pv) { todo[nt++] = k; continue; }
@@ -438,6 +470,7 @@ int dfl_det_quantile(const dfl_design *D, int n, const double *p, double c, doub
         int nr = 0, ntr = 0;
         det_path *CP = rule_path(D, c, o, 0, &nr, &ntr, NULL, err, errlen);
         if (!CP) { free(todo); return 1; }
+        far_above_warn("dist_quantile", D, c, o);
         q_ctx qc = {CP, o->c0, 2, 1, nr, ntr};
         for (int i = 0; i < nt && !rc; i++) rc = quantile_search(&qc, p[todo[i]], x0, tol, 30, 1.0, &q[todo[i]], err, errlen);
         det_path_release(CP);

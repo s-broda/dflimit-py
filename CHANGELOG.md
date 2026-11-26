@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- The C engine of dflimit-matlab, branch engine-rules: the choice of engine (`engine="auto"`) re-derived after the
+  thinner rules of one evaluation from interleaved timings of the two C engines (a cell moved where the other engine was
+  at least 1.5 times faster): the general engine also with a zero start and c0 > 0 at c = -100 and in case DT up to
+  c = 2, with c0 < 0 in case DK for -5 < c <= 0 and in case DT at every c <= 0, at c0 = 0 in cases DU, DT for
+  0 < c <= 0.5 and in case DT below c = -20, with a fixed start in case DK also where |g0| <= 1 with |c g0| <= 50 and
+  c >= -100, for the quantiles of case ST from c = -0.5 on and for the parabola of `ltratio_region` at c0 = 0 for
+  c >= -20. Where the rule now takes the other engine, values move by less than 1e-7. The general engine's
+  `method="auto"` takes its paths just above the unit root (0 < c <= 0.5) for designs with deterministic terms and the
+  line integral with c0 > 0 at the points x < 0 on the vertical line, where the paths' one evaluation was off by up to
+  1e-3 in the lower tail; and it warns above c = 5.5 for designs beyond the classical cases and a fixed start with deterministic terms,
+  where one evaluation of the paths may be off by more than 1e-5 in the upper tail.
 - The C engine of dflimit-matlab 762c39c: the templates of the devices of Bao and Kan are `csrc/dfl_kan_jet.h` and
   `csrc/dfl_kan_logcf.h` (they were `.inc` files, which `R CMD check` of the R package flagged); the sources are
   otherwise unchanged. The README examples print the values of this version (they moved in the 12th to 13th digit).

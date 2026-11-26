@@ -324,16 +324,39 @@ static dfl_prov *prov_get(const dfl_design *D, double c, int start, char *why, s
 /* ---------------------------------------------------------------------------------------------------------------- */
 /* the option method of dfl_det_dist and dfl_det_quantile */
 /* the rule of method auto where the line integral covers the arguments: the line integral at c0 = 0 for c >= -20
- * (DET_LINE_AUTO_CMIN), the inversion on paths otherwise.  Measured on the C engines with the classical integrator's fixed node
- * layouts (c/test/line_timing.c, November 2026: warm calls, F and f at mean + (-2, -1, 0, 1, 2) sd and the 5% quantile at new
- * points, 1 and 4 threads; polynomial trends of order 0 to 4, the intercept with the first sine and cosine, the quadratic
- * trend with a stationary start): at c0 = 0 for -20 <= c <= 0 the line integral is 2.2 to 3.5 times faster than the paths
- * per value and 1.8 to 2.7 times per quantile, at c = 2 1.35 to 3 times per value and 1 to 1.45 times per quantile; at
- * c = -30 and -50 1.1 to 2.3 times per value but 0.77 to 1.8 per quantile (mostly slower: the classical integrator's line
- * grows longer beyond c = -20), so the paths there; with c0 != 0 the general kernel of the classical integrator
- * (breakpoints of X(v), adaptive pieces) makes the line integral the slower (as in the Julia engine, 2 to 5 times).  (The
- * Julia rule takes the line integral at c0 = 0 for every c.) */
-int det_line_auto(double c, double c0) { return c0 == 0 && c >= DET_LINE_AUTO_CMIN; }
+ * (DET_LINE_AUTO_CMIN), except just above the unit root with deterministic terms, 0 < c <= 0.5 (DET_LINE_PATHS_CMAX), where
+ * the paths are the faster; the inversion on paths otherwise.  Measured on the C engines with the classical integrator's fixed
+ * node layouts (c/test/line_timing.c, November 2026: warm calls, F and f at mean + (-2, -1, 0, 1, 2) sd and the 5% quantile
+ * at new points, 1 and 4 threads; polynomial trends of order 0 to 4, the intercept with the first sine and cosine, the
+ * quadratic trend with a stationary start): at c0 = 0 for -20 <= c <= 0 the line integral was 2.2 to 3.5 times faster than
+ * the paths per value and 1.8 to 2.7 times per quantile; at c = -30 and -50 1.1 to 2.3 times per value but 0.77 to 1.8 per
+ * quantile (mostly slower: the classical integrator's line grows longer beyond c = -20), so the paths there; with c0 != 0
+ * the general kernel of the classical integrator (breakpoints of X(v), adaptive pieces) makes the line integral the slower
+ * (as in the Julia engine, 2 to 5 times).  Since the thinner rules of the paths (re-measured November 26, 2026, interleaved
+ * warm calls, 4 threads): above the unit root the paths are 1.5 to 2.3 times faster per value and per quantile for every
+ * design with deterministic terms at c = 0.25 and 0.5; up to c = 2 (the intercept 1.5) for some designs by 1.3 to 2.2 times,
+ * but below 1.5 for others (the Julia rule takes the paths up to c = 1.5 with one regressor and c = 2 with more);
+ * without deterministic terms the line integral. */
+/* whether method auto takes the line integral, where it covers the arguments, with c0 > 0 above the unit root on the vertical
+ * line (the outer contour of the paths where no hyperbola keeps the positive roots right of the origin): there the parabola
+ * X(v) of a point x < 0 has two positive roots, whose parts of the outer integrand the line's rule does not resolve, and the
+ * paths' one evaluation was off by up to 1e-3 in the lower tail, below zero or NaN (November 26, 2026; line_vline of the
+ * Julia engine); the line integral agrees with the paths at x > 0 and with the classical engine for the linear trend */
+int det_line_vline(const dfl_design *D, double c, const dfl_det_opts *o)
+{
+    if (!(o->c0 > 0 && c > 0 && o->start != DFL_START_FIXED)) return 0;
+    char e[256];
+    det_path *CP = det_path_cached(D, o->gls, o->start, o->gamma0, c, NAN, 1.0, e, sizeof e);
+    if (!CP) return 0;
+    int v = isnan(CP->h);
+    det_path_release(CP);
+    return v;
+}
+int det_line_auto(const dfl_design *D, double c, double c0)
+{
+    if (!(c0 == 0 && c >= DET_LINE_AUTO_CMIN)) return 0;
+    return !(c > 0 && D->K >= 1 && c <= DET_LINE_PATHS_CMAX);
+}
 /* the provider when method (auto or line) takes the line integral, NULL when the inversion on paths computes; 1 (an error in
  * err) where method line is refused or the provider fails */
 int det_line_select(const dfl_design *D, double c, const dfl_det_opts *o, dfl_prov **out, char *err, size_t errlen)
@@ -352,7 +375,7 @@ int det_line_select(const dfl_design *D, double c, const dfl_det_opts *o, dfl_pr
         if (k < (int) sizeof why) snprintf(why + k, sizeof why - k, " belong to the inversion on paths");
         refused = 1;
     }
-    if (!refused && method == DFL_DET_AUTO && !det_line_auto(c, o->c0)) return 0;     /* (before the provider is built) */
+    if (!refused && method == DFL_DET_AUTO && !det_line_auto(D, c, o->c0) && !det_line_vline(D, c, o)) return 0;     /* (before the provider is built) */
     if (!refused) refused = line_refusal(D, c, o, why, sizeof why);
     if (!refused) {
         int start = o->start == DFL_START_STAT ? DFL_START_STAT : DFL_START_ZERO, isrank;

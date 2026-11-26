@@ -111,12 +111,14 @@ int dfl_autoengine(int f, int model, int stat, double g0, double gls, double c, 
          * where the rule below takes the general engine for the t-ratio: coef_cdf of case DU at c = -5 was about three times
          * slower in the R and Python packages at the median); case DT as the t-ratio (the general engine up to 1.7 times
          * faster for -20 <= c <= 0) */
-        if (x == 0 && !fixed && !stat && c0 != 0 && -100 < c && c <= 1 && (DK || DU || DT)) {
+        if (x == 0 && !fixed && !stat && c0 != 0 && -100 < c && c <= 2 && (DK || DU || DT)) {
             if (c0 > 0) return DFL_ENGINE_CLASSICAL;
             if (DK && c > -5) return DFL_ENGINE_GENERAL;
             if (DU) return DFL_ENGINE_CLASSICAL;
         }
-        if (!fixed && !stat && c0 > 0 && -100 < c && c <= 1) {
+        /* (a zero start with c0 > 0 below c = 1, case DT below c = 2: the general engine, 2 to 4.4 times faster at c = -100
+         * and 3.6 to 6.8 times in case DT at c = 1.5, 2; re-measured November 26, 2026, as in the Julia rule) */
+        if (!fixed && !stat && c0 > 0 && (c <= 1 || (DT && c <= 2))) {
             /* (case DK: the density is infinite at the tangency x* = -sqrt(2 c0); just above it the classical line integral) */
             if (DK) { double xs = -sqrt(2 * c0); if (xs < x && x <= xs + 1e-3 * dmax(1.0, fabs(xs))) return DFL_ENGINE_CLASSICAL; }
             return DFL_ENGINE_GENERAL;
@@ -127,7 +129,12 @@ int dfl_autoengine(int f, int model, int stat, double g0, double gls, double c, 
          * 0.5, c0 = -5, g0 = 1), 6.7e-6 at c = 0 with g0 = 1.5 and 2.9e-2 beyond (c0 = -10, where at mean + 4 sd it gave 1.23
          * and the final check of the distribution function refused); the classical line integral, its checked computation
          * and the conditional integral agree to 1e-12 there; autoengine of merged.jl, November 2026) */
-        if (fixed && DK && c <= 1 && !(c0 < 0 && c > -1) && ((c * g0) * (c * g0) / 2 <= 400 || (g0 <= 0.5 && c >= -100))) return DFL_ENGINE_GENERAL;
+        /* (re-measured November 26, 2026, the C timings: beyond (c g0)^2/2 <= 400 the general engine is 1.8 to 3.9 times faster
+         * where |g0| <= 1 and |c g0| <= 50 with c >= -100, which holds g0 <= 0.5 with c >= -100; at g0 = 1.5 1.4 to 1.6 times,
+         * below the threshold of the C rule, 1.5 (the Julia rule takes |g0| <= 1.5); the law depends on |g0| only, and the
+         * rule tested g0 <= 0.5 until then) */
+        double ag = fabs(g0);
+        if (fixed && DK && c <= 1 && !(c0 < 0 && c > -1) && ((c * ag) * (c * ag) / 2 <= 400 || (c >= -100 && ag <= 1 && fabs(c) * ag <= 50))) return DFL_ENGINE_GENERAL;
         /* (the fixed start of cases DU, DT far from the unit root: with c0 > 0 below c = -20 (and below c = -10 where |c g0| >
          * 20), and with any c0 below c = -20 where |c g0| > 60, the classical contour integral's one evaluation was off, in
          * the density by up to 5e-6 of its peak (case DU at c = -30, g0 = 0.5, c0 = 2), 4.2e-3 (c = -75, c0 = 5) and 2.2e-2
@@ -141,11 +148,25 @@ int dfl_autoengine(int f, int model, int stat, double g0, double gls, double c, 
          * cases DU, DT, SK, SU, ST and 8 to 11 times in case DK, equal at c = -300 in cases DU, DT (c/test/engine_table_c.txt);
          * without the layouts the general engine had been 1.2 to 2.9 times faster below c = -20, and the C rule took it there.
          * For -20 <= c <= 0 the general engine computes a classical case by the same line integral, with P(t) and the roots
-         * from its transform, within 10% of the classical engine's time) */
+         * from its transform, within 10% of the classical engine's time; since the thinner rules of the paths case DT below
+         * c = -20 takes the general engine, below) */
         /* (the C timings: with a zero start and c0 < 0 the general engine is 1.15 to 1.7 times faster in case DT for
          * -30 <= c <= 0 and in case DU for -10 <= c <= 0; case DK and further out the classical engine.  The tails below 1e-3
          * go back to the classical conditional integral, as for every general value of these cases) */
-        if (!fixed && !stat && c0 < 0 && ((DT && c >= -30 && c <= 0) || (DU && c >= -10 && c <= 0))) return DFL_ENGINE_GENERAL;
+        /* (re-measured November 26, 2026, after the thinner rules of the paths: in case DT the general engine is 1.7 to 3.5
+         * times faster down to c = -100 (below, the rule above), and in case DK near the unit root (-5 < c <= 0, where the
+         * classical engine takes its line integral with the general kernel) 6.7 to 8.7 times (the Julia rule takes it up to
+         * c = 2, measured in Julia); case DU as before) */
+        if (!fixed && !stat && c0 < 0 && ((DK && c > -5 && c <= 0) || (DT && c <= 0) || (DU && c >= -10 && c <= 0))) return DFL_ENGINE_GENERAL;
+        /* (c0 = 0 with a zero start just above the unit root, 0 < c <= 0.5, where the general engine's method auto takes its
+         * paths (det_line_auto): 1.75 to 2.1 times faster than the classical engine in cases DU, DT (November 26, 2026; the Julia
+         * rule goes to c = 1.5 in case DU and c = 2 in case DT, where the C gains of the paths fall below 1.5 for some designs) */
+        if (!fixed && !stat && c0 == 0 && (DU || DT) && c > 0 && c <= DET_LINE_PATHS_CMAX) return DFL_ENGINE_GENERAL;
+        /* (the C timings, November 26, 2026: c0 = 0 far from the unit root, below c = -20, where the general engine takes its
+         * paths, is 1.6 to 1.9 times faster than the classical line integral in case DT with a zero start, down to c = -480,
+         * the end of the general engine's checks; in cases DU, SU, ST 1.4 to 2.1 times, below the threshold of 1.5 in some
+         * cells; in cases DK, SK the classical engine) */
+        if (!fixed && !stat && c0 == 0 && DT && c < -20 && c >= -480) return DFL_ENGINE_GENERAL;
         return DFL_ENGINE_CLASSICAL;
     case DFL_F_ICDF:
         /* the quantiles at c0 = 0 (the Julia rule: a fixed start, case DT at c <= 0, ST at c <= -1, DU at c = 0; the C timings
@@ -161,6 +182,9 @@ int dfl_autoengine(int f, int model, int stat, double g0, double gls, double c, 
         if (DK && c < -20) return DFL_ENGINE_CLASSICAL;
         if (!stat && c <= 2) return DFL_ENGINE_GENERAL;
         if (stat && c <= -1) return DFL_ENGINE_GENERAL;
+        /* (case ST from c = -0.5 on: 1.7 times faster, November 26, 2026; case SU 1.5 times, below the threshold of the C rule;
+         * next to zero the general engine's search is off, by 2.6e-7 in case ST at c = -1e-3) */
+        if (ST && c <= -0.5) return DFL_ENGINE_GENERAL;
         return DFL_ENGINE_CLASSICAL;
     case DFL_F_MOM:
         /* (the C timings: with c0 != 0 the classical moments are 4 to 9 times faster with a stationary start and 2 to 8 times
@@ -181,10 +205,17 @@ int dfl_autoengine(int f, int model, int stat, double g0, double gls, double c, 
         /* (the C timings: the classical engine is 1.6 to 11 times faster for c <= -1 and as fast nearer zero; its critical value
          * is bisected to 1e-9, which moves the power by up to 2e-9; the Julia rule takes the general engine for c <= -0.01 in
          * case DK and c <= -1 in case DG, where its critical value is found to 1e-10 at the same cost) */
+        /* (re-measured November 26, 2026: in case DG the classical engine is 4.7 to 21 times faster at c = -2 to -20; its
+         * power is within 2.1e-9 of the general engine's; the Julia rule takes the classical engine in case DG too) */
         (void) SU; (void) ST;
         return DFL_ENGINE_CLASSICAL;
+    case DFL_F_REGION:
+        /* (x = 1 for the parabola of the t-ratio, with its c0, 0 for the other boundaries; the parabola at c0 = 0 for c >= -20,
+         * where the general engine takes its line integral: 3.5 to 45 times faster than the classical region code's
+         * conditional integral; below c = -20 the general engine takes its paths and is the slower, as with c0 != 0) */
+        return (x == 1 && c0 == 0 && c >= -20) ? DFL_ENGINE_GENERAL : DFL_ENGINE_CLASSICAL;
     default:
-        return DFL_ENGINE_CLASSICAL;     /* (the regions) */
+        return DFL_ENGINE_CLASSICAL;
     }
 }
 
@@ -974,7 +1005,9 @@ int dfl_engine_region(int type, const double *par, const dfl_spec *S, double c, 
         if (!isfinite(v)) { out[0] = isnan(v) ? NAN : v > 0 ? 1.0 : 0.0; spec_free(&R); return 0; }
     }
     if (engine == DFL_ENGINE_CLASSICAL && !dk) { snprintf(err, errlen, "engine classical: the regions of the classical engine have case DK only"); spec_free(&R); return 1; }
-    if (engine != DFL_ENGINE_GENERAL && dk) {
+    /* (engine auto: the rule, dfl_autoengine with x = 1 for the parabola, c0 = par[1]) */
+    int gen = engine == DFL_ENGINE_GENERAL || (engine == DFL_ENGINE_AUTO && dk && type == 2 && dfl_autoengine(DFL_F_REGION, 1, 0, 0.0, NAN, c, par[1], 1.0) == DFL_ENGINE_GENERAL);
+    if (!gen && dk) {
         dfl_double_info info;
         rc = dfl_region(type, par, 0.0, 0, NULL, c, NULL, out, &info, err, errlen);
     } else {
