@@ -8,7 +8,7 @@
   c = 2, with c0 < 0 in case DK for -5 < c <= 0 and in case DT at every c <= 0, at c0 = 0 in cases DU, DT for
   0 < c <= 0.5 and in case DT below c = -20, with a fixed start in case DK also where |g0| <= 1 with |c g0| <= 50 and
   c >= -100, for the quantiles of case ST from c = -0.5 on and for the parabola of `ltratio_region` at c0 = 0 for
-  c >= -20. Where the rule now takes the other engine, values move by less than 1e-7. The general engine's
+  -20 <= c <= 0. Where the rule now takes the other engine, values move by less than 1e-7. The general engine's
   `method="auto"` takes its paths just above the unit root (0 < c <= 0.5) for designs with deterministic terms and the
   line integral with c0 > 0 at the points x < 0 on the vertical line, where the paths' one evaluation was off by up to
   1e-3 in the lower tail; and it warns above c = 5.5 for designs beyond the classical cases and a fixed start with deterministic terms,

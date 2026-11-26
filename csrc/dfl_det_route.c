@@ -210,10 +210,11 @@ int dfl_autoengine(int f, int model, int stat, double g0, double gls, double c, 
         (void) SU; (void) ST;
         return DFL_ENGINE_CLASSICAL;
     case DFL_F_REGION:
-        /* (x = 1 for the parabola of the t-ratio, with its c0, 0 for the other boundaries; the parabola at c0 = 0 for c >= -20,
-         * where the general engine takes its line integral: 3.5 to 45 times faster than the classical region code's
-         * conditional integral; below c = -20 the general engine takes its paths and is the slower, as with c0 != 0) */
-        return (x == 1 && c0 == 0 && c >= -20) ? DFL_ENGINE_GENERAL : DFL_ENGINE_CLASSICAL;
+        /* (x = 1 for the parabola of the t-ratio, with its c0, 0 for the other boundaries; the parabola at c0 = 0 for
+         * -20 <= c <= 0, where the general engine takes its line integral: 3.5 to 45 times faster than the classical region
+         * code's conditional integral (November 26, 2026); below c = -20 the general engine takes its paths and is the slower,
+         * as with c0 != 0; above the unit root not measured faster, the classical code, as the Julia rule) */
+        return (x == 1 && c0 == 0 && c >= -20 && c <= 0) ? DFL_ENGINE_GENERAL : DFL_ENGINE_CLASSICAL;
     default:
         return DFL_ENGINE_CLASSICAL;
     }
