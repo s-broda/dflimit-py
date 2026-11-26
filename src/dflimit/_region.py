@@ -20,8 +20,8 @@ def ltratio_region(bnd, cas="DK", c=0, info=False, *, engine="auto", start=None,
 
     The limit of the probability P{U <= g(V)} under phi = 1 + c/n, no drift, zero start, case DK (no deterministic
     terms; also the constant case with GLS demeaning), with U and V as in `ltratio_cdf`. Every test of the unit root
-    in the limit experiment of case DK rejects on such a region (the paper's section on the
-    weighted-average-power test), and the first part of the conditional integral representation of the paper, the
+    in the limit experiment of case DK rejects on such a region (the companion paper's section on the
+    weighted-average-power test), and the first part of the conditional integral representation of that paper, the
     probability of a region of the plane, gives its probability by one outer integral over V. Accurate to about 1e-11.
 
     Parameters
@@ -82,7 +82,7 @@ def ltratio_region(bnd, cas="DK", c=0, info=False, *, engine="auto", start=None,
     Examples
     --------
     >>> from dflimit import ltratio_region
-    >>> ltratio_region({"type": "wap", "k": 3.6658, "omega": 10}, "DK", 0)      # 0.05 (the weighted-average-power test of the paper)
+    >>> ltratio_region({"type": "wap", "k": 3.6658, "omega": 10}, "DK", 0)      # 0.05 (the weighted-average-power test of the companion paper)
     0.0499996228...
     >>> # the point-optimal test against cbar = -7: size 0.05
     >>> ltratio_region({"type": "line", "a": -3.5, "b": -0.2639}, "DK", 0)

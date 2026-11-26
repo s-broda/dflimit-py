@@ -1,7 +1,7 @@
 {
   "title": "dflimit: Exact Limiting Distribution of the Dickey-Fuller t-Ratio (Python package)",
   "upload_type": "software",
-  "description": "<p>The Python package dflimit computes the exact limiting distribution function, density, quantiles and moments of the Dickey-Fuller t-ratios under local alternatives, for the regression without deterministic terms, with an intercept, and with an intercept and a trend, with a zero, a fixed or a stationary initial observation, and for the t-ratio centred at a local null value; also the GLS-detrended trend case, the ADFmax statistic, the coefficient statistic, the probabilities of regions of the limit experiment and the asymptotic power envelope. The methods are those of Bao, Broda and Kan (2026), \"The Exact Limiting Distribution of the Dickey-Fuller t-Ratio and Some Related Statistics\". The engine is written in C; it includes the Faddeeva package of Steven G. Johnson (MIT licence).</p>",
+  "description": "<p>The Python package dflimit computes the exact limiting distribution function, density, quantiles and moments of the Dickey-Fuller t-ratios under local alternatives, for the regression without deterministic terms, with an intercept, and with an intercept and a trend, with a zero, a fixed or a stationary initial observation, and for the t-ratio centred at a local null value; also the GLS-detrended trend case, the ADFmax statistic, the coefficient statistic, the probabilities of regions of the limit experiment and the asymptotic power envelope. It also computes these limits for any piecewise smooth deterministic terms (polynomial trends of any order, breaks in level and slope at known dates, GLS detrending). The methods are those of Bao, Broda and Kan (2026), \"The Exact Limiting Distribution of the Dickey-Fuller t-Ratio with General Deterministic Terms\", and, for the classical cases, of their companion paper \"Low-Rank Representations of the Classical Dickey-Fuller Limits, with an Extension to Predictive Regressions\" (2026). The engine is written in C; it includes the Faddeeva package of Steven G. Johnson (MIT licence).</p>",
   "creators": [
     {
       "name": "Bao, Yong",
@@ -30,6 +30,12 @@
     "econometrics"
   ],
   "related_identifiers": [
+    {
+      "identifier": "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7745921",
+      "relation": "isSupplementTo",
+      "scheme": "url",
+      "resource_type": "publication-workingpaper"
+    },
     {
       "identifier": "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7725619",
       "relation": "isSupplementTo",

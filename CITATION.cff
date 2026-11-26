@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: "If you use this software, please cite the paper below."
+message: "If you use this software, please cite the paper below; where you use the representations of the classical cases (the line and the conditional integral), please also cite the companion paper under references."
 type: software
 title: "dflimit: Exact Limiting Distribution of the Dickey-Fuller t-Ratio (Python package)"
 authors:
@@ -19,7 +19,7 @@ doi: 10.5281/zenodo.24404482
 repository-code: "https://github.com/s-broda/dflimit-py"
 preferred-citation:
   type: unpublished
-  title: "The Exact Limiting Distribution of the Dickey-Fuller t-Ratio and Some Related Statistics"
+  title: "The Exact Limiting Distribution of the Dickey-Fuller t-Ratio with General Deterministic Terms"
   authors:
     - family-names: Bao
       given-names: Yong
@@ -32,4 +32,20 @@ preferred-citation:
       orcid: "https://orcid.org/0000-0002-0578-9974"
   year: 2026
   notes: "Working paper, available at SSRN"
-  url: "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7725619"
+  url: "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7745921"
+references:
+  - type: unpublished
+    title: "Low-Rank Representations of the Classical Dickey-Fuller Limits, with an Extension to Predictive Regressions"
+    authors:
+      - family-names: Bao
+        given-names: Yong
+        orcid: "https://orcid.org/0000-0001-6513-1683"
+      - family-names: Broda
+        given-names: Simon A.
+        orcid: "https://orcid.org/0000-0003-1686-9512"
+      - family-names: Kan
+        given-names: Raymond
+        orcid: "https://orcid.org/0000-0002-0578-9974"
+    year: 2026
+    notes: "Working paper, available at SSRN"
+    url: "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7725619"

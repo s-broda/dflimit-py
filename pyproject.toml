@@ -36,6 +36,8 @@ test = ["pytest"]
 Homepage = "https://github.com/s-broda/dflimit-py"
 Source = "https://github.com/s-broda/dflimit-py"
 "R package" = "https://github.com/s-broda/dflimit"
+"Paper" = "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7745921"
+"Companion paper" = "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7725619"
 
 [tool.setuptools]
 # the C sources (csrc/, src/dflimit/_engine.c) go into the sdist, not into the wheel: only UPSTREAM is package data

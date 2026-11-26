@@ -2,9 +2,12 @@
 
 The distribution function, density, quantiles and moments of the limits of the Dickey-Fuller t-ratios under local
 alternatives, by the exact representations of Bao, Broda and Kan, "The Exact Limiting Distribution of the
-Dickey-Fuller t-Ratio and Some Related Statistics" (working paper), computed by their C engine (a port of the Julia
-reference implementation of the paper; the same functions, with the same names and arguments, exist in R, MATLAB and
-Julia).
+Dickey-Fuller t-Ratio with General Deterministic Terms" (the lead paper, working paper, SSRN 7745921: the inversion
+formula on paths and the limit for any piecewise smooth deterministic terms, the general engine) and, for the classical
+cases, its companion, "Low-Rank Representations of the Classical Dickey-Fuller Limits, with an Extension to Predictive
+Regressions" (working paper, SSRN 7725619: the line and the conditional integral, the classical engine), computed by
+their C engine (a port of the Julia reference implementation; the same functions, with the same names and arguments,
+exist in R, MATLAB and Julia).
 
 - `ltratio_cdf`, `ltratio_pdf`, `ltratio_icdf`, `ltratio_mom`: the t-ratio, cases DK, DU, DT (zero or fixed start),
   SK, SU, ST (stationary start) and DG (GLS-detrended trend case);

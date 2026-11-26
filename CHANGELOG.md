@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The two papers: the package cites the lead paper, Bao, Broda and Kan, "The Exact Limiting Distribution of the
+  Dickey-Fuller t-Ratio with General Deterministic Terms" (SSRN 7745921), the paper of the general engine and of the
+  inversion formula on paths, and, for the classical engine and its representations, its companion, "Low-Rank
+  Representations of the Classical Dickey-Fuller Limits, with an Extension to Predictive Regressions" (SSRN 7725619,
+  the posting that carried the former title "... and Some Related Statistics"): the module docstring and the
+  references of the help, README, `CITATION.cff`, `.zenodo.json`, and the project URLs of `pyproject.toml`.
 - The rules of one evaluation (the C engine of dflimit-matlab, branch faster-rules, a port of DFLimit.jl fde1632 to
   9c71860): one evaluation of the general engine's inversion on paths (`dist_cdf`, `dist_pdf`, `dist_quantile`, and
   `ltratio_cdf`, `ltratio_pdf`, `ltratio_icdf` where the rule of the engines takes the general engine) takes the outer

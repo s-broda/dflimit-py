@@ -26,10 +26,11 @@ is too large for the quadrature, and the functions raise an error) followed by t
   DF-GLS tests): zero start, the line integral only, no moments."""
 
 METHODS_DOC = """\
-**Methods and ranges.** Three exact representations of the paper are implemented: the line integral representation
-(``method="single"``, or ``"line"``), the conditional integral representation (``"double"``, or ``"conditional"``) and,
-for a fixed start ``g0 != 0`` in cases DU and DT only, the contour integral representation (``"contour"``): a double
-integral from the inversion formula on paths around the singularities of the moment generating function,
+**Methods and ranges.** Three exact representations are implemented: the line integral representation of the
+companion paper (``method="single"``, or ``"line"``), its conditional integral representation (``"double"``, or
+``"conditional"``) and, for a fixed start ``g0 != 0`` in cases DU and DT only, the contour integral representation
+(``"contour"``): a double integral from the inversion formula on paths of the lead paper, around the singularities of
+the moment generating function,
 with the integral over v in closed form and the paths in s and t deformed, an explicit integrand where the line
 integral needs a noncentral kernel that is itself an integral.
 
@@ -101,8 +102,11 @@ ValueError
     If an argument is out of range (the engine's checks, with its message)."""
 
 REFERENCES_DOC = """\
-.. [1] Bao, Y., Broda, S. A. and Kan, R., "The Exact Limiting Distribution of the Dickey-Fuller t-Ratio and Some
-   Related Statistics", working paper."""
+.. [1] Bao, Y., Broda, S. A. and Kan, R., "The Exact Limiting Distribution of the Dickey-Fuller t-Ratio with General
+   Deterministic Terms", working paper, 2026, https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7745921.
+.. [2] Bao, Y., Broda, S. A. and Kan, R., "Low-Rank Representations of the Classical Dickey-Fuller Limits, with an
+   Extension to Predictive Regressions", working paper, 2026,
+   https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7725619."""
 
 
 @fill_doc(params=PARAMS_DOC, errors=ERRORS_DOC, cases=CASES_DOC, methods=METHODS_DOC, references=REFERENCES_DOC,
@@ -386,7 +390,7 @@ def ltratio_mom(p, cas, c=0, c0=0, g0=0, info=False, *, engine="auto", start=Non
 
     The moments E[tau^j], j = 1, ..., p, of the limit tau = (U - c0 V)/sqrt(V) of `ltratio_cdf`, as one-dimensional
     integrals of the joint moment generating function of (U, V) (the moments of the limit in the Supplementary
-    Material of the paper): E tau^j = Gamma(j/2)^(-1) int_0^inf s^(j/2-1) m_j(s) ds, m_j(s) the j-th derivative of the
+    Material of the companion paper): E tau^j = Gamma(j/2)^(-1) int_0^inf s^(j/2-1) m_j(s) ds, m_j(s) the j-th derivative of the
     moment generating function along its affine path. Not available for case DG.
 
     Parameters

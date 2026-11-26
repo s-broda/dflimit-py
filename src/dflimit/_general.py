@@ -751,7 +751,7 @@ def adfmax_quantile(D, p, c=0, *, x0=-2, tol=1e-10, start=None, gamma0=0):
     Examples
     --------
     >>> from dflimit import adfmax_quantile, trend
-    >>> adfmax_quantile(trend(0), 0.05)       # -2.43542 (the quantiles of the ADFmax statistic in the paper)
+    >>> adfmax_quantile(trend(0), 0.05)       # -2.43542 (the ADFmax quantiles of the companion paper)
     -2.4354...
     """
     return _quantiles(DET_ADF_Q, D, p, c, _opts(0.0, start, gamma0, None), dfl_num(x0, "x0"), dfl_num(tol, "tol"))

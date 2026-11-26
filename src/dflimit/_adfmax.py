@@ -17,7 +17,7 @@ ADFMAX_NOTES_DOC = """\
 ADFmax is the larger of the Dickey-Fuller t-ratios of the forward regression (y_t on y_{t-1}) and of the reverse
 regression (y_t on y_{t+1}), under phi = 1 + c/n, no drift. In the limit both regressions have the denominator V and
 the numerators U and -U - 1, so that ADFmax converges to (|R| - 1/2)/sqrt(V), R = U + 1/2, whose distribution is
-computed by the conditional integral (the ADFmax test of the paper).
+computed by the conditional integral (the ADFmax test of the companion paper).
 
 The cases are ``"DU"`` and ``"DT"`` (a constant, or a constant and a trend, zero start) and ``"SU"`` and ``"ST"``
 (the same with a stationary start, ``c <= -1e-4``). The values are accurate to about 1e-11."""
@@ -95,7 +95,7 @@ def adfmax_cdf(x, cas, c=0, info=False, *, engine="auto", start=None, g0=0):
     Examples
     --------
     >>> from dflimit import adfmax_cdf
-    >>> adfmax_cdf(-2.43542, "DU")       # 0.05 (the quantiles of the ADFmax statistic in the paper)
+    >>> adfmax_cdf(-2.43542, "DU")       # 0.05 (the quantiles of the ADFmax statistic in the companion paper)
     0.0499995786...
     >>> from dflimit import perron
     >>> adfmax_cdf(-3.0, perron("C", 0.3))   # ADFmax with a break in level and slope (the general engine)
@@ -250,7 +250,7 @@ def adfmax_icdf(p, cas, c=0, tol=1e-10, x0=-2, *, engine="auto", start=None, g0=
     Examples
     --------
     >>> from dflimit import adfmax_icdf
-    >>> adfmax_icdf(0.05, "DT")          # -3.11891 (the quantiles of the ADFmax statistic in the paper)
+    >>> adfmax_icdf(0.05, "DT")          # -3.11891 (the ADFmax quantiles of the companion paper)
     -3.11891085...
     >>> from dflimit import trend
     >>> adfmax_icdf(0.05, trend(2))      # with a quadratic trend
