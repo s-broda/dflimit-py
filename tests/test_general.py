@@ -12,7 +12,7 @@ import pytest
 
 import dflimit
 from dflimit import (Design, adfmax_cdf, adfmax_icdf, adfmax_pdf, adfmax_quantile, coef_cdf, coef_icdf, design_from_matrix, detrend_first, dist_cdf, dist_moments,
-                     dist_pdf, dist_quantile, fdesign, lin_cdf, lin_pdf, lm_cdf, lm_quantile, ltratio_cdf, ltratio_icdf, ltratio_lincdf,
+                     dist_pdf, dist_quantile, fdesign, lin_cdf, lin_pdf, lm_cdf, lm_power, lm_quantile, ltratio_cdf, ltratio_icdf, ltratio_lincdf,
                      ltratio_mom, ltratio_pdf, ltratio_region, ltrend, msb_cdf, perron, power_envelope, pt_cdf,
                      pt_envelope, pt_quantile, trend, v_cdf, v_pdf, coef_cdf_gp, coef_quantile, lin_quantile)
 from helpers import det_check, det_designs, det_label, det_lines, det_route, det_value
@@ -557,3 +557,30 @@ def test_above_the_unit_root():
     # (the default up to c = 20 is the moments from jets of Bao and Kan; method="engine" the classical engine here)
     assert np.allclose(ltratio_mom(2, "DU", 18, method="engine"), ltratio_mom(2, "DU", 18, engine="classical"), rtol=0, atol=0)
     assert np.allclose(ltratio_mom(2, "DU", 18), ltratio_mom(2, "DU", 18, engine="classical"), rtol=1e-9, atol=0)
+
+
+def test_the_lm_statistic_needs_the_constant_in_the_span():
+    # (November 26, 2026, as DFLimit.jl: the limit -1/(2 sqrt V) holds only for trend functions whose span contains the
+    # constant; r alone, r with e^r, a level dummy with r gave the limit of the linear trend) each function refuses e^r
+    # alone, r with e^r, r alone, a level dummy with r, no deterministic terms and e^r with e^-r, with the design's name
+    refused = [fdesign(lambda r: [math.exp(r)], name="e^r"), fdesign(lambda r: [r, math.exp(r)], name="r, e^r"),
+               fdesign(lambda r: [r], name="r"), fdesign(lambda r: [float(r > 0.4), r], [0.4], name="a level dummy and r"),
+               trend(-1), fdesign(lambda r: [math.exp(r), math.exp(-r)], name="e^r, e^-r")]
+    for D in refused:
+        msg = "span contains the constant.*; the design " + re.escape(D.name) + " does not contain it"
+        for call in (lambda: lm_cdf(D, -2.0), lambda: lm_quantile(D, 0.05), lambda: lm_power(D, -5.0)):
+            with pytest.raises(ValueError, match=msg):
+                call()
+    with pytest.raises(ValueError, match="span contains the constant"):
+        lm_cdf(refused[0], [-math.inf, math.inf, math.nan])          # (at non-finite points too)
+    # accepted: polynomial trends, breaks, the Legendre basis, functions of which only a combination is constant, a design
+    # from a matrix; and then the statistic is that of the span
+    tt = np.arange(1, 201) / 200
+    accepted = [trend(1), trend(3), perron("A", 0.5), perron("C", [0.3, 0.7]), ltrend(4),
+                fdesign(lambda r: [math.sin(math.pi * r) ** 2, math.cos(math.pi * r) ** 2, r]), fdesign(lambda r: [1 + r, r]),
+                design_from_matrix(np.column_stack([np.ones(200), tt, tt ** 2]))]
+    for D in accepted:
+        assert math.isfinite(lm_cdf(D, -2.0))
+    with pytest.raises(ValueError, match=r"J_0\(1\) does not vanish"):
+        lm_cdf(fdesign(lambda r: [1.0, math.sin(2 * math.pi * r), math.cos(2 * math.pi * r)]), -2.0)
+    assert abs(lm_cdf(fdesign(lambda r: [1 + r, r]), -3.0230) - lm_cdf(trend(1), -3.0230)) < 1e-10

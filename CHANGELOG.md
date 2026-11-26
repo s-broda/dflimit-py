@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- The C engine of dflimit-matlab 35a6799 (branch extensions), four repairs of DFLimit.jl (November 26, 2026):
+  `lm_cdf`, `lm_quantile` and `lm_power` raise a `ValueError` for a design whose span does not contain the constant,
+  with the message of DFLimit.jl and the design's name (the limit -1/(2 sqrt V) holds only then; r alone, r and e^r, a
+  level dummy with r gave the limit of the linear trend; decided on the values of the piecewise polynomial design at
+  Chebyshev points of each piece, exactly for polynomial trends, breaks and dummies, to 1e-6 for the interpolants of
+  `fdesign` and `design_from_matrix`); no NaN, hang or silently wrong value at a finite point (F and f were NaN at the
+  ulps above x = -500/4^k and for 0 < |x| below about 1e-162; far in the tails the fixed node layouts lost up to 2e-3 and
+  now serve -50 <= x <= 15 only; the general engine's paths at a tiny x < 0 hung or gave a NaN density);
+  `verified=True` with a zero start and c0 > 0 below c = -20 takes the line integral (the checked conditional integral
+  was off by 2e-8 at c = -100, c0 = 3, case DU); `method="lines"` or `"mixture"` without `rho` is refused with the
+  message of DFLimit.jl. Elsewhere the values are unchanged; the reference subsets of the tests did not move.
 - A sequence `c` without a volatility path raises a `ValueError` with the message of DFLimit.jl ("<function>: c is a
   vector (one value per regime): that needs a volatility path, vol = volpath(breaks, omega)"); it was a `TypeError`
   with a message of its own.

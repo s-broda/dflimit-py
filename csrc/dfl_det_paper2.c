@@ -429,9 +429,63 @@ int det_prep_lm(const dfl_design *D, det_prep **out, double *a1norm, char *err, 
     *a1norm = a1n; *out = P;
     return 0;
 }
+/* span_has_constant: whether the constant function lies in the span of the regressors of D (span_has_constant of
+ * DFDet.jl).  Every design is piecewise polynomial, so the question is decided on values: the regressors at 2 (deg + 1)
+ * Chebyshev points of the first kind inside each piece (each evaluated with its own piece's coefficients, so that no break
+ * is evaluated), the least squares fit of the constant 1 by them (Householder QR with column pivoting) and its largest
+ * residual, against tol (1e-6).  For polynomial trends, breaks and dummies the residual is zero to rounding; for a function
+ * design and a design from a matrix the check is made on their piecewise polynomial interpolants, so that a span that
+ * contains the constant through a combination (sin^2 and cos^2, say) gives a residual at their level, far below tol.  (The
+ * coefficients themselves are not compared: the high-order local Taylor coefficients of a function design carry rounding
+ * of up to 1e-2, the intercept with a sine and a cosine 1.3e-2, that cancels in the values.)  K = 0: no. */
+int det_span_has_constant(const dfl_design *D, double tol)
+{
+    int K = D->K, np = D->np, d1 = D->deg + 1, m = 2 * d1, n = np * m;
+    if (K <= 0) return 0;
+    double *X = malloc((size_t) n * K * sizeof(double)), *A = malloc((size_t) n * K * sizeof(double));
+    double *b = malloc(n * sizeof(double)), *rd = malloc(K * sizeof(double)), *cf = calloc(K, sizeof(double)), *beta = calloc(K, sizeof(double));
+    int *perm = malloc(K * sizeof(int));
+    for (int j = 0; j < np; j++) {
+        double a = D->br[j], e = D->br[j + 1], off = D->loc ? a : 0.0;
+        const double *Cj = D->C + (size_t) j * d1 * K;
+        for (int k = 0; k < m; k++) {
+            double u = (a + e) / 2 + (e - a) / 2 * cos(M_PI * (k + 0.5) / m) - off;
+            for (int i = 0; i < K; i++) {
+                double s = 0; for (int l = d1 - 1; l >= 0; l--) s = s * u + Cj[l + (size_t) i * d1];
+                X[(size_t) j * m + k + (size_t) i * n] = s;
+            }
+        }
+    }
+    memcpy(A, X, (size_t) n * K * sizeof(double));
+    det_qrp(n, K, A, perm, rd);
+    for (int i = 0; i < n; i++) b[i] = 1.0;
+    int kk = K < n ? K : n, rk = 0;
+    for (int j = 0; j < kk; j++) {          /* Q' 1, the Householder vectors below the diagonal of A (v_j = A[j:n, j]) */
+        double vn = 0, d = 0;
+        for (int i = j; i < n; i++) { vn += A[i + (size_t) j * n] * A[i + (size_t) j * n]; d += A[i + (size_t) j * n] * b[i]; }
+        if (vn == 0) continue;
+        d = 2 * d / vn; for (int i = j; i < n; i++) b[i] -= d * A[i + (size_t) j * n];
+    }
+    /* the numerical rank (the diagonal of R against kk eps |R_11|, as the pivoted QR solve of Julia), then R c = (Q' 1)_1..rk */
+    double rtol = kk * DBL_EPSILON * fabs(rd[0]);
+    while (rk < kk && fabs(rd[rk]) > rtol) rk++;
+    for (int j = rk - 1; j >= 0; j--) {
+        double s = b[j]; for (int l = j + 1; l < rk; l++) s -= A[j + (size_t) l * n] * cf[l];
+        cf[j] = s / rd[j];
+    }
+    for (int j = 0; j < rk; j++) beta[perm[j]] = cf[j];
+    double res = 0;
+    for (int i = 0; i < n; i++) { double s = -1.0; for (int l = 0; l < K; l++) s += X[i + (size_t) l * n] * beta[l]; res = dmax(res, fabs(s)); }
+    free(X); free(A); free(b); free(rd); free(cf); free(beta); free(perm);
+    return res <= tol;
+}
 static int lmprep(const dfl_design *D, det_prep **P, char *err, size_t errlen)
 {
     double a1;
+    /* (the limit -1/(2 sqrt V) of prep_lm holds only for trend functions whose span contains the constant: the LM regression
+     * estimates the level from the first observation; r alone, r with e^r, a level dummy with r gave the limit of the
+     * linear trend) */
+    if (!det_span_has_constant(D, 1e-6)) { snprintf(err, errlen, "%s does not contain it", DET_LM_CONST_MSG); return 1; }
     if (det_prep_lm(D, P, &a1, err, errlen)) return 1;
     if (!(a1 < 1e-9)) { det_prep_free(*P); snprintf(err, errlen, "the LM statistic: the law of -1/(2 sqrt V) needs a linear trend among the trend functions (J_0(1) does not vanish)"); return 1; }
     return 0;

@@ -322,7 +322,9 @@ int dfl_det_dist(int kind, const dfl_design *D, int n, const double *x, double c
     det_warn_clear();
     if (kind != 1 && kind != 2) { snprintf(err, errlen, "kind must be 1 (density) or 2 (distribution function)"); return 1; }
     if (o->vol || o->rho != 1) return ext_dist(kind, D, n, x, c, o, out, err, errlen);
-    if (o->method == DFL_DET_LINES || o->method == DFL_DET_MIXTURE) { snprintf(err, errlen, "%s: method 'lines' and 'mixture' are the methods of a normal component (rho != 1); without it the method is 'auto', 'line' or 'paths'", kind == 2 ? "dist_cdf" : "dist_pdf"); return 1; }
+    /* (the methods of a normal component without one: the refusal and the message of DFLimit.jl, whose dist_cdf, dist_pdf
+     * and dist_quantile take them for any other method than these three) */
+    if (o->method == DFL_DET_LINES || o->method == DFL_DET_MIXTURE) { snprintf(err, errlen, "%s", DET_LINE_METHOD_MSG); return 1; }
     if (check_common(D, c, o, kind == 2 ? "the t-ratio (dist_cdf)" : "the t-ratio (dist_pdf)", err, errlen)) return 1;
     if (o->rule < DFL_RULE_AUTO || o->rule > DFL_RULE_FINESTEP) { snprintf(err, errlen, "%s", DET_RULE_MSG); return 1; }
     dfl_prov *pv;
@@ -463,7 +465,7 @@ int dfl_det_quantile(const dfl_design *D, int n, const double *p, double c, doub
         if (!(tol > 0)) tol = 1e-9;
         return ext_quantile(D, n, p, c, x0, tol, o, q, err, errlen);
     }
-    if (o->method == DFL_DET_LINES || o->method == DFL_DET_MIXTURE) { snprintf(err, errlen, "dist_quantile: method 'lines' and 'mixture' are the methods of a normal component (rho != 1); without it the method is 'auto', 'line' or 'paths'"); return 1; }
+    if (o->method == DFL_DET_LINES || o->method == DFL_DET_MIXTURE) { snprintf(err, errlen, "%s", DET_LINE_METHOD_MSG); return 1; }   /* (as dfl_det_dist) */
     if (check_common(D, c, o, "the quantiles of the t-ratio (dist_quantile)", err, errlen)) return 1;
     for (int k = 0; k < n; k++) if (!(p[k] > 0 && p[k] < 1)) { snprintf(err, errlen, "dist_quantile: p must lie in (0, 1)"); return 1; }
     if (isnan(x0)) x0 = -2.0;

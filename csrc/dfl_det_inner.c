@@ -31,7 +31,9 @@ static void ctr_h(cdouble z, cdouble *h)
         a0 = cmul(a0, cscale(r0, w2)); a1 = cmul(a1, cscale(r1, w2)); a2 = cmul(a2, R2);
         s0 = cadd(s0, a0); s1 = cadd(s1, a1); s2 = cadd(s2, a2);
         j++;
-        if (cabs2(a0) < 1e-34 * cabs2(s0) && cabs2(a2) < 1e-34 * cabs2(s2)) break;
+        /* (<=: for |z| beyond about 1e102 the terms a2 and with them s2 underflow to zero, and with < the loop never ended:
+         * the t-ratio at x = -1e-100 by the paths, whose parabola has its root at b = -1/(2x)) */
+        if (cabs2(a0) <= 1e-34 * cabs2(s0) && cabs2(a2) <= 1e-34 * cabs2(s2)) break;
     }
     h[0] = s0; h[1] = s1; h[2] = s2;
 }
@@ -54,13 +56,17 @@ static void ctr_h3(cdouble z, cdouble *h)
         a0 = cmul(a0, cscale(r0, w2)); a1 = cmul(a1, cscale(r1, w2)); a2 = cmul(a2, cscale(r2, w2)); a3 = cmul(a3, R3);
         s0 = cadd(s0, a0); s1 = cadd(s1, a1); s2 = cadd(s2, a2); s3 = cadd(s3, a3);
         j++;
-        if (cabs2(a0) < 1e-34 * cabs2(s0) && cabs2(a3) < 1e-34 * cabs2(s3)) break;
+        if (cabs2(a0) <= 1e-34 * cabs2(s0) && cabs2(a3) <= 1e-34 * cabs2(s3)) break;      /* (<=: as in ctr_h) */
     }
     h[0] = s0; h[1] = s1; h[2] = s2; h[3] = s3;
 }
+static inline bool ciszero(cdouble z) { return creal(z) == 0 && cimag(z) == 0; }
 static int ctr_rend(double a, cdouble sa, cdouble beta, cdouble Ea, cdouble *R)
 {
     cdouble z = cadd(cscale(a, sa), cdiv(beta, cscale(2, sa))), g[3]; int n;
+    /* (an end so far out that e^{-t a^2 - s X(a)} underflows to zero, the root a = -1/(2x) of X at a tiny x < 0: its
+     * remainders are zero, and a^2 = Inf times Ea = 0 gave NaN in the density) */
+    if (ciszero(Ea)) { R[0] = R[1] = R[2] = DZERO; return creal(z) >= 0 ? 0 : 1; }
     if (creal(z) >= 0) { n = 0; ctr_h(z, g); }
     else { cdouble hh[3]; n = 1; ctr_h(cneg(z), hh); g[0] = cneg(hh[0]); g[1] = hh[1]; g[2] = cneg(hh[2]); }
     cdouble i1 = cinv(sa), i2 = cmul(i1, i1), i3 = cmul(i2, i1);
@@ -72,6 +78,7 @@ static int ctr_rend(double a, cdouble sa, cdouble beta, cdouble Ea, cdouble *R)
 static int ctr_rend3(double a, cdouble sa, cdouble beta, cdouble Ea, cdouble *R)
 {
     cdouble z = cadd(cscale(a, sa), cdiv(beta, cscale(2, sa))), g[4]; int n;
+    if (ciszero(Ea)) { R[0] = R[1] = R[2] = R[3] = DZERO; return creal(z) >= 0 ? 0 : 1; }     /* (as ctr_rend) */
     if (creal(z) >= 0) { n = 0; ctr_h3(z, g); }
     else { cdouble hh[4]; n = 1; ctr_h3(cneg(z), hh); g[0] = cneg(hh[0]); g[1] = hh[1]; g[2] = cneg(hh[2]); g[3] = hh[3]; }
     cdouble i1 = cinv(sa), i2 = cmul(i1, i1), i3 = cmul(i2, i1), i4 = cmul(i3, i1);
@@ -140,17 +147,24 @@ static void ctr_moments_pre(cdouble t, cdouble s, double c0, double q, double A,
         double a = pc->a[k], b = pc->b[k];
         cdouble Ea = a == 0 ? eA : expX(t, s, c0, q, A, a);
         cdouble z = cadd(cscale(a, sa), hb);
-        if (creal(z) >= 0) ctr_h(z, g); else { ctr_h(cneg(z), hh); g[0] = cneg(hh[0]); g[1] = hh[1]; g[2] = cneg(hh[2]); nf++; }
-        M0 = cadd(M0, cmul(cmul(Ea, i1), g[0]));
-        M1 = cadd(M1, cmul(Ea, cadd(cmul(cscale(a, i1), g[0]), cmul(i2, g[1]))));
-        M2 = cadd(M2, cmul(Ea, cadd(cadd(cmul(cscale(a * a, i1), g[0]), cmul(cscale(2 * a, i2), g[1])), cmul(i3, g[2]))));
+        /* (an end where the exponential underflows to zero contributes nothing but its flag: as ctr_rend) */
+        if (ciszero(Ea)) { if (creal(z) < 0) nf++; }
+        else {
+            if (creal(z) >= 0) ctr_h(z, g); else { ctr_h(cneg(z), hh); g[0] = cneg(hh[0]); g[1] = hh[1]; g[2] = cneg(hh[2]); nf++; }
+            M0 = cadd(M0, cmul(cmul(Ea, i1), g[0]));
+            M1 = cadd(M1, cmul(Ea, cadd(cmul(cscale(a, i1), g[0]), cmul(i2, g[1]))));
+            M2 = cadd(M2, cmul(Ea, cadd(cadd(cmul(cscale(a * a, i1), g[0]), cmul(cscale(2 * a, i2), g[1])), cmul(i3, g[2]))));
+        }
         if (isfinite(b)) {
             cdouble Eb = expX(t, s, c0, q, A, b);
             z = cadd(cscale(b, sa), hb);
-            if (creal(z) >= 0) ctr_h(z, g); else { ctr_h(cneg(z), hh); g[0] = cneg(hh[0]); g[1] = hh[1]; g[2] = cneg(hh[2]); nf--; }
-            M0 = csub(M0, cmul(cmul(Eb, i1), g[0]));
-            M1 = csub(M1, cmul(Eb, cadd(cmul(cscale(b, i1), g[0]), cmul(i2, g[1]))));
-            M2 = csub(M2, cmul(Eb, cadd(cadd(cmul(cscale(b * b, i1), g[0]), cmul(cscale(2 * b, i2), g[1])), cmul(i3, g[2]))));
+            if (ciszero(Eb)) { if (creal(z) < 0) nf--; }
+            else {
+                if (creal(z) >= 0) ctr_h(z, g); else { ctr_h(cneg(z), hh); g[0] = cneg(hh[0]); g[1] = hh[1]; g[2] = cneg(hh[2]); nf--; }
+                M0 = csub(M0, cmul(cmul(Eb, i1), g[0]));
+                M1 = csub(M1, cmul(Eb, cadd(cmul(cscale(b, i1), g[0]), cmul(i2, g[1]))));
+                M2 = csub(M2, cmul(Eb, cadd(cadd(cmul(cscale(b * b, i1), g[0]), cmul(cscale(2 * b, i2), g[1])), cmul(i3, g[2]))));
+            }
         }
     }
     if (nf != 0) {

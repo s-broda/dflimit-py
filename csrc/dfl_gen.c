@@ -1123,7 +1123,7 @@ static void ctr_h(cdouble z, cdouble *h)
         a0 = cmul(a0, r0); a1 = cmul(a1, r1); a2 = cmul(a2, r2);
         s0 = cadd(s0, a0); s1 = cadd(s1, a1); s2 = cadd(s2, a2);
         j++;
-        if (cabs(a0) < 1e-17 * cabs(s0) && cabs(a2) < 1e-17 * cabs(s2)) break;
+        if (cabs(a0) <= 1e-17 * cabs(s0) && cabs(a2) <= 1e-17 * cabs(s2)) break;    /* (<=: beyond |z| ~ 1e102 a2 and s2 underflow to 0) */
     }
     h[0] = s0; h[1] = s1; h[2] = s2;
 }

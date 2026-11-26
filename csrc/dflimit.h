@@ -120,15 +120,25 @@ double dfl_prov_tau(void);
 static inline int dfl_kern(int model, bool stat) { return model == DFL_MODEL_PROV ? dfl_prov_kern() : ((model == 1 || model == 4) && !stat) ? 1 : 2; }
 static inline double dfl_wmaxc_m(int model, double c) { return model == DFL_MODEL_PROV ? dfl_prov_wend() : dfl_wmaxc(c); }
 static inline double dfl_hufac(double c) { return c >= -20 ? 1.0 : 20 / (-c); }
+/* b, or L where b falls short of L by at most 1e-9 L: the end of a panel in the geometric partitions of the line integral
+   (geopanels of the fixed layouts, rayint, edgehead, the two pieces of the smooth parts of inner_cdf and inner_density), so
+   that no panel a few ulps long is left at L, whose nodes round to L itself (at the support edge X = 0 of the kernel, where
+   X^{-1/2} is infinite, NaN: case DK at c = 0, x = -7.8124999999999991; nosliver of DFExact.jl) */
+static inline double dfl_nosliver(double b, double L) { return (b < L && L - b <= 1e-9 * L) ? L : b; }
 /* the number of Filon panels on [a, b], a panel of the geometric partition of an edge part with the frequency y: panels of at
    most 25/y up to w = DFL_FILONW/y; for c < -20 at most half the period 4 pi |c| of the factor e^{i w E V}, E V ~ 1/(2|c|), of the
    edge integrand, which panels of 25/y ~ 50|c| span several times (unchanged on [-20, inf); filonpanels in DFExact.jl) */
 extern double DFL_FILONW;
 static inline int dfl_filonm(double a, double b, double y, double c) { int m = b <= DFL_FILONW / y ? (int) ceil((b - a) * y / 25) : 1; if (c < -20) { int m2 = (int) ceil((b - a) / (2 * M_PI * (-c))); if (m2 > m) m = m2; } return m; }
 /* method 0 (automatic) uses the double integral at all (for the points of the rule or for the tails) except with a stationary
-   start for c < -50, where the double integral flags most points and costs 10-100 times more, and with c0 != 0 and a zero
-   start for c < -100, where the density of case DK is off by up to 1e-9 at some points without a flag (autodouble in DFExact.jl) */
-static inline bool dfl_autodouble(double c, double c0, double g0, bool stat) { return !(stat && c < -50) && !(c0 != 0 && g0 == 0 && c < -100); }
+   start for c < -50, where the double integral flags most points and costs 10-100 times more, with c0 != 0 and a zero
+   start for c < -100, where the density of case DK is off by up to 1e-9 at some points without a flag, and with c0 > 0 and
+   a zero start for c < DFL_DOUBLE_C0POS_CMAX = -20, where the checked conditional integral was off by up to 1e-5 in cases
+   DU, DT and verified = 1 returned such a value at c = -100, c0 = 3 (2.1e-8 in case DU, 4.2e-8 in case DT; November 26,
+   2026); there the single integral serves alone, with verified = 1 too (autodouble, DOUBLE_C0POS_CMAX in DFExact.jl) */
+#define DFL_DOUBLE_C0POS_CMAX (-20.0)
+static inline bool dfl_autodouble(double c, double c0, double g0, bool stat) { return !(stat && c < -50) && !(c0 != 0 && g0 == 0 && c < -100) &&
+    !(c0 > 0 && g0 == 0 && !stat && c < DFL_DOUBLE_C0POS_CMAX); }
 /* the range of c: below DFL_CMIN the user-level functions (dfl_single, dfl_dist, dfl_icdf, dfl_moments) return an error with
    DFL_CMIN_MSG (the same check and message as ltratio_args in DFExact.jl and LTRATIO_ARGS) */
 #define DFL_CMIN (-550.0)
@@ -161,6 +171,11 @@ void dfl_batch_release(const dfl_batch *B);
 void dfl_batch_empty_cache(void);
 void dfl_batch_values(const dfl_batch *B, int part, int n, const cdouble *t, const cdouble *s1, const cdouble *s2, const cdouble *M0, cdouble *out);
 int dfl_usebatch(int batched, double c, double q, double tau);
+/* the range of x that the fixed layouts serve (BATCH_QMIN, BATCH_QMAX of DFExact.jl): far in the tails they lose accuracy
+   (case DK at c = 0: F = 1 + 1.3e-6 at x = 31.25, 1 + 2.1e-3 at 125, -2.5e-3 at -500; case DU at c = -10: 4.9e-7 at -250),
+   where the adaptive rules hold */
+#define DFL_BATCH_QMIN (-50.0)
+#define DFL_BATCH_QMAX 15.0
 extern int DFL_BATCHK0;
 /* the caps (e1, r1) of the first pieces of the K_0 kernel's edge segment and ray X < 0 (k0first of DFExact.jl): for c < -20,
  * and for a provider wherever |s_1(tau)| exceeds DFL_K0FIRST_S1, 1/b and 1e-2/|s_1| (b = (s_2 - s_1)/2, s_1 at tau);
@@ -387,6 +402,8 @@ int dfl_check_args(int model, double c, double c0, double g0, bool stat, char *e
  * DFL_BOUND_PATH) with a message that names the arguments (dfl_bound_msg; other errors return 1).  With
  * dopt->verified = 1 a point whose fallback is the line integral keeps its flagged value there, with a warning. */
 int dfl_automethod(int model, double c, double c0, double g0, bool stat, double x);
+/* the method of method 0 with verified = 1 (automethod_verified of DFExact.jl): 1, 2 or 3 as above */
+int dfl_automethod_verified(int model, double c, double c0, double g0, bool stat, double x);
 /* the regimes in which the one-evaluation default (verified = 0) is known to be brittle, decided from the parameters alone
  * (no computed diagnostics, so that they cost nothing): a message naming the regime and suggesting verified = true, or NULL;
  * method as in dfl_dist (the method requested, 0 automatic).  The user-level wrappers (R, Python, the MEX file) give it as
@@ -597,7 +614,10 @@ int dfl_det_region(const dfl_design *D, int type, const double *par, double c, c
 /* the companions: the point-optimal statistic against cbar and its envelope (pt_cdf, pt_pdf, pt_quantile, pt_power,
  * pt_envelope; zero start; by default the single inversion of Bao and Kan up to c = DFL_PT_INV_CMAX, the inversion of
  * Gil-Pelaez on a grid of N steps to umax beyond or where N or umax is given (0 for 60000, 4000)), the LM statistic (lm_cdf,
- * lm_quantile, lm_power), MZ_alpha and MSB with the data GLS-detrended at gls (mza_cdf, mza_quantile, msb_cdf, msb_quantile) */
+ * lm_quantile, lm_power: for trend functions whose span contains the constant and a linear trend, an error otherwise; the
+ * span is decided on the values of the piecewise polynomial design, exactly for polynomial trends, breaks and dummies, to
+ * 1e-6 for the interpolants of a function design and a design from a matrix), MZ_alpha and MSB with the data GLS-detrended
+ * at gls (mza_cdf, mza_quantile, msb_cdf, msb_quantile) */
 int dfl_det_pt(int kind, const dfl_design *D, int n, const double *q, double cbar, double c, int N, double umax, double *out, char *err, size_t errlen);
 int dfl_det_pt_quantile(const dfl_design *D, double p, double cbar, int N, double umax, double *q, char *err, size_t errlen);
 int dfl_det_pt_power(const dfl_design *D, double cbar, double c, double level, int N, double umax, double *b, double *power, char *err, size_t errlen);

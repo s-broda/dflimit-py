@@ -47,10 +47,10 @@ static int nodes(int n, double osc, double L)
 }
 static cdouble rayint(fn_t f, const void *ctx, double R, double l, int n1, int n2, int p, double osc)
 {
-    double a = fmin(R, 8 * l);
+    double a = dfl_nosliver(fmin(R, 8 * l), R);
     cdouble acc = glsum(f, ctx, 0, a, n1, p);
-    while (a < R) {
-        double b = fmin(R, 4 * a);
+    while (a < R) {                                  /* geometric panels of ratio 4 (no sliver at R: dfl_nosliver) */
+        double b = dfl_nosliver(fmin(R, 4 * a), R);
         acc = cadd(acc, glsum(f, ctx, a, b, nodes(n2, osc, b - a), 1));
         a = b;
     }
@@ -146,7 +146,7 @@ static cdouble edgehead(fn_t f, const void *ctx, double a, double e1)
 {
     if (!(e1 > 0 && e1 < a)) return glsum(f, ctx, 0, a, 48, 4);
     cdouble acc = glsum(f, ctx, 0, e1, 48, 4); double lo = e1;
-    while (lo < a) { double hi = fmin(a, 4 * lo); acc = cadd(acc, glsum(f, ctx, lo, hi, 48, 1)); lo = hi; }
+    while (lo < a) { double hi = dfl_nosliver(fmin(a, 4 * lo), a); acc = cadd(acc, glsum(f, ctx, lo, hi, 48, 1)); lo = hi; }
     return acc;
 }
 static void inner_density(int kern, cdouble tj, double q, cdouble s1, cdouble s2, int part, double e1, cdouble *Is, cdouble *Ie)
@@ -171,7 +171,7 @@ static void inner_density(int kern, cdouble tj, double q, cdouble s1, cdouble s2
     c.sg = cimag(tj) >= 0 ? 1.0 : -1.0;
     c.kap = KAPPA / (c.vs / 2); c.H = 1.5 / c.kap;
     if (part != 2) {
-        double r1 = c.w > 0 ? fmin(c.vs, sqrt(EXPO / (1.9 * c.w))) : c.vs;
+        double r1 = dfl_nosliver(c.w > 0 ? fmin(c.vs, sqrt(EXPO / (1.9 * c.w))) : c.vs, c.vs);
         *Is = glsum(dens_fs, &c, 0, r1, 64, 1);
         if (r1 < c.vs) *Is = cadd(*Is, glsum(dens_fs, &c, r1, c.vs, 48, 1));
     }
@@ -194,9 +194,11 @@ static cdouble cdf_const_pos(double r, const void *v) { const ictx *c = v; cdoub
 static cdouble cdf_const_X(double X, const void *v) { const ictx *c = v; return phi_pos(c->kern, CPX(X, 0), c->s1, c->s2); }
 static cdouble cdf_const_neg(double r, const void *v) { const ictx *c = v; cdouble e1 = c->e;
     return cmul(phi_neg(c->kern, cscale(-r, e1), c->s1, c->s2), e1); }
-static cdouble cdf_ray(double r, const void *v) { const ictx *c = v; double sq = c->q > 0 ? 1 : -1;
+/* (the Gaussian factor e^{-|t| (r/q)^2} with r/q of order one: for |q| below about 1e-154, where the nodes r are of the order
+ * of q, r^2 and q^2 underflowed, to 0/0 = NaN below 1e-162) */
+static cdouble cdf_ray(double r, const void *v) { const ictx *c = v; double sq = c->q > 0 ? 1 : -1, rq = r / c->q;
     cdouble X = cadd(CPX(0.5, 0), cscale(sq * r, c->e));
-    return cscale(sq * exp(-c->at * r * r / (c->q * c->q)), cmul(phi_pos(c->kern, X, c->s1, c->s2), c->e)); }
+    return cscale(sq * exp(-c->at * rq * rq), cmul(phi_pos(c->kern, X, c->s1, c->s2), c->e)); }
 static cdouble cdf_A(cdouble x, const void *v) { const ictx *c = v; return cmul(phi_alg(c->kern, cadd(CPX(0.5, 0), x), c->s1, c->s2), cexp(cscale(-0.5, c->sd))); }
 static cdouble cdf_path(double Xr, const ictx *c)
 {
@@ -252,7 +254,7 @@ static void inner_cdf(int kern, cdouble tj, double q, cdouble s1, cdouble s2, cd
     c.sg = cimag(tj) >= 0 ? 1.0 : -1.0;
     c.kap = KAPPA / 0.25; c.H = 1.5 / c.kap;
     if (part != 2) {
-        double ep = c.w > 0 ? fmin(0.5, fabs(q) * sqrt(EXPO / (1.9 * c.w))) : 0.5;
+        double ep = dfl_nosliver(c.w > 0 ? fmin(0.5, fabs(q) * sqrt(EXPO / (1.9 * c.w))) : 0.5, 0.5);
         *Is = cadd(*Is, glsum(cdf_fs, &c, 0, ep, 64, 1));
         if (ep < 0.5) *Is = cadd(*Is, glsum(cdf_fs, &c, ep, 0.5, 48, 1));
     }

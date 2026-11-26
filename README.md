@@ -125,7 +125,8 @@ its distribution function is `coef_cdf` with the design), `local_power`, `lin_cd
 `v_cdf`, `v_pdf` (the linear form U - aV and the law of V), `adfmax_quantile`, `region_prob` (lines and parabolas),
 and the companions `pt_cdf`, `pt_pdf`, `pt_quantile`, `pt_power`, `pt_envelope` (the point-optimal statistic of
 Elliott, Rothenberg and Stock and the power envelope of any design), `lm_cdf`, `lm_quantile`, `lm_power` (the LM
-statistic of Schmidt and Phillips), `mza_cdf`, `mza_quantile` (MZ_alpha) and `msb_cdf`, `msb_quantile` (MSB), with
+statistic of Schmidt and Phillips; for trend functions whose span contains the constant and a linear trend, a
+`ValueError` otherwise), `mza_cdf`, `mza_quantile` (MZ_alpha) and `msb_cdf`, `msb_quantile` (MSB), with
 the options `c0`, `start`, `gamma0` (the fixed start), `gls`, `method` (the t-ratio) and, for the distribution
 functions and densities, `verified` (the checked computation: two evaluations on different paths, a third where they differ by more than
 1e-9) and `rule` (the rule of one evaluation of the t-ratio's paths: `"auto"`, the default, the thinner rules of

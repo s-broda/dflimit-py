@@ -139,10 +139,20 @@ RULE_DOC = """rule : {"auto", "present", "thin", "inner", "outer", "fine", "fine
 _NOOPTS = (0.0, 0, 0.0, math.nan, 0)
 
 
+def _dname(m, D):
+    """The name of the design in the engine's messages that refer to it (the engine has no names: "the design does not
+    contain it" of the LM statistic's refusal becomes "the design <name> does not contain it", as in DFLimit.jl)."""
+    return m.replace("; the design does not contain it", f"; the design {D.name} does not contain it")
+
+
 def _call(op, D, a, c, opts, *par):
     """The engine's values at the flat points a (one call)."""
-    out, w = _engine.det(op, _design(D), np.ascontiguousarray(a, dtype=np.float64).tobytes(), dfl_num(c, "c"), opts,
-                         *[float(p) for p in par])
+    Dt = _design(D)
+    try:
+        out, w = _engine.det(op, Dt, np.ascontiguousarray(a, dtype=np.float64).tobytes(), dfl_num(c, "c"), opts,
+                             *[float(p) for p in par])
+    except ValueError as e:
+        raise ValueError(_dname(str(e), D)) from None
     warn_lines(w)
     return f64(out)
 
@@ -1080,11 +1090,15 @@ def lm_cdf(D, x, c=0):
     statistic converges to -1/(2 sqrt V) for every c, so that F(x) = P(V <= 1/(4 x^2)) for x < 0 and 1 for x >= 0
     (one inversion of the transform of V, on the path of V alone, a hyperbola above the unit root). ``c`` must be at
     most 10 (above, the inversion of its V is not accurate; a ``ValueError``), as for `lm_quantile` and `lm_power`.
+    The limit holds only for trend functions whose span contains the constant (the LM regression estimates the level
+    from the first observation): for any other design, e^r alone or r alone, say, the three functions raise a
+    ``ValueError`` (decided on the values of the piecewise polynomial design at Chebyshev points of each piece: exactly
+    for polynomial trends, breaks and dummies, to 1e-6 for the interpolants of `fdesign` and `design_from_matrix`).
 
     Parameters
     ----------
     D : Design
-        The design (a linear trend among its trend functions).
+        The design (a linear trend among its trend functions, the constant in their span).
     x : array_like
         The points. ``-inf`` and ``nan`` give 0 and ``nan``.
     c : float, default 0
@@ -1114,7 +1128,7 @@ def lm_quantile(D, p, *, c=0):
     Parameters
     ----------
     D : Design
-        The design (a linear trend among its trend functions).
+        The design (a linear trend among its trend functions, the constant in their span).
     p : array_like
         The probabilities, in (0, 1).
     c : float, default 0
@@ -1140,7 +1154,7 @@ def lm_power(D, cs, *, level=0.05):
     Parameters
     ----------
     D : Design
-        The design (a linear trend among its trend functions).
+        The design (a linear trend among its trend functions, the constant in their span).
     cs : array_like
         The local alternatives, at most 10.
     level : float, default 0.05

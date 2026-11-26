@@ -95,7 +95,8 @@ int dfl_single(int kind, int n, const double *x, int model, double c, double c0,
  * models 2, 3 the contour integral (3); the single integral at c0 = 0 and with a fixed start in model 1; with c0 != 0 and a
  * zero start the double integral, except for c0 > 0 at x >= 0, where X(v) has no positive root and the single integral has
  * no breakpoint; where dfl_autodouble excludes the double integral (a stationary start at c < -50, c0 != 0 with a zero
- * start at c < -100) the single integral alone (dfl_dist then recomputes the tails and replaces flagged values) */
+ * start at c < -100, c0 > 0 with a zero start at c < -20) the single integral alone, without the recomputation of the
+ * tails (elsewhere dfl_dist recomputes the tails and replaces flagged values) */
 static int automethod_verified(int model, double c, double c0, double g0, bool stat, double x)
 {
     if ((model == 2 || model == 3) && g0 != 0 && !stat) return 3;            /* a fixed start in cases DU, DT: the contour integral */
@@ -127,6 +128,10 @@ static int automethod_one(int model, double c, double c0, double g0, bool stat, 
 int dfl_automethod(int model, double c, double c0, double g0, bool stat, double x)
 {
     return automethod_one(model, c, c0, g0, stat, x);
+}
+int dfl_automethod_verified(int model, double c, double c0, double g0, bool stat, double x)
+{
+    return automethod_verified(model, c, c0, g0, stat, x);
 }
 
 /* the method: 0..3, the double integral not in model 4, the contour integral for a fixed start in models 2, 3 only */

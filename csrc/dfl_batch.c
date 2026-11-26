@@ -5,7 +5,8 @@
  * cached.  The layouts are geometric panels (ratio 4) that resolve every scale that occurs along the line, with
  * Gauss-Legendre nodes per panel (32 for the chi-square kernel, 48 for the K_0 kernel's bump and edge segment, 32 for its
  * rays); nodes whose exponent is below -45 are skipped (the nodes are ordered from the dominant end).  The exponentials of
- * all nodes of a point are taken at once (dfl_vmath.h).  The layouts serve c <= 0 and |q| above about 0.034 (usebatch: for
+ * all nodes of a point are taken at once (dfl_vmath.h).  The layouts serve c <= 0, -50 <= q <= 15 (the adaptive rules far
+ * in the tails beyond, where the layouts lost up to 2e-3) and |q| above about 0.034 (usebatch: for
  * smaller |q| the bulge of the segment path lets the Gaussian factor grow and the segment integral cancels; the adaptive
  * rules then take the ray from X = 1/2), the chi-square kernel (no deterministic terms, zero start) at tau = 1, the K_0
  * kernel's density at any tau and its distribution function at tau = 1 (its constant part, M_0 less the ray over X > 1/2
@@ -53,13 +54,18 @@ static pts_t geopanels(double a1, double L, int n, int p)
 {
     pts_t P = {0};
     const double *gw; const double *u = dfl_rule(n, &gw);
+    a1 = dfl_nosliver(a1, L);                       /* (no sliver after the first panel either) */
     for (int k = 0; k < n; k++) {
         if (p == 1) pts_push(&P, a1 * u[k], a1 * gw[k]);
         else pts_push(&P, a1 * pow(u[k], p), a1 * p * pow(u[k], p - 1) * gw[k]);
     }
     double a = a1;
     while (a < L) {
-        double b = fmin(L, RATIO * a);
+        /* (no sliver at L, dfl_nosliver: in the smooth part of the distribution function's layouts, in the variable
+         * y = 1/2 - X, L is the support edge X = 0 of the kernel, where 0.001 |x| 4^3 fell an ulp short of 1/2 at
+         * x = -7.8124999999999991 in case DK, and the nodes of the panel left there gave X^{-1/2} = Inf times a vanishing
+         * weight, NaN) */
+        double b = dfl_nosliver(fmin(L, RATIO * a), L);
         for (int k = 0; k < n; k++) pts_push(&P, a + (b - a) * u[k], (b - a) * gw[k]);
         a = b;
     }
@@ -276,13 +282,18 @@ const dfl_batch *dfl_batch_get(int kern, int kind, double q, double tau, double 
     dfl_unlock(&BLOCK);
     return B;
 }
-/* the rule: the fixed layouts serve c <= 0 and |q| above about 0.034 (3 tau / (64 q^2) <= 40) */
+/* the rule: the fixed layouts serve c <= 0 and |q| above about 0.034 (3 tau / (64 q^2) <= 40), and DFL_BATCH_QMIN <= q <=
+ * DFL_BATCH_QMAX: far in the tails they lose accuracy, where the adaptive rules hold (absolute errors of the distribution
+ * function, November 26, 2026, against the adaptive rules, whose values there are within 2e-14 of 0 or 1 in case DK: in the
+ * upper tail of case DK near the unit root by 1e-11 at x = 20, 8.7e-7 at 30, 7.2e-5 at 40 and 2.1e-3 at 125, F above 1,
+ * which the range check refused; in its lower tail by 6e-10 at x = -250 at c = 0 and 2.9e-7 at -100 at c = -480; in case
+ * DU at c = -10 by 1.1e-8 at -150 and 4.9e-7 at -250; usebatch of DFExact.jl) */
 int dfl_usebatch(int batched, double c, double q, double tau)
 {
 #ifdef DFL_NO_BATCH
     (void) batched; (void) c; (void) q; (void) tau; return 0;      /* (a build without the layouts, for checking) */
 #else
-    return batched && c <= 0 && !(3 * tau / (64 * q * q) > 40);
+    return batched && c <= 0 && !(3 * tau / (64 * q * q) > 40) && DFL_BATCH_QMIN <= q && q <= DFL_BATCH_QMAX;
 #endif
 }
 

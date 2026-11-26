@@ -95,6 +95,12 @@ def test_coverage():
     (lambda: dist_cdf(trend(1), -2, -5, rho=0.5, gls=-13.5), "GLS detrending"),
     (lambda: dist_cdf(trend(0), -2, -5, rho=0.5, gamma0=1, method="lines"), "zero or a stationary start"),
     (lambda: dist_cdf(trend(0), -2, -5, vol=volpath([0.3], [1, 3]), method="line"), "method must be 'auto' or 'paths'"),
+    # (the methods of rho without it: the refusal and the message of DFLimit.jl, November 26, 2026)
+    *[(f, "method must be 'auto', 'line' (the line integral with the explicit kernel) or 'paths' (the inversion on paths "
+          "around the roots)")
+      for m in ("lines", "mixture")
+      for f in (lambda m=m: dist_cdf(trend(0), -2, -5, method=m), lambda m=m: dist_pdf(trend(0), -2, -5, method=m),
+                lambda m=m: dist_quantile(trend(0), 0.05, -5, method=m))],
     (lambda: cadf_c0(-5, 0), "not be 0"),
     (lambda: predictive_c0(-5, 1.5), "not be 0"),
     (lambda: hegy_t3_cdf(trend(0), 1, 1), "must be at most 0"),
