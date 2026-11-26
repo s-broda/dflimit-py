@@ -109,8 +109,12 @@ def test_errors(call, frag):
 def test_errors_types():
     with pytest.raises(TypeError):
         dist_cdf(trend(0), -2, -5, vol=[0.3])
-    with pytest.raises(TypeError, match="needs a volatility path"):
-        dist_cdf(trend(0), -2, [0, -1])
+    # (c a vector without a volatility path: the message of DFLimit.jl and the MATLAB programs, a ValueError)
+    for call in (lambda: dist_cdf(trend(0), -2, [0, -1]), lambda: ltratio_cdf(-2, "DU", [0, -1]),
+                 lambda: dist_quantile(trend(0), 0.05, [0, -1])):
+        with pytest.raises(ValueError, match=r"^(dist_cdf|ltratio_cdf|dist_quantile): c is a vector \(one value per regime\): "
+                                             r"that needs a volatility path, vol = volpath\(breaks, omega\)$"):
+            call()
 
 
 def test_limiting_cases():

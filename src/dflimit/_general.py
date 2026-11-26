@@ -212,7 +212,7 @@ def dist_cdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False,
     >>> dist_cdf(perron("C", [0.3, 0.7]), [-5, -4, -3], -5)
     array([0.030755..., 0.292180..., 0.790536...])
     """
-    e = ext_args(vol, rho, c)
+    e = ext_args(vol, rho, c, "dist_cdf")
     return _values(DET_CDF, D, x, e[0], _opts(c0, start, gamma0, gls, verified, method, rule, e))
 
 
@@ -261,7 +261,7 @@ def dist_pdf(D, x, c=0, *, c0=0, start=None, gamma0=0, gls=None, verified=False,
     >>> dist_pdf(trend(2), -3.8)               # the quadratic trend at the unit root
     0.142477...
     """
-    e = ext_args(vol, rho, c)
+    e = ext_args(vol, rho, c, "dist_pdf")
     return _values(DET_PDF, D, x, e[0], _opts(c0, start, gamma0, gls, verified, method, rule, e))
 
 
@@ -308,7 +308,7 @@ def dist_quantile(D, p, c=0, *, x0=-2, tol=1e-9, c0=0, start=None, gamma0=0, gls
     >>> dist_quantile(perron("C", 0.3), [0.01, 0.05, 0.10])     # critical values of Perron's model C
     array([-4.625894..., -4.072544..., -3.782146...])
     """
-    e = ext_args(vol, rho, c)
+    e = ext_args(vol, rho, c, "dist_quantile")
     return _quantiles(DET_Q, D, p, e[0], _opts(c0, start, gamma0, gls, method=method, rule=rule, ext=e), dfl_num(x0, "x0"),
                       dfl_num(tol, "tol"))
 
@@ -1363,7 +1363,7 @@ def hegy_t3_cdf(D, x, c=0, *, c0=0, vol=None, verified=False):
     >>> hegy_t3_cdf(trend(0), -3.3442)       # the 5% critical value with seasonal dummies
     0.0500...
     """
-    e = ext_args(vol, 1, c)
+    e = ext_args(vol, 1, c, "hegy_t3_cdf")
     return _values(DET_T3_CDF, D, x, e[0], _opts(c0, verified=verified, method="auto", rule="auto", ext=e), cdf=True)
 
 
@@ -1390,7 +1390,7 @@ def hegy_t3_pdf(D, x, c=0, *, c0=0, vol=None, verified=False):
     >>> hegy_t3_pdf(trend(0), -1.0)
     0.2274...
     """
-    e = ext_args(vol, 1, c)
+    e = ext_args(vol, 1, c, "hegy_t3_pdf")
     return _values(DET_T3_PDF, D, x, e[0], _opts(c0, verified=verified, method="auto", rule="auto", ext=e), cdf=False)
 
 
@@ -1421,5 +1421,5 @@ def hegy_t3_quantile(D, p, c=0, *, x0=-2, tol=1e-10, c0=0, vol=None):
     >>> hegy_t3_quantile(trend(0), 0.05)
     -3.3442...
     """
-    e = ext_args(vol, 1, c)
+    e = ext_args(vol, 1, c, "hegy_t3_quantile")
     return _quantiles(DET_T3_Q, D, p, e[0], _opts(c0, method="auto", rule="auto", ext=e), dfl_num(x0, "x0"), dfl_num(tol, "tol"))

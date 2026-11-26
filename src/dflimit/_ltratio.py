@@ -265,7 +265,7 @@ def _classical(S, e, c, c0, me, ve):
 def _dist(kind, x, cas, c, c0, g0, method, verified=False, engine="auto", start=None, gls=None, vol=None, rho=1):
     S = spec_of(cas, g0, start, gls)
     e = engine_of(S, engine)
-    cx, rx, vb = ext_args(vol, rho, c)
+    cx, rx, vb = ext_args(vol, rho, c, "ltratio_cdf" if kind == 2 else "ltratio_pdf")
     if ext_active(rx, vb):
         # (the extensions of the limit: the general engine for the case or the design, through the router)
         a = dfl_real(x, "x")
@@ -368,7 +368,7 @@ def ltratio_icdf(p, cas, c=0, c0=0, g0=0, method="auto", tol=1e-10, info=False, 
     """
     S = spec_of(cas, g0, start, gls)
     e = engine_of(S, engine)
-    cx, rx, vb = ext_args(vol, rho, c)
+    cx, rx, vb = ext_args(vol, rho, c, "ltratio_icdf")
     if ext_active(rx, vb):
         # (the extensions of the limit: the general engine's quantiles, started at the normal approximation from the
         # moments, through the router)

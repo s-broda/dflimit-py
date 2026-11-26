@@ -120,7 +120,6 @@ def test_type_errors():
         (lambda: ltratio_cdf(0, 1), "the case must be"),
         (lambda: ltratio_cdf(0, "DU", method=1), "method must be"),
         (lambda: ltratio_cdf(0, "DU", c=None), "c must be a single number"),
-        (lambda: ltratio_cdf(0, "DU", c=[1, 2]), "c must be a single number"),
         (lambda: ltratio_cdf(0, "DU", c=True), "c must be a single number"),
         (lambda: ltratio_cdf(0, "DU", c0="1"), "c0 must be a single number"),
         (lambda: ltratio_mom("2", "DU"), "positive integer"),
@@ -136,6 +135,10 @@ def test_type_errors():
     for fun, msg in cases:
         with pytest.raises(TypeError, match=msg):
             fun()
+    # (c a sequence without a volatility path: a value the call does not take, a ValueError with the message of
+    # DFLimit.jl since November 26, 2026; it was a TypeError "c must be a single number ...")
+    with pytest.raises(ValueError, match=r"^ltratio_cdf: c is a vector \(one value per regime\): that needs a volatility path"):
+        ltratio_cdf(0, "DU", c=[1, 2])
 
 
 def test_threads_can_be_set_and_do_not_change_the_values():

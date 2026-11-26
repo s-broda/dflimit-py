@@ -143,17 +143,18 @@ def predictive_c0(c, rho, b=0):
     return float(c) - float(b) / rho
 
 
-def ext_args(vol, rho, c):
+def ext_args(vol, rho, c, fn="dist_cdf"):
     """The extensions of a call for the engine: (the scalar c of the call, rho, the volatility path's doubles or None);
-    c a sequence needs vol (one value per regime)."""
+    c a sequence needs vol (one value per regime; fn names the function in the error)."""
     if isinstance(rho, (bool, np.bool_)) or not isinstance(rho, numbers.Real):
         raise TypeError("rho must be a number")
     rho = float(rho)
     seq = not isinstance(c, (numbers.Real, str, bytes)) and c is not None and np.ndim(c) > 0
     if vol is None:
         if seq and np.size(c) > 1:
-            raise TypeError("c must be a single number (a vector of one value per regime needs a volatility path, "
-                            "vol=volpath(breaks, omega))")
+            # (the message of DFLimit.jl and the MATLAB programs, as a ValueError: c is a sequence of numbers, a value that
+            # needs vol)
+            raise ValueError(f"{fn}: c is a vector (one value per regime): that needs a volatility path, vol = volpath(breaks, omega)")
         return (dfl_num(np.ravel(c)[0] if seq else c, "c"), rho, None)
     if not isinstance(vol, VolPath):
         raise TypeError("vol must be a volatility path, volpath(breaks, omega)")

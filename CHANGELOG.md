@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A sequence `c` without a volatility path raises a `ValueError` with the message of DFLimit.jl ("<function>: c is a
+  vector (one value per regime): that needs a volatility path, vol = volpath(breaks, omega)"); it was a `TypeError`
+  with a message of its own.
 - The extensions of the limit (the C engine of dflimit-matlab, branch extensions): volatility and persistence regimes
   (`volpath`, `VolPath` and the keyword `vol` of `dist_cdf`, `dist_pdf`, `dist_quantile`, `ltratio_cdf`, `ltratio_pdf`,
   `ltratio_icdf`, with `c` a sequence of one value per regime), a normal component (the keyword `rho` of the same
