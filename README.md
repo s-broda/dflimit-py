@@ -107,8 +107,12 @@ For the designs whose numerator has rank one or two (polynomial trends of any or
 cosines, `detrend_first` of a continuous design that does not vanish at the origin; a zero or a stationary start and
 least squares detrending) the general engine also has the line integral with the explicit kernel: the classical line
 integral with P(t) and the two roots supplied by the general engine's transform. `dist_cdf`, `dist_pdf` and
-`dist_quantile` choose by `method`: `"auto"` (the default) takes it at c0 = 0 for c >= -20, where it is 2.2 to 3.5
-times faster than the inversion on paths per value and 1.8 to 2.7 times per quantile, and the paths otherwise; `"line"`
+`dist_quantile` choose by `method`: `"auto"` (the default) takes it at c0 = 0 for c >= -20, where it was 2.2 to 3.5
+times faster than the inversion on paths per value and 1.8 to 2.7 times per quantile when the rule was set; since the
+thinner rules of the paths (`c/test/line_timing.c` of dflimit-matlab, one thread, November 26, 2026) it is 1.1 to 1.7 times faster per
+value and 0.9 to 1.3 times per quantile for -20 <= c <= 0, and at c = 2 slower for the designs with deterministic
+terms (the paths 1.35 to 1.5 times faster per value and 1.7 to 2.1 times per quantile; the rule is unchanged), and the
+paths otherwise; `"line"`
 forces it (`ValueError` with the reason where it does not cover the design) and `"paths"` the paths. `ltratio_cdf`,
 `ltratio_pdf` and `ltratio_icdf` with a design pass `method="line"` or `"paths"` on (for a design that is a classical
 case, `"line"` is the classical line integral). The classical engine's line integral takes its inner integrals on

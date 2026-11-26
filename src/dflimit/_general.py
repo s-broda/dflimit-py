@@ -107,8 +107,9 @@ METHOD_DOC = """method : {"auto", "line", "paths"}, default "auto"
         vanish at the origin and whose span is closed under differentiation (polynomial trends of any order, an
         intercept with sines and cosines), and `detrend_first` of a continuous design that does not vanish at the
         origin, with a zero or a stationary start and least squares detrending. ``"auto"`` takes it at ``c0 = 0`` for
-        ``c >= -20``, where it is 2.2 to 3.5 times faster than the paths per value and 1.8 to 2.7 times per quantile,
-        and the paths otherwise; ``"line"`` raises ``ValueError`` with the reason where it does not cover the design,
+        ``c >= -20``, where it is 1.1 to 1.7 times faster than the paths per value for ``-20 <= c <= 0`` (0.9 to 1.3
+        times per quantile; at ``c = 2`` the paths are 1.35 to 2.1 times faster for designs with deterministic terms;
+        C engine, one thread, November 2026), and the paths otherwise; ``"line"`` raises ``ValueError`` with the reason where it does not cover the design,
         the start or the options (GLS detrending, a fixed start, a jump)."""
 
 RULE_DOC = """rule : {"auto", "present", "thin", "inner", "outer", "fine", "finestep"}, default "auto"
