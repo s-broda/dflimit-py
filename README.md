@@ -110,14 +110,14 @@ integral with P(t) and the two roots supplied by the general engine's transform.
 `dist_quantile` choose by `method`: `"auto"` (the default) takes it at c0 = 0 for c >= -20, except just above the unit
 root with deterministic terms, 0 < c <= 0.5, where the paths are 1.5 to 2.3 times faster, and with c0 > 0 at the points
 x < 0 where the outer contour of the paths is the vertical line (there the paths do not resolve the two roots of the
-parabola of such a point, and their one evaluation was off by up to 1e-3 in the lower tail); below the unit root it is 1.1 to 1.7 times faster than
-the paths per value for -20 <= c <= 0 (`c/test/line_timing.c` of dflimit-matlab and interleaved timings, November 26,
-2026), and the paths otherwise; `"line"`
+parabola of such a point, and their one evaluation was off by up to 1e-3 in the lower tail); below the unit root it is 1.0 to 1.6 times faster than
+the paths per value for -20 <= c <= 0 (`c/test/line_timing.c` of dflimit-matlab, November 27, 2026, and interleaved
+timings, November 26), and the paths otherwise; `"line"`
 forces it (`ValueError` with the reason where it does not cover the design) and `"paths"` the paths. `ltratio_cdf`,
 `ltratio_pdf` and `ltratio_icdf` with a design pass `method="line"` or `"paths"` on (for a design that is a classical
 case, `"line"` is the classical line integral). The classical engine's line integral takes its inner integrals on
-fixed node layouts at c <= 0, c0 = 0 (8 to 20 times faster than the adaptive rules in case DK, 2 to 3 times in the
-other cases).
+fixed node layouts at c <= 0, c0 = 0 (15 to 20 times faster than the adaptive rules in case DK on one thread, 8 to 13
+on four, 1.9 to 3.2 times in the other cases, 1.7 to 2.9 on four; November 27, 2026).
 
 The general engine's own functions of a design have the names of the Julia package: `dist_cdf`, `dist_pdf`,
 `dist_quantile`, `dist_moments` (the t-ratio), `coef_pdf`, `coef_quantile`, `coef_cdf_gp` (the coefficient statistic;

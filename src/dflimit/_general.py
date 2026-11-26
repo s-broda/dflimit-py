@@ -113,7 +113,7 @@ METHOD_DOC = """method : {"auto", "line", "paths"}, default "auto"
         vanish at the origin and whose span is closed under differentiation (polynomial trends of any order, an
         intercept with sines and cosines), and `detrend_first` of a continuous design that does not vanish at the
         origin, with a zero or a stationary start and least squares detrending. ``"auto"`` takes it at ``c0 = 0`` for
-        ``c >= -20``, where it is 1.1 to 1.7 times faster than the paths per value for ``-20 <= c <= 0``, except just
+        ``c >= -20``, where it is 1.0 to 1.6 times faster than the paths per value for ``-20 <= c <= 0``, except just
         above the unit root with deterministic terms (``0 < c <= 0.5``, where the paths are 1.5 to 2.3 times faster),
         and with ``c0 > 0`` at the points ``x < 0`` where the outer contour of the paths is the vertical line (there the
         paths do not resolve the two roots of the parabola of such a point; the quantiles keep the paths); C engine,
