@@ -4,9 +4,10 @@
 # tree; on CPython 3.9 and 3.14) and against the installed sdist. The files are uploaded as artifacts of the run and,
 # for a tag, attached to a GitHub release.
 #
-# Runs only when started by hand (Actions tab, "Run workflow", which builds and uploads the files as artifacts of the
-# run and creates a release only if a tag is given) or when a version tag v* is pushed (which creates the release of
-# that tag). The account's Actions minutes are limited: nothing runs on an ordinary push or on a pull request.
+# Runs on a push to main that changes the package (Python or C sources, tests, build files or this file; a push that
+# changes only the README, the changelog or other prose starts nothing; the files are then artifacts of the run and no
+# release is made), when started by hand (Actions tab, "Run workflow", which creates a release only if a tag is
+# given), and when a version tag v* is pushed (which creates the release of that tag).
 #
 # The PyPI upload (job pypi) is disabled: it runs only when started by hand with the input pypi ticked, and it needs
 # the configuration described at the job.
@@ -29,8 +30,17 @@ on:
         required: false
         default: false
   push:
+    branches: [main]
     tags:
       - "v*"
+    paths:
+      - 'src/**'
+      - 'csrc/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - 'setup.py'
+      - 'MANIFEST.in'
+      - '.github/workflows/wheels.yml'
 
 permissions:
   contents: read
@@ -130,5 +140,4 @@ jobs:
           path: dist
           merge-multiple: true
       - uses: pypa/gh-action-pypi-publish@release/v1
-# started by hand: gh workflow run wheels.yml (with -f tag=v0.2.0 to attach the files to that release)
-# started by hand: gh workflow run wheels.yml
+# by hand: gh workflow run wheels.yml (with -f tag=v0.2.0 to attach the files to that release)
