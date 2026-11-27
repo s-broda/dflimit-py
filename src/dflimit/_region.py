@@ -6,7 +6,7 @@ import numpy as np
 
 from . import _engine, _general
 from ._design import Design
-from ._route import CLASSICAL, ENGINE_DOC, GENERAL, dfl_engine, spec_of
+from ._route import AUTO, CLASSICAL, ENGINE_DOC, F_REGION, GENERAL, dfl_engine, spec_of
 from ._utils import Result, dfl_num, dfl_real, fill_doc, warn
 
 _TYPES = ("line", "parabola", "wap")
@@ -74,10 +74,13 @@ def ltratio_region(bnd, cas="DK", c=0, info=False, *, engine="auto", start=None,
 
     Notes
     -----
-    The rule of ``engine="auto"`` takes the classical engine for case DK with a zero start (2.7 to 3.1 times faster,
-    and the only engine for the weighted-average-power boundary); a fixed start, other designs, and
-    ``engine="general"`` have the general engine (`region_prob`: the line and the parabola, without ``"v0"`` and
-    ``"brks"``).
+    The rule of ``engine="auto"`` is that of the C engine's router (``dfl_engine_region``, ``dfl_autoengine``): for case
+    DK with a zero start the classical engine for the line and the weighted-average-power boundary (the line 2.9 times
+    faster by it; the boundary of the weighted average its own), and for the parabola the general engine at c0 = 0 for
+    -20 <= c <= 0 (its line integral, 3.5 to 45 times faster than the classical region code's conditional integral),
+    the classical engine elsewhere; ``"v0"`` and ``"brks"`` always take the classical engine. A fixed start, other
+    designs, and ``engine="general"`` have the general engine (`region_prob`: the line and the parabola, without
+    ``"v0"`` and ``"brks"``); with the general engine ``info`` gives ``err`` nan and ``status`` 0.
 
     Examples
     --------
@@ -145,6 +148,11 @@ def ltratio_region(bnd, cas="DK", c=0, info=False, *, engine="auto", start=None,
         if not math.isfinite(b):
             P = math.nan if math.isnan(b) else (1.0 if b > 0 else 0.0)
             return Result(P=P, err=0.0, status=0) if info else P
+        # (engine "auto": the parabola as the router takes it, dfl_autoengine with x = 1 and its c0)
+        if t == "parabola" and e == AUTO:
+            ae = _engine.autoengine(F_REGION, 1, 0, 0.0, math.nan, dfl_num(c, "c"), par[1], np.array([1.0]).tobytes())
+            if np.frombuffer(ae, dtype=np.intc)[0]:
+                return _general_region(bnd, spec_of("DK"), c, info)
     v0 = 0.0 if bnd.get("v0") is None else el("v0")
     brks = np.empty(0) if bnd.get("brks") is None else dfl_real(bnd["brks"], "bnd['brks']").ravel()
     if not np.all(np.isfinite(brks) & (brks > 0)):

@@ -1,140 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-11-27)
 
-- The C engine of dflimit-matlab 35a6799 (branch extensions), four repairs of DFLimit.jl (November 26, 2026):
-  `lm_cdf`, `lm_quantile` and `lm_power` raise a `ValueError` for a design whose span does not contain the constant,
-  with the message of DFLimit.jl and the design's name (the limit -1/(2 sqrt V) holds only then; r alone, r and e^r, a
-  level dummy with r gave the limit of the linear trend; decided on the values of the piecewise polynomial design at
-  Chebyshev points of each piece, exactly for polynomial trends, breaks and dummies, to 1e-6 for the interpolants of
-  `fdesign` and `design_from_matrix`); no NaN, hang or silently wrong value at a finite point (F and f were NaN at the
-  ulps above x = -500/4^k and for 0 < |x| below about 1e-162; far in the tails the fixed node layouts lost up to 2e-3 and
-  now serve -50 <= x <= 15 only; the general engine's paths at a tiny x < 0 hung or gave a NaN density);
-  `verified=True` with a zero start and c0 > 0 below c = -20 takes the line integral (the checked conditional integral
-  was off by 2e-8 at c = -100, c0 = 3, case DU); `method="lines"` or `"mixture"` without `rho` is refused with the
-  message of DFLimit.jl. Elsewhere the values are unchanged; the reference subsets of the tests did not move.
-- A sequence `c` without a volatility path raises a `ValueError` with the message of DFLimit.jl ("<function>: c is a
-  vector (one value per regime): that needs a volatility path, vol = volpath(breaks, omega)"); it was a `TypeError`
-  with a message of its own.
-- The extensions of the limit (the C engine of dflimit-matlab, branch extensions): volatility and persistence regimes
-  (`volpath`, `VolPath` and the keyword `vol` of `dist_cdf`, `dist_pdf`, `dist_quantile`, `ltratio_cdf`, `ltratio_pdf`,
-  `ltratio_icdf`, with `c` a sequence of one value per regime), a normal component (the keyword `rho` of the same
-  functions: the covariate-augmented t-ratio and the predictive regression, `cadf_c0`, `predictive_c0`;
-  `method="lines"` or `"mixture"`), and the first seasonal t-ratio of Hylleberg, Engle, Granger and Yoo (`hegy_t3_cdf`,
-  `hegy_t3_pdf`, `hegy_t3_quantile`). Calls without them are unchanged. The general engine's outer contour is steepened
-  while either group of roots leaves its side of the imaginary axis (the engine's designs are not affected). Tests
-  against the reference values of the Julia engine (`tests/ref/ext_ref.txt`).
-- The C engine of dflimit-matlab, branch engine-rules: the choice of engine (`engine="auto"`) re-derived after the
-  thinner rules of one evaluation from interleaved timings of the two C engines (a cell moved where the other engine was
-  at least 1.5 times faster): the general engine also with a zero start and c0 > 0 at c = -100 and in case DT up to
-  c = 2, with c0 < 0 in case DK for -5 < c <= 0 and in case DT at every c <= 0, at c0 = 0 in cases DU, DT for
-  0 < c <= 0.5 and in case DT below c = -20, with a fixed start in case DK also where |g0| <= 1 with |c g0| <= 50 and
-  c >= -100, for the quantiles of case ST from c = -0.5 on and for the parabola of `ltratio_region` at c0 = 0 for
-  -20 <= c <= 0. Where the rule now takes the other engine, values move by less than 1e-7. The general engine's
-  `method="auto"` takes its paths just above the unit root (0 < c <= 0.5) for designs with deterministic terms and the
-  line integral with c0 > 0 at the points x < 0 on the vertical line, where the paths' one evaluation was off by up to
-  1e-3 in the lower tail; and it warns above c = 5.5 for designs beyond the classical cases and a fixed start with deterministic terms,
-  where one evaluation of the paths may be off by more than 1e-5 in the upper tail.
-- The C engine of dflimit-matlab 762c39c: the templates of the devices of Bao and Kan are `csrc/dfl_kan_jet.h` and
-  `csrc/dfl_kan_logcf.h` (they were `.inc` files, which `R CMD check` of the R package flagged); the sources are
-  otherwise unchanged. The README examples print the values of this version (they moved in the 12th to 13th digit).
-- The two papers: the package cites the lead paper, Bao, Broda and Kan, "The Exact Limiting Distribution of the
-  Dickey-Fuller t-Ratio with General Deterministic Terms" (SSRN 7745921), the paper of the general engine and of the
-  inversion formula on paths, and, for the classical engine and its representations, its companion, "Low-Rank
-  Representations of the Classical Dickey-Fuller Limits, with an Extension to Predictive Regressions" (SSRN 7725619,
-  the posting that carried the former title "... and Some Related Statistics"): the module docstring and the
-  references of the help, README, `CITATION.cff`, `.zenodo.json`, and the project URLs of `pyproject.toml`.
-- The rules of one evaluation (the C engine of dflimit-matlab, branch faster-rules, a port of DFLimit.jl fde1632 to
-  9c71860): one evaluation of the general engine's inversion on paths (`dist_cdf`, `dist_pdf`, `dist_quantile`, and
-  `ltratio_cdf`, `ltratio_pdf`, `ltratio_icdf` where the rule of the engines takes the general engine) takes the outer
-  hyperbola with 1.5 times the step and the paths around the roots with 16 nodes per panel and 32 on the tails of their
-  rays (24 and 40 before; 32 and 48 for 48 and 64 with a fixed start) where that holds, about half the time, and by
-  regions of the start, the deterministic terms, `c` and `c0` the rule of before or a finer one; the new keyword `rule`
-  (`"auto"`, the default; `"present"` the rule of before, which `verified=True` takes; `"thin"`, `"inner"`, `"outer"`,
-  `"fine"`, `"finestep"`) names a rule. The values move by up to 7.6e-10 in the distribution function and 4e-9 of the
-  peak in the density. The classical engine's contour integral (a fixed start in cases DU, DT) takes 32 nodes for 64 and
-  the outer step 1.5 times as long, its conditional integral 48 or 64 nodes for 96, where they hold (within 6.2e-11 of
-  the checked computation). A fixed start: the paths of the general engine count the growth of the v-kernels of the
-  upper tail at every `c` (`dist_cdf(trend(-1), [9.732, 12, 20], 0, start="fixed", gamma0=1)` gave 1 - 2e-7, 1.013 and
-  9.5e38 and was refused by the final check; now 1); case DK with `c0 < 0` near the unit root takes the classical engine
-  (`ltratio_cdf(45.11, "DK", 0.5, c0=-10, g0=1)` was refused, now 0.99981515720); cases DU, DT far from the unit root
-  (`c0 > 0` below c = -20, below -10 where |c g0| > 20, any `c0` below c = -20 where |c g0| > 60) take the general
-  engine, where the contour integral's one evaluation was off by up to 2.2e-2 of the peak of the density, and the
-  classical engine warns there ("may be off by more than 1e-5"). The quantile searches start from the moments from jets
-  of Bao and Kan and take F and f from one pass of the general engine's paths where it computes (the quantiles bit for
-  bit those of the two evaluations). Warm time against the rules of before: the general engine's paths 0.47 to 0.71 (1.4
-  to 1.7 in the cells of the finer steps near the unit root), the contour integral 0.39 to 0.69, the conditional integral
-  0.55 to 0.84, the quantiles with `c0 != 0` 0.26 to 0.31.
-
-- The devices of Bao and Kan (the C engine of dflimit-matlab, branch kan-devices, a port of the module DFKan of
-  DFLimit.jl): the numerical devices of Yong Bao and Raymond Kan, "Exact Finite-Sample Distribution and Moments of the
-  Least Squares Estimator in First-Order Autoregressions: O(1) Algorithms". By default the coefficient statistic
-  (`coef_cdf`, `coef_icdf`, `coef_pdf`, which now takes a case code, and the new `coef_mom`) in the cases DK, DU, DT
-  (zero or fixed start) and SK, SU, ST up to c = 20, the linear form (`ltratio_lincdf`) in case DK for a != 0 and
-  -100 <= c <= 4 and for the designs of the six cases (any start, also case DK with a fixed start `g0`) for
-  -100 <= c <= 2, and the power envelope (`power_envelope`) in case DK for c <= -1e-4 are one inversion of the
-  closed-form joint characteristic function along the ray of the half-plane, and the moments of the t-ratio
-  (`ltratio_mom`) come from one jet per node, up to c = 20; the point-optimal statistic (`pt_cdf`, `pt_pdf`,
-  `pt_quantile`, `pt_power`, `pt_envelope`) up to c = 4 and `coef_cdf_gp` (zero or stationary start) up to c = 5 are
-  the single inversion of the general engine's transform, with the branch of the square root of its determinant from
-  the pivots at each point (their `N` and `umax` now default to `None`; given, they choose the fixed grid of before).
-  New keywords `method` (`"inversion"` or `"jets"` forces the devices, `"engine"` the computation of before, which
-  reproduces those values, `"grid"` the fixed grid of the point-optimal functions and `coef_cdf_gp`), `tol`,
-  `verified` and `err` (the tuple of the values and their error estimates); a `RuntimeWarning` names the values whose
-  estimate exceeds the tolerance. Within 6e-15 of DFLimit.jl; against the computation of before the values move by up
-  to 5.5e-13 for the coefficient statistic, 3.3e-10 for the envelope (the bisection of before to 1e-9) and 3.7e-11 for
-  the point-optimal statistic, and the quantiles of the coefficient statistic by up to the width 1e-9 at which the
-  search of before stopped; with a fixed start above the unit root the engines' moments were off (0.39 relative at
-  c = 2, c0 = -2, g0 = 1 in case DK). Warm time per value against the computation of before: 0.005 to 0.24 for the
-  half-plane statistics, 0.013 to 0.23 for the moments, 0.08 to 0.4 for the point-optimal statistic. The branches of
-  P(t), M_0(t) and the roots inside the engines are fixed at each point the same way (the values move by at most
-  4.2e-13, at the same cost). The gateway has two new entry points, `route_x` and `det_x`.
-
-## 0.5.0
-
-- The C engine of dflimit-matlab a3c8e33: the upper tail above the unit root. Above the unit root the t-ratio with
-  `c0 != c` has its upper tail at x of the order (c - c0) e^c/(2c), and the default route returned values of the
-  distribution function outside [0, 1] there without a warning (case DK at c = 10, c0 = 2: 0.8415 for 0.7436 at
-  x = 1e4, -1.3674 for 0.9993 at x = 3e4; at c = 10, c0 = 9: 1.0479 for 0.9936 at x = 3e3; also with `verified=True`
-  and `engine="classical"`): beyond the line integral's bound the conditional integral returned its one evaluation
-  where its checked value was flagged, off by up to 14 in case DK. Case DK now takes the checked value (within 1.3e-8
-  of an independent computation up to c = 14); for c > 4 the three cases take the conditional integral at x > 300 too
-  (the line integral of cases DU, DT exhausted the memory at c = 16, c0 = 0 at the median, and its size overflowed an
-  int in the C engine), and case DK with `c0 > c` at x < -20 (where the line integral was off by up to 1.5e-3); above
-  c = 14 these points raise `ValueError` naming the case, c, c0, x and the region computed, with `verified=True` too
-  (the conditional integral is off by up to 7.7e-5 in case DK at c = 16 and gives 1e44 in case DT). The general
-  engine (`engine="general"`) cut its line as if c0 were 0 and was off by 1.1e-3 at c = 10, c0 = 9, x = 1000: now
-  within 2e-13. Every distribution function of both engines ends with a check of its values: outside [0, 1] by more
-  than 1e-8 a `ValueError` that names the call.
-- The C engine of dflimit-matlab 06bb2cd: the general engine above the unit root. The coefficient statistic far above
-  the unit root was silently wrong in the general engine (the segment of the path around the positive root, shorter than
-  1e-12 from c = 16 on, got no panel; case DK at c = 20 gave 0.3128 for the 30% point with `engine="general"`; the
-  default route takes the classical engine there): now within 2.4e-9 of the classical engine up to c = 20 without
-  deterministic terms and 1.5e-8 up to c = 16 with them. The moments of the general engine, which the default route
-  takes at `c0=0`, were off by 6e-4 relative at c = 15 and 0.95 at c = 20 (an absolute rounding error of 1e-16 in the
-  matrix of the transform): now within 1.1e-14 of the classical engine. `ltratio_mom(4, "DT", 0, c0=-2)` raised
-  `ValueError` on the default route (the circle of the Cauchy integrals continued the wrong logarithm): now within
-  2.4e-14. The density of the coefficient statistic with a fixed start above the unit root (`coef_pdf`) was off by up to
-  0.12 at c from 1 to 5 without a warning (the path around the positive roots came too close to the double pole of its
-  kernel): now within about 1e-8 of the single inversion of DFKan (DFLimit.jl). `coef_cdf_gp` raises `ValueError` that
-  names the grid size `N` that serves where its grid does not resolve the transform (it was off by 1.1e-2 at c = 12 and
-  by 15 at c = 20 for the 30% point of case DK). Every function of the general engine raises `ValueError` above c = 16
-  with deterministic terms (10 with them and a fixed start) and above c = 20 without them, where the roots of its
-  transform are no longer resolved in double precision; `engine="auto"` takes the classical engine there.
-- The C engine of dflimit-matlab 4910ea2: the line integral with the explicit kernel for the general designs of rank one
-  or two (polynomial trends of any order, an intercept with sines and cosines, the statistic that detrends first for a
-  continuous design with d(0) != 0; zero or stationary start, least squares detrending): `dist_cdf`, `dist_pdf` and
-  `dist_quantile` take `method="auto"` (the default), `"line"` or `"paths"`; `"auto"` takes the line integral at
-  `c0 = 0` for `c >= -20`, 2.2 to 3.5 times faster than the inversion on paths per value and 1.8 to 2.7 times per
-  quantile, and the paths elsewhere; `"line"` raises `ValueError` with the reason where it does not cover the design.
-  `ltratio_cdf`, `ltratio_pdf` and `ltratio_icdf` with a design take `method="line"` (for a design that is a classical
-  case, the classical line integral) or `"paths"` (the general engine's paths). The values at `c0 = 0` for these designs
-  move within 2e-11. The classical line integral takes its inner integrals on fixed node layouts at `c <= 0`, `c0 = 0`
-  (as the Julia engine; 8 to 20 times faster in case DK, 2 to 3 times in the other cases, the values within 3.2e-12 of
-  before), so that the router keeps the classical engine at `c0 = 0` below `c = -20` again, and the coefficient
-  statistic (`coef_cdf`, `coef_icdf`) takes the classical engine at its points with `c0 + y > 0` and in case DU (its
-  slowdown by three times at `c = -5` in case DU is gone). A quantile search whose last Newton step was below half an
-  ulp no longer falls into bisection.
+### The general engine and the automatic choice
 
 The general engine of the C engine (dflimit-matlab, its branch `general-engine`; the port of the general engine of
 DFLimit.jl): the limits for any piecewise smooth deterministic terms, by the inversion formula on paths around the roots
@@ -161,25 +29,40 @@ the classical values, bit for bit those of before.
   `"general"` for a case string, or a design) and the regions and the linear form of case DK with a fixed start (`g0`
   of `ltratio_region` and `ltratio_lincdf`) take the general engine; the classical engine, which has the zero and the
   stationary start only there, refuses a fixed start.
-- The general engine refuses, with a `ValueError`: probabilities and levels outside (0, 1); the LM statistic above
-  c = 10; the point-optimal statistic where the grid of its inversion does not resolve the transform (far above the
-  unit root; the message names the grid size `N` that serves) and at |q| beyond 0.15 N/asinh(umax); a design whose
-  roots run off on the vertical line (paths of more than a million nodes, such as (1 + r, 1{r < 0.4})). The law of V
-  is 0 at b <= 0; above the unit root the LM statistic is computed on the path of V alone.
-- The C engine of dflimit-matlab 8f78233: a design whose roots run off along the outer contour (as (1 + r,
-  1{r <= 0.4})) is refused before any inner integral, in 0.1 s and a few MB (it took 1.4 s and 1.2 GB before the
-  refusal); the outer hyperbola refuses more than 1e5 nodes and the moments a grid of more than 1e6 points; at
-  non-finite arguments every function of the general engine and of the router gives the limit or an error that names
-  the argument (`coef_cdf_gp` at y = +-inf, the searches from a start value of +-inf and the point-optimal statistic at
-  c = +-inf did not return in C); the rules of the general engine far from the unit root start at c = -60 (they started
-  at c = -100, and on -100 <= c < -60 the general engine was off by up to 1.4e-9, now 5e-13). `ltratio_region` with
-  case DK gives 1, 0 at b = inf, -inf (the classical code gave 0) and refuses a non-finite slope.
-- The tests compare 299 values of the general engine and 118 of the router with the stored values of the Julia
-  engine, and 44 calls that must fail with the expected errors (a subset of `c/test/det_ref.txt` of dflimit-matlab,
-  copied by `tools/det-ref.py`).
+- The C engine of dflimit-matlab 4910ea2: the line integral with the explicit kernel for the general designs of rank one
+  or two (polynomial trends of any order, an intercept with sines and cosines, the statistic that detrends first for a
+  continuous design with d(0) != 0; zero or stationary start, least squares detrending): `dist_cdf`, `dist_pdf` and
+  `dist_quantile` take `method="auto"` (the default), `"line"` or `"paths"`; `"auto"` takes the line integral at
+  `c0 = 0` for `c >= -20`, 2.2 to 3.5 times faster than the inversion on paths per value and 1.8 to 2.7 times per
+  quantile, and the paths elsewhere; `"line"` raises `ValueError` with the reason where it does not cover the design.
+  `ltratio_cdf`, `ltratio_pdf` and `ltratio_icdf` with a design take `method="line"` (for a design that is a classical
+  case, the classical line integral) or `"paths"` (the general engine's paths). The values at `c0 = 0` for these designs
+  move within 2e-11. The classical line integral takes its inner integrals on fixed node layouts at `c <= 0`, `c0 = 0`
+  (as the Julia engine; 8 to 20 times faster in case DK, 2 to 3 times in the other cases, the values within 3.2e-12 of
+  before), so that the router keeps the classical engine at `c0 = 0` below `c = -20` again, and the coefficient
+  statistic (`coef_cdf`, `coef_icdf`) takes the classical engine at its points with `c0 + y > 0` and in case DU (its
+  slowdown by three times at `c = -5` in case DU is gone). A quantile search whose last Newton step was below half an
+  ulp no longer falls into bisection.
+- `ltratio_region` with `engine="auto"` takes the engine of the C router (`dfl_autoengine`) for the parabola: the general
+  engine at c0 = 0 for -20 <= c <= 0 (its line integral, 3.5 to 45 times faster than the classical region code), as the
+  MEX file and DFLimit.jl; it took the classical engine for every region of case DK, and its docstring described the
+  rule before (the line 2.7 to 3.1 times faster by the classical engine).
 
-Four errors of the engine are repaired (the C engine of dflimit-matlab 0.5.0, the repairs of DFLimit.jl 0.5.0). Values
-outside the regions named below are unchanged.
+### Extensions of the limit
+
+- The extensions of the limit (the C engine of dflimit-matlab, branch extensions): volatility and persistence regimes
+  (`volpath`, `VolPath` and the keyword `vol` of `dist_cdf`, `dist_pdf`, `dist_quantile`, `ltratio_cdf`, `ltratio_pdf`,
+  `ltratio_icdf`, with `c` a sequence of one value per regime), a normal component (the keyword `rho` of the same
+  functions: the covariate-augmented t-ratio and the predictive regression, `cadf_c0`, `predictive_c0`;
+  `method="lines"` or `"mixture"`), and the first seasonal t-ratio of Hylleberg, Engle, Granger and Yoo (`hegy_t3_cdf`,
+  `hegy_t3_pdf`, `hegy_t3_quantile`). Calls without them are unchanged. The general engine's outer contour is steepened
+  while either group of roots leaves its side of the imaginary axis (the engine's designs are not affected). Tests
+  against the reference values of the Julia engine (`tests/ref/ext_ref.txt`).
+
+### Repairs
+
+Four errors of the engine are repaired first (the C engine of dflimit-matlab 0.5.0, the repairs of DFLimit.jl 0.5.0; the
+next four entries, outside whose regions the values are unchanged), then the later repairs.
 
 - Large `x` above the unit root crashed Python. In the bulk of the distribution at `c = 7` and beyond (`x` in the
   hundreds) the line integral needs a Gauss-Legendre rule of more than 4096 nodes, which the engine does not hold:
@@ -214,6 +97,136 @@ outside the regions named below are unchanged.
   `ltratio_lincdf` now requires `c >= -550`, in case DG `c` up to about 3.5 at `cbar = -13.5` and for `a = NaN` `c` up
   to about 7 (a `ValueError` beyond). Other values are unchanged; `ltratio_region` with `v0 > 0` changes with P(V <
   v0) at `c <= -50` and `c > 2`.
+- The C engine of dflimit-matlab a3c8e33: the upper tail above the unit root. Above the unit root the t-ratio with
+  `c0 != c` has its upper tail at x of the order (c - c0) e^c/(2c), and the default route returned values of the
+  distribution function outside [0, 1] there without a warning (case DK at c = 10, c0 = 2: 0.8415 for 0.7436 at
+  x = 1e4, -1.3674 for 0.9993 at x = 3e4; at c = 10, c0 = 9: 1.0479 for 0.9936 at x = 3e3; also with `verified=True`
+  and `engine="classical"`): beyond the line integral's bound the conditional integral returned its one evaluation
+  where its checked value was flagged, off by up to 14 in case DK. Case DK now takes the checked value (within 1.3e-8
+  of an independent computation up to c = 14); for c > 4 the three cases take the conditional integral at x > 300 too
+  (the line integral of cases DU, DT exhausted the memory at c = 16, c0 = 0 at the median, and its size overflowed an
+  int in the C engine), and case DK with `c0 > c` at x < -20 (where the line integral was off by up to 1.5e-3); above
+  c = 14 these points raise `ValueError` naming the case, c, c0, x and the region computed, with `verified=True` too
+  (the conditional integral is off by up to 7.7e-5 in case DK at c = 16 and gives 1e44 in case DT). The general
+  engine (`engine="general"`) cut its line as if c0 were 0 and was off by 1.1e-3 at c = 10, c0 = 9, x = 1000: now
+  within 2e-13. Every distribution function of both engines ends with a check of its values: outside [0, 1] by more
+  than 1e-8 a `ValueError` that names the call.
+- The C engine of dflimit-matlab 06bb2cd: the general engine above the unit root. The coefficient statistic far above
+  the unit root was silently wrong in the general engine (the segment of the path around the positive root, shorter than
+  1e-12 from c = 16 on, got no panel; case DK at c = 20 gave 0.3128 for the 30% point with `engine="general"`; the
+  default route takes the classical engine there): now within 2.4e-9 of the classical engine up to c = 20 without
+  deterministic terms and 1.5e-8 up to c = 16 with them. The moments of the general engine, which the default route
+  takes at `c0=0`, were off by 6e-4 relative at c = 15 and 0.95 at c = 20 (an absolute rounding error of 1e-16 in the
+  matrix of the transform): now within 1.1e-14 of the classical engine. `ltratio_mom(4, "DT", 0, c0=-2)` raised
+  `ValueError` on the default route (the circle of the Cauchy integrals continued the wrong logarithm): now within
+  2.4e-14. The density of the coefficient statistic with a fixed start above the unit root (`coef_pdf`) was off by up to
+  0.12 at c from 1 to 5 without a warning (the path around the positive roots came too close to the double pole of its
+  kernel): now within about 1e-8 of the single inversion of DFKan (DFLimit.jl). `coef_cdf_gp` raises `ValueError` that
+  names the grid size `N` that serves where its grid does not resolve the transform (it was off by 1.1e-2 at c = 12 and
+  by 15 at c = 20 for the 30% point of case DK). Every function of the general engine raises `ValueError` above c = 16
+  with deterministic terms (10 with them and a fixed start) and above c = 20 without them, where the roots of its
+  transform are no longer resolved in double precision; `engine="auto"` takes the classical engine there.
+- The general engine refuses, with a `ValueError`: probabilities and levels outside (0, 1); the LM statistic above
+  c = 10; the point-optimal statistic where the grid of its inversion does not resolve the transform (far above the
+  unit root; the message names the grid size `N` that serves) and at |q| beyond 0.15 N/asinh(umax); a design whose
+  roots run off on the vertical line (paths of more than a million nodes, such as (1 + r, 1{r < 0.4})). The law of V
+  is 0 at b <= 0; above the unit root the LM statistic is computed on the path of V alone.
+- The C engine of dflimit-matlab 8f78233: a design whose roots run off along the outer contour (as (1 + r,
+  1{r <= 0.4})) is refused before any inner integral, in 0.1 s and a few MB (it took 1.4 s and 1.2 GB before the
+  refusal); the outer hyperbola refuses more than 1e5 nodes and the moments a grid of more than 1e6 points; at
+  non-finite arguments every function of the general engine and of the router gives the limit or an error that names
+  the argument (`coef_cdf_gp` at y = +-inf, the searches from a start value of +-inf and the point-optimal statistic at
+  c = +-inf did not return in C); the rules of the general engine far from the unit root start at c = -60 (they started
+  at c = -100, and on -100 <= c < -60 the general engine was off by up to 1.4e-9, now 5e-13). `ltratio_region` with
+  case DK gives 1, 0 at b = inf, -inf (the classical code gave 0) and refuses a non-finite slope.
+- The C engine of dflimit-matlab 35a6799 (branch extensions), four repairs of DFLimit.jl (November 26, 2026):
+  `lm_cdf`, `lm_quantile` and `lm_power` raise a `ValueError` for a design whose span does not contain the constant,
+  with the message of DFLimit.jl and the design's name (the limit -1/(2 sqrt V) holds only then; r alone, r and e^r, a
+  level dummy with r gave the limit of the linear trend; decided on the values of the piecewise polynomial design at
+  Chebyshev points of each piece, exactly for polynomial trends, breaks and dummies, to 1e-6 for the interpolants of
+  `fdesign` and `design_from_matrix`); no NaN, hang or silently wrong value at a finite point (F and f were NaN at the
+  ulps above x = -500/4^k and for 0 < |x| below about 1e-162; far in the tails the fixed node layouts lost up to 2e-3 and
+  now serve -50 <= x <= 15 only; the general engine's paths at a tiny x < 0 hung or gave a NaN density);
+  `verified=True` with a zero start and c0 > 0 below c = -20 takes the line integral (the checked conditional integral
+  was off by 2e-8 at c = -100, c0 = 3, case DU); `method="lines"` or `"mixture"` without `rho` is refused with the
+  message of DFLimit.jl. Elsewhere the values are unchanged; the reference subsets of the tests did not move.
+- A sequence `c` without a volatility path raises a `ValueError` with the message of DFLimit.jl ("<function>: c is a
+  vector (one value per regime): that needs a volatility path, vol = volpath(breaks, omega)"); it was a `TypeError`
+  with a message of its own.
+- The C engine of dflimit-matlab 1914e58 (November 27, 2026): with `engine="general"` the line integral far above the
+  unit root at large x did not return (case DU at c = 10, x = 7860: its outer nodes filled the memo of the general
+  engine's transform, whose search then never ended); now that memo fills at most half its slots and the bound of the
+  inner rules is checked before the transform at all the outer nodes, so that the paths compute such points (2 s there).
+
+### Rules, timings and documentation
+
+- The devices of Bao and Kan (the C engine of dflimit-matlab, branch kan-devices, a port of the module DFKan of
+  DFLimit.jl): the numerical devices of Yong Bao and Raymond Kan, "Exact Finite-Sample Distribution and Moments of the
+  Least Squares Estimator in First-Order Autoregressions: O(1) Algorithms". By default the coefficient statistic
+  (`coef_cdf`, `coef_icdf`, `coef_pdf`, which now takes a case code, and the new `coef_mom`) in the cases DK, DU, DT
+  (zero or fixed start) and SK, SU, ST up to c = 20, the linear form (`ltratio_lincdf`) in case DK for a != 0 and
+  -100 <= c <= 4 and for the designs of the six cases (any start, also case DK with a fixed start `g0`) for
+  -100 <= c <= 2, and the power envelope (`power_envelope`) in case DK for c <= -1e-4 are one inversion of the
+  closed-form joint characteristic function along the ray of the half-plane, and the moments of the t-ratio
+  (`ltratio_mom`) come from one jet per node, up to c = 20; the point-optimal statistic (`pt_cdf`, `pt_pdf`,
+  `pt_quantile`, `pt_power`, `pt_envelope`) up to c = 4 and `coef_cdf_gp` (zero or stationary start) up to c = 5 are
+  the single inversion of the general engine's transform, with the branch of the square root of its determinant from
+  the pivots at each point (their `N` and `umax` now default to `None`; given, they choose the fixed grid of before).
+  New keywords `method` (`"inversion"` or `"jets"` forces the devices, `"engine"` the computation of before, which
+  reproduces those values, `"grid"` the fixed grid of the point-optimal functions and `coef_cdf_gp`), `tol`,
+  `verified` and `err` (the tuple of the values and their error estimates); a `RuntimeWarning` names the values whose
+  estimate exceeds the tolerance. Within 6e-15 of DFLimit.jl; against the computation of before the values move by up
+  to 5.5e-13 for the coefficient statistic, 3.3e-10 for the envelope (the bisection of before to 1e-9) and 3.7e-11 for
+  the point-optimal statistic, and the quantiles of the coefficient statistic by up to the width 1e-9 at which the
+  search of before stopped; with a fixed start above the unit root the engines' moments were off (0.39 relative at
+  c = 2, c0 = -2, g0 = 1 in case DK). Warm time per value against the computation of before: 0.005 to 0.24 for the
+  half-plane statistics, 0.013 to 0.23 for the moments, 0.08 to 0.4 for the point-optimal statistic. The branches of
+  P(t), M_0(t) and the roots inside the engines are fixed at each point the same way (the values move by at most
+  4.2e-13, at the same cost). The gateway has two new entry points, `route_x` and `det_x`.
+- The rules of one evaluation (the C engine of dflimit-matlab, branch faster-rules, a port of DFLimit.jl fde1632 to
+  9c71860): one evaluation of the general engine's inversion on paths (`dist_cdf`, `dist_pdf`, `dist_quantile`, and
+  `ltratio_cdf`, `ltratio_pdf`, `ltratio_icdf` where the rule of the engines takes the general engine) takes the outer
+  hyperbola with 1.5 times the step and the paths around the roots with 16 nodes per panel and 32 on the tails of their
+  rays (24 and 40 before; 32 and 48 for 48 and 64 with a fixed start) where that holds, about half the time, and by
+  regions of the start, the deterministic terms, `c` and `c0` the rule of before or a finer one; the new keyword `rule`
+  (`"auto"`, the default; `"present"` the rule of before, which `verified=True` takes; `"thin"`, `"inner"`, `"outer"`,
+  `"fine"`, `"finestep"`) names a rule. The values move by up to 7.6e-10 in the distribution function and 4e-9 of the
+  peak in the density. The classical engine's contour integral (a fixed start in cases DU, DT) takes 32 nodes for 64 and
+  the outer step 1.5 times as long, its conditional integral 48 or 64 nodes for 96, where they hold (within 6.2e-11 of
+  the checked computation). A fixed start: the paths of the general engine count the growth of the v-kernels of the
+  upper tail at every `c` (`dist_cdf(trend(-1), [9.732, 12, 20], 0, start="fixed", gamma0=1)` gave 1 - 2e-7, 1.013 and
+  9.5e38 and was refused by the final check; now 1); case DK with `c0 < 0` near the unit root takes the classical engine
+  (`ltratio_cdf(45.11, "DK", 0.5, c0=-10, g0=1)` was refused, now 0.99981515720); cases DU, DT far from the unit root
+  (`c0 > 0` below c = -20, below -10 where |c g0| > 20, any `c0` below c = -20 where |c g0| > 60) take the general
+  engine, where the contour integral's one evaluation was off by up to 2.2e-2 of the peak of the density, and the
+  classical engine warns there ("may be off by more than 1e-5"). The quantile searches start from the moments from jets
+  of Bao and Kan and take F and f from one pass of the general engine's paths where it computes (the quantiles bit for
+  bit those of the two evaluations). Warm time against the rules of before: the general engine's paths 0.47 to 0.71 (1.4
+  to 1.7 in the cells of the finer steps near the unit root), the contour integral 0.39 to 0.69, the conditional integral
+  0.55 to 0.84, the quantiles with `c0 != 0` 0.26 to 0.31.
+- The C engine of dflimit-matlab, branch engine-rules: the choice of engine (`engine="auto"`) re-derived after the
+  thinner rules of one evaluation from interleaved timings of the two C engines (a cell moved where the other engine was
+  at least 1.5 times faster): the general engine also with a zero start and c0 > 0 at c = -100 and in case DT up to
+  c = 2, with c0 < 0 in case DK for -5 < c <= 0 and in case DT at every c <= 0, at c0 = 0 in cases DU, DT for
+  0 < c <= 0.5 and in case DT below c = -20, with a fixed start in case DK also where |g0| <= 1 with |c g0| <= 50 and
+  c >= -100, for the quantiles of case ST from c = -0.5 on and for the parabola of `ltratio_region` at c0 = 0 for
+  -20 <= c <= 0. Where the rule now takes the other engine, values move by less than 1e-7. The general engine's
+  `method="auto"` takes its paths just above the unit root (0 < c <= 0.5) for designs with deterministic terms and the
+  line integral with c0 > 0 at the points x < 0 on the vertical line, where the paths' one evaluation was off by up to
+  1e-3 in the lower tail; and it warns above c = 5.5 for designs beyond the classical cases and a fixed start with deterministic terms,
+  where one evaluation of the paths may be off by more than 1e-5 in the upper tail.
+- The two papers: the package cites the lead paper, Bao, Broda and Kan, "The Exact Limiting Distribution of the
+  Dickey-Fuller t-Ratio with General Deterministic Terms" (SSRN 7745921), the paper of the general engine and of the
+  inversion formula on paths, and, for the classical engine and its representations, its companion, "Low-Rank
+  Representations of the Classical Dickey-Fuller Limits, with an Extension to Predictive Regressions" (SSRN 7725619,
+  the posting that carried the former title "... and Some Related Statistics"): the module docstring and the
+  references of the help, README, `CITATION.cff`, `.zenodo.json`, and the project URLs of `pyproject.toml`.
+- The tests compare 299 values of the general engine and 118 of the router with the stored values of the Julia
+  engine, and 44 calls that must fail with the expected errors (a subset of `c/test/det_ref.txt` of dflimit-matlab,
+  copied by `tools/det-ref.py`).
+- The C engine of dflimit-matlab 762c39c: the templates of the devices of Bao and Kan are `csrc/dfl_kan_jet.h` and
+  `csrc/dfl_kan_logcf.h` (they were `.inc` files, which `R CMD check` of the R package flagged); the sources are
+  otherwise unchanged. The README examples print the values of this version (they moved in the 12th to 13th digit).
 
 ## 0.4.1
 

@@ -379,6 +379,8 @@ int det_line_value(dfl_prov *pv, int kind, double x, double c0, double *out);
 void det_line_point_error(char *err, size_t errlen, const char *fn, const dfl_prov *pv, double x, double c0, int rc);
 void det_line_empty_cache(void);
 int det_line_cache_size(void);
+/* (for the tests) the transform at n points of the provider's line in one call: 0, and the points its memo then holds */
+int det_line_raw_test(dfl_prov *pv, int n, size_t *nmemo);
 
 /* the generated tables (dfl_det_tables.c) */
 typedef struct { int K, r, rp; double sc[9]; const double *t, *dt, *R, *lP, *wt; } det_path_table;

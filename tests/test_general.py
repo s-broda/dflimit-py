@@ -252,6 +252,16 @@ def test_the_engines_agree():
     assert coef_icdf(0.05, trend(0), engine="general") == pytest.approx(coef_icdf(0.05, "DU"), abs=1e-7)
     assert ltratio_region({"type": "parabola", "x": -1.94}, trend(-1), engine="general") == pytest.approx(
         ltratio_cdf(-1.94, "DK"), abs=1e-9)
+    # engine "auto": the parabola as the C router takes it (the general engine at c0 = 0 for -20 <= c <= 0, the classical
+    # engine elsewhere and with v0); the line by the classical engine
+    par = {"type": "parabola", "x": -1.94}
+    assert ltratio_region(par, "DK", -7) == ltratio_region(par, "DK", -7, engine="general")
+    assert ltratio_region(par, trend(-1), -7) == ltratio_region(par, "DK", -7, engine="general")
+    assert ltratio_region(par, "DK", -30) == ltratio_region(par, "DK", -30, engine="classical")
+    assert ltratio_region({**par, "c0": -2}, "DK", -7) == ltratio_region({**par, "c0": -2}, "DK", -7, engine="classical")
+    assert ltratio_region({**par, "v0": 0.0}, "DK", -7) == ltratio_region({**par, "v0": 0.0}, "DK", -7, engine="classical")
+    assert ltratio_region(par, trend(-1), -7, engine="classical") == ltratio_region(par, "DK", -7, engine="classical")
+    assert ltratio_region(par, "DK", -7) == pytest.approx(ltratio_region(par, "DK", -7, engine="classical"), abs=1e-10)
     assert v_cdf(trend(-1), 0.5) == pytest.approx(ltratio_lincdf(0.5, math.nan, "DK"), abs=1e-9)
 
 

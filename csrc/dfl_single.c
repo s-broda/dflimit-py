@@ -339,6 +339,10 @@ static double gauss_nmax(int kern, cdouble t, double q, cdouble s1, cdouble s2)
     return m;
 }
 static const char GAUSS_WHAT[] = "the segment to the saddle of the Gaussian factor of the inner integrals, whose phase grows like x^2,";
+/* the margin of the early check of a provider's line on the coarse points of its outer panels (outer_c0; EARLY_MARGIN of
+ * DFExact.jl: in a scan of 2172 configurations the check on the nodes refused wherever the coarse maximum exceeded twice
+ * DFL_RULEMAX) */
+#define EARLY_MARGIN 2.0
 static int gauss_check(int kern, double q, int n, const cdouble *ts, const cdouble *s1, const cdouble *s2, dfl_bound_t *bd)
 {
     if (!(q > 0)) return 0;
@@ -405,6 +409,20 @@ static int outer_c0(int kind, int model, double c, double q, double tau, bool st
         te0[nk - 1] = CPX(tau, Wm);
         dfl_tparts(model, c, nk, te0, stat, P0, s1e, s2e, M0e);
         double *psie = malloc(nk * sizeof(double)); saddle_phase(kern, q, nk, te0, s1e, s2e, psie);
+        /* (a provider of the general engine, whose transform costs much more than the case codes' closed forms: the bound of
+         * the inner rules on these coarse points first, with the margin EARLY_MARGIN, before the transform at the nodes of the
+         * panels, which grow in number with x: 67680 nodes in case DU at c = 10, x = 7860, where the bound then refused the
+         * point anyway; early_bound of DFExact.jl, whose scan found the check on the nodes refusing wherever this one does) */
+        if (model == DFL_MODEL_PROV && !bt) {
+            double mx = 0;
+            for (int j = 0; j < nk; j++) mx = fmax(mx, gauss_nmax(kern, te0[j], q, s1e[j], s2e[j]));
+            if (mx > EARLY_MARGIN * DFL_RULEMAX) { fail.bound = DFL_BOUND_RULE; fail.need = mx; fail.what = GAUSS_WHAT; }
+        }
+        if (fail.bound) {
+            free(edges0); free(te0); free(P0); free(s1e); free(s2e); free(M0e); free(psie);
+            free(ts); free(P); free(s1); free(s2); free(M0); free(wt); free(g); free(psi);
+            *bd = fail; return fail.bound;
+        }
         int cap_n = 0; for (int p = 0; p < ne - 1; p++) { double dp = 0; for (int k = 0; k < K; k++) { int i = p * K + k; if (!isnan(psie[i]) && !isnan(psie[i + 1])) dp += fabs(psie[i + 1] - psie[i]); }
             int m = (int) fmax(1, ceil(dp / 50)); int n = (int) fmax(24, 16 * ceil(ceil(3 * dp / m) / 16)) * DFL_NODEFAC; cap_n += m * n; }
         cdouble *tn = malloc((cap_n + 1) * sizeof(cdouble)); double *wn = malloc(cap_n * sizeof(double)); int nn = 0;

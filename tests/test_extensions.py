@@ -1,6 +1,6 @@
 """The extensions of the limit (volatility and persistence regimes, a normal component, the first seasonal t-ratio)
 against the values of the Julia engine DFLimit.jl (ref/ext_ref.txt, written by dev/ext_ref.jl of DFLimit.jl; the second
-seasonal t-ratio and the F statistic, the lines t4cdf, t4pdf, fcdf, sdval, are not ported), the argument errors and the
+seasonal t-ratio and the F statistic are not part of the release 0.5.0), the argument errors and the
 limiting cases (tests/testthat/test-extensions.R of the R package)."""
 import math
 import os

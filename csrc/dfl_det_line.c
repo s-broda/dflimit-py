@@ -112,7 +112,11 @@ static void line_raw(dfl_prov *pv, int n, const cdouble *t, cdouble *out)
             free(old);
         }
         if (pv->n + nm > pv->cap / 2) { memset(pv->tab, 0, pv->cap * sizeof(memo_ent)); pv->n = 0; }
-        for (int j = 0; j < nm; j++) {
+        /* (at most half the slots filled, so that memo_find always meets an empty slot: a call with more points keeps the first
+         * ones.  Until November 27, 2026 all were entered; a call with more points than slots filled the table and memo_find
+         * then searched forever: case DU at c = 10, x = 7860, engine general, 67680 points on the line, 65536 slots) */
+        int nput = (size_t) nm > pv->cap / 2 ? (int) (pv->cap / 2) : nm;
+        for (int j = 0; j < nput; j++) {
             int k = miss[j]; memo_ent *e = memo_find(pv, t[k]);
             if (!e->used) { e->used = 1; e->t = t[k]; pv->n++; }
             memcpy(e->v, out + 3 * k, 3 * sizeof(cdouble));
@@ -400,6 +404,19 @@ int det_line_value(dfl_prov *pv, int kind, double x, double c0, double *out)
     CUR = prev;
     if (PROVFAIL) return -1;
     return rc ? bd.bound : 0;
+}
+/* (for the tests) the transform at n points of the provider's line in one call of line_raw: 0 (1 where the transform failed),
+ * and the number of points its memo then holds in *nmemo (at most half its slots) */
+int det_line_raw_test(dfl_prov *pv, int n, size_t *nmemo)
+{
+    cdouble *t = malloc((size_t) n * sizeof(cdouble)), *out = malloc(3 * (size_t) n * sizeof(cdouble));
+    if (!t || !out) { free(t); free(out); return 1; }
+    for (int k = 0; k < n; k++) t[k] = CPX(pv->tau, pv->wend * (k + 1) / n);
+    PROVFAIL = 0; line_raw(pv, n, t, out);
+    int rc = PROVFAIL;
+    dfl_lock(&pv->lock); *nmemo = pv->n; dfl_unlock(&pv->lock);
+    free(t); free(out);
+    return rc;
 }
 /* the message of a point the line integral cannot take under method line */
 void det_line_point_error(char *err, size_t errlen, const char *fn, const dfl_prov *pv, double x, double c0, int rc)
