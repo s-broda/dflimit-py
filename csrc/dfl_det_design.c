@@ -127,6 +127,7 @@ int dfl_design_fdesign(void (*f)(double r, double *out, void *ctx), void *ctx, i
     if (!(tol > 0)) tol = 1e-14;
     if (maxdeg <= 0) maxdeg = 96;
     if (K < 1) { snprintf(err, errlen, "fdesign: K >= 1"); return 1; }
+    if (nb < 0) { snprintf(err, errlen, "fdesign: nb >= 0"); return 1; }
     int nk = nb + 2;
     double *bk = malloc(nk * sizeof(double));
     bk[0] = 0; for (int i = 0; i < nb; i++) bk[i + 1] = breaks[i]; bk[nk - 1] = 1;

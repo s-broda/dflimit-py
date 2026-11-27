@@ -1,5 +1,5 @@
 # The C engine in csrc/ was copied from dflimit-matlab (its directory c/) by tools/sync-engine.sh
-upstream_commit: 1914e5897036edf8cfa772298ca07ca8220b0ecb
-upstream_commit_date: 2026-11-27T14:13:48+01:00
+upstream_commit: 289b9773a64928d5124691936740e26b1c841a6c
+upstream_commit_date: 2026-11-27T18:44:31+01:00
 upstream_c_modified: no
 patches:
