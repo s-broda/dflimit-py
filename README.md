@@ -7,8 +7,8 @@ The exact limiting distribution of the Dickey-Fuller t-ratio in Python.
 `dflimit` computes the distribution function, density, quantiles and moments of the limits of the Dickey-Fuller
 t-ratios under local alternatives, phi = 1 + c/n, by the exact representations of two papers. The lead paper,
 
-> Bao, Y., Broda, S. A. and Kan, R., "The Exact Limiting Distribution of the Dickey-Fuller t-Ratio with General
-> Deterministic Terms", working paper, 2026, available at <https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7745921>,
+> Bao, Y., Broda, S. A. and Kan, R., "Exact Limiting Distributions of Unit Root t-Ratios", working paper, 2026,
+> available at <https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7745921>,
 
 gives the inversion formula on paths around the singularities of the joint moment generating function and with it the
 limit for any piecewise smooth deterministic terms (the general engine); its companion,

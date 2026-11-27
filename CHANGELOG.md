@@ -215,8 +215,8 @@ next four entries, outside whose regions the values are unchanged), then the lat
   line integral with c0 > 0 at the points x < 0 on the vertical line, where the paths' one evaluation was off by up to
   1e-3 in the lower tail; and it warns above c = 5.5 for designs beyond the classical cases and a fixed start with deterministic terms,
   where one evaluation of the paths may be off by more than 1e-5 in the upper tail.
-- The two papers: the package cites the lead paper, Bao, Broda and Kan, "The Exact Limiting Distribution of the
-  Dickey-Fuller t-Ratio with General Deterministic Terms" (SSRN 7745921), the paper of the general engine and of the
+- The two papers: the package cites the lead paper, Bao, Broda and Kan, "Exact Limiting Distributions of Unit Root
+  t-Ratios" (SSRN 7745921), the paper of the general engine and of the
   inversion formula on paths, and, for the classical engine and its representations, its companion, "Low-Rank
   Representations of the Classical Dickey-Fuller Limits, with an Extension to Predictive Regressions" (SSRN 7725619,
   the posting that carried the former title "... and Some Related Statistics"): the module docstring and the

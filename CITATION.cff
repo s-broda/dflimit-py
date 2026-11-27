@@ -19,7 +19,7 @@ doi: 10.5281/zenodo.24404482
 repository-code: "https://github.com/s-broda/dflimit-py"
 preferred-citation:
   type: unpublished
-  title: "The Exact Limiting Distribution of the Dickey-Fuller t-Ratio with General Deterministic Terms"
+  title: "Exact Limiting Distributions of Unit Root t-Ratios"
   authors:
     - family-names: Bao
       given-names: Yong

@@ -1,8 +1,8 @@
 """dflimit: the exact limiting distribution of the Dickey-Fuller t-ratio.
 
 The distribution function, density, quantiles and moments of the limits of the Dickey-Fuller t-ratios under local
-alternatives, by the exact representations of Bao, Broda and Kan, "The Exact Limiting Distribution of the
-Dickey-Fuller t-Ratio with General Deterministic Terms" (the lead paper, working paper, SSRN 7745921: the inversion
+alternatives, by the exact representations of Bao, Broda and Kan, "Exact Limiting Distributions of Unit Root t-Ratios"
+(the lead paper, working paper, SSRN 7745921: the inversion
 formula on paths and the limit for any piecewise smooth deterministic terms, the general engine) and, for the classical
 cases, its companion, "Low-Rank Representations of the Classical Dickey-Fuller Limits, with an Extension to Predictive
 Regressions" (working paper, SSRN 7725619: the line and the conditional integral, the classical engine), computed by

@@ -114,8 +114,8 @@ ValueError
     If an argument is out of range (the engine's checks, with its message)."""
 
 REFERENCES_DOC = """\
-.. [1] Bao, Y., Broda, S. A. and Kan, R., "The Exact Limiting Distribution of the Dickey-Fuller t-Ratio with General
-   Deterministic Terms", working paper, 2026, https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7745921.
+.. [1] Bao, Y., Broda, S. A. and Kan, R., "Exact Limiting Distributions of Unit Root t-Ratios", working paper, 2026,
+   https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7745921.
 .. [2] Bao, Y., Broda, S. A. and Kan, R., "Low-Rank Representations of the Classical Dickey-Fuller Limits, with an
    Extension to Predictive Regressions", working paper, 2026,
    https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7725619."""
