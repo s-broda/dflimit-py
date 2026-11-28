@@ -71,6 +71,18 @@ the classical values, bit for bit those of before.
   quantiles of the variants, the case strings with `vol`, the warning on the vertical line with GLS detrending at
   cbar = -2, five new argument errors; the two that asserted the lifted refusals are gone) and the three variants at a
   dummy regime boundary against the engine itself.
+- The C engine of dflimit-matlab ffeb48e (November 28, 2026): the outer contour under regimes starts at 70 degrees, as
+  in DFLimit.jl. Under regimes a root of the transform can come close to the imaginary axis far out on the engine's
+  45-degree hyperbola (an early regime of high variance with a break in the deterministic terms or a persistence that
+  changes); its part of the outer integrand is then not damped and turns faster than the outer step resolves. The
+  default rule of one evaluation lost the same amount at every x, more than 1e-5 in 17 of 1456 cases (3.8e-4 at most),
+  and in the far upper tail `dist_cdf` refused the value with its range error. The hyperbola under regimes now starts
+  at 70 degrees with a thin outer step (`rule="thin"` and `"outer"`) of twice its own: the largest error on those cases
+  is 1.7e-8, on 195 nodes on average against 140, and one value takes 1.3 to 1.6 times as long (1.2 to 1.4 times in
+  Julia). The values under regimes move by the error they had: up to 4e-10 in F, 1.2e-8 in f and 5e-10 in the
+  quantiles on the cases of `tests/ref/ext_ref.txt`, which is written anew. The engine's own designs keep their
+  contour, bit for bit. Tests: the four cases of DFLimit.jl in which the thin step on the 45-degree hyperbola failed,
+  against the checked computation into the far upper tail.
 
 ### Repairs
 

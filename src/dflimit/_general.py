@@ -133,7 +133,9 @@ RULE_DOC = """rule : {"auto", "present", "thin", "inner", "outer", "fine", "fine
         ``"inner"`` (the thin nodes on the present step), ``"outer"`` (the present nodes on the longer step),
         ``"fine"`` (the thin nodes on half the present step) and ``"finestep"`` (a fixed start without deterministic
         terms: the present nodes on min(1/2, 2.5/(gamma0 |c0|)) times the present step where the outer hyperbola is
-        flatter than 70 degrees) name a rule. The line integral (see `method`) is not affected."""
+        flatter than 70 degrees) name a rule. The line integral (see `method`) is not affected. Under regimes
+        (``vol``) the outer hyperbola starts at 70 degrees, where the engine's designs start at 45, and ``"thin"`` and
+        ``"outer"`` take twice the step of that hyperbola."""
 
 
 _NOOPTS = (0.0, 0, 0.0, math.nan, 0)

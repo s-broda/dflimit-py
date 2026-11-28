@@ -230,3 +230,22 @@ def test_limiting_cases():
     assert list(dist_cdf(T0, [-math.inf, math.inf], -5, vol=V2)) == [0.0, 1.0]
     assert math.isnan(hegy_t3_cdf(T0, math.nan))
     assert isinstance(hegy_t3_quantile(T0, 0.05), float)
+
+
+V3 = volpath([0.2, 0.7], [2, 1, 0.5])
+UPPER = [(perron("B", 0.5), V3, [-5, 0, -10], {}), (perron("C", 0.4), volpath([0.3], [3, 1]), [-5, -5], {"start": "stationary"}),
+         (perron("B", 0.3), volpath([0.2], [5, 1]), [-5, -20], {}), (perron("B", 0.5), V3, [-20, 0, -10], {"c0": 1})]
+
+
+@pytest.mark.parametrize("D, V, c, kw", UPPER, ids=["B0.5", "C0.4-stationary", "B0.3", "B0.5-c0=1"])
+def test_upper_tail_regimes(D, V, c, kw):
+    # the outer contour under regimes: a root near the imaginary axis far out (the testset of test/extensions/regimes.jl
+    # of DFLimit.jl: cases in which the thin step on the engine's 45-degree hyperbola lost 1.4e-6 to 3.8e-4 at every x,
+    # and in the far upper tail the range check of dist_cdf refused the value: an early regime of high variance with a
+    # break in the deterministic terms or a persistence that changes; the hyperbola under regimes starts at 70 degrees
+    # since the C engine of dflimit-matlab ffeb48e)
+    xs = np.array([-4, -2, -1, 0, 0.5, 1, 1.5, 2, 3, 5.0])
+    F = dist_cdf(D, xs, c, vol=V, **kw)
+    assert np.max(np.abs(F - dist_cdf(D, xs, c, vol=V, verified=True, **kw))) < 1e-10
+    assert np.all(np.diff(F) > -1e-11) and 1 - F[-1] < 1e-11
+    assert np.min(dist_pdf(D, xs, c, vol=V, **kw)) > -1e-11

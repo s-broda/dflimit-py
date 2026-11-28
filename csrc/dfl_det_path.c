@@ -416,11 +416,15 @@ static det_path *linecpath(det_model_ref *mr, const det_tm *Mo, double c, double
     return CP;
 }
 
-/* cpath: the hyperbola of the transform model at c (phi NaN: pi/4, or fixed_phi with a fixed start and below c = -60,
- * steepened while a root group leaves its side of the imaginary axis, the vertical line beyond 88 degrees); mr the inner
- * model of the path.  (The steepening for the negative group too: the volatility transform with an intercept and the
- * standard deviation rising fivefold at a tenth of the sample has its negative root at Re s = +0.22 on the 45-degree
- * hyperbola; the engine's designs keep that group left of the origin, where the condition changes nothing.) */
+/* the asymptotic angle at which the outer hyperbola starts (start_phi): 45 degrees for the engine's designs; the volatility
+ * model starts steeper (DET_VOL_PHI, dfl_det_int.h) */
+static double start_phi(const det_tm *Mo) { return Mo->vm ? DET_VOL_PHI : M_PI / 4; }
+/* cpath: the hyperbola of the transform model at c (phi NaN: start_phi, or with a fixed start and below c = -60 the larger
+ * of fixed_phi and start_phi, steepened while a root group leaves its side of the imaginary axis, the vertical line beyond
+ * 88 degrees); mr the inner model of the path.  (The steepening for the negative group too: the volatility transform with
+ * an intercept and the standard deviation rising fivefold at a tenth of the sample has its negative root at Re s = +0.22
+ * on the 45-degree hyperbola; the engine's designs keep that group left of the origin, where the condition changes
+ * nothing.) */
 static det_path *cpath(det_model_ref *mr, const det_tm *Mo, double c, double phi, double hfac, double tau0, char *err, size_t errlen)
 {
     const int sub = 8;
@@ -429,8 +433,9 @@ static det_path *cpath(det_model_ref *mr, const det_tm *Mo, double c, double phi
     double tau = isnan(tau0) ? dmin(1.0, ts / 2) : tau0;
     int autophi = isnan(phi);
     if (autophi) {
-        if (Mo->start == 1 || c < DET_FAR_CMIN) { if (fixed_phi(Mo, c, ts, tau, hfac, rmax, &phi, err, errlen)) return NULL; }
-        else phi = M_PI / 4;
+        /* (fixed_phi starts at 45 degrees: the larger of the two is fixed_phi itself for the engine's designs) */
+        if (Mo->start == 1 || c < DET_FAR_CMIN) { if (fixed_phi(Mo, c, ts, tau, hfac, rmax, &phi, err, errlen)) return NULL; phi = dmax(phi, start_phi(Mo)); }
+        else phi = start_phi(Mo);
     }
     double a, b, h, mnp, mxn; int K;
     cdouble *R = NULL, *lP = NULL; det_fixt **FX = NULL; cdouble *tt = NULL; int nt = 0;

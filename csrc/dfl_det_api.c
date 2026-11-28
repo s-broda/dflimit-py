@@ -181,7 +181,8 @@ int dfl_det_path_region(int fixed, int rank1, double c, double c0)
  * this one by 7e-12; on the steep hyperbolas of g0 = 2, 88 degrees, the present step is within 1e-12 and the thin inner rule
  * is not); on the vertical line the line itself.  *rl the rule taken (DET_RULE_GIVEN where hfac is given) */
 /* (VM: the paths of the volatility model, whose rule is that of its inner model, with a zero or a stationary start, at the
- * smallest c of the regimes: vol_rule_path, DFL_RULE_FINESTEP with the g0 of the inner model, 0) */
+ * smallest c of the regimes: vol_rule_path, DFL_RULE_FINESTEP with the g0 of the inner model, 0; the hyperbola starts at
+ * DET_VOL_PHI, and DFL_RULE_THIN and DFL_RULE_OUTER take the step factor DET_VOL_HFAC, det_vol_hfac) */
 static det_path *rule_path_x(const dfl_design *D, det_vmodel *VM, double c, const dfl_det_opts *o, int verified, int *n, int *ntail, int *rl, char *err, size_t errlen)
 {
     if (o->rule < DFL_RULE_AUTO || o->rule > DFL_RULE_FINESTEP) { snprintf(err, errlen, "%s", DET_RULE_MSG); return NULL; }
@@ -202,6 +203,7 @@ static det_path *rule_path_x(const dfl_design *D, det_vmodel *VM, double c, cons
     const det_rule_t *R = &DET_PATH_RULES[r];
     double hf = R->hfac, phi = o->phi;
     if (!isnan(o->hfac)) { hf = o->hfac; r = DET_RULE_GIVEN; }
+    if (VM) hf = det_vol_hfac(hf, r);      /* (under regimes the thin outer step is DET_VOL_HFAC times the step: vol_hfac) */
     *n = o->n > 0 ? o->n : fixed ? R->nf : R->n;
     *ntail = o->ntail > 0 ? o->ntail : fixed ? R->ntf : R->ntail;
     if (rl) *rl = r;

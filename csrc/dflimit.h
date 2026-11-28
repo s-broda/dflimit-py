@@ -529,7 +529,10 @@ typedef struct {
  * DFL_RULE_FINESTEP (a fixed start without deterministic terms) the present inner rule on the present hyperbola with the step
  * min(1/2, 2.5/(g0 |c0|)) times its own where it is flatter than 70 degrees.  DFL_RULE_AUTO: by regions of the start, the
  * deterministic terms, c and c0 (the README, "The rules of one evaluation"); hfac (a number), n and ntail override the rule.
- * On the vertical line (above the unit root) hfac does not apply and the line keeps its 24 nodes per panel. */
+ * On the vertical line (above the unit root) hfac does not apply and the line keeps its 24 nodes per panel.  Under
+ * volatility and persistence regimes (vol) the outer hyperbola starts at 70 degrees, where the engine's designs start at
+ * 45, and the thin outer step of DFL_RULE_THIN and DFL_RULE_OUTER is 2 times the step of that hyperbola (DET_VOL_PHI,
+ * DET_VOL_HFAC of dfl_det_int.h); a given phi or hfac is taken as given. */
 #define DFL_RULE_AUTO 0
 #define DFL_RULE_PRESENT 1
 #define DFL_RULE_THIN 2
