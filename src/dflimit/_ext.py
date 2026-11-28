@@ -14,9 +14,14 @@ VOL_DOC = """\
 vol : VolPath, optional
     Volatility and persistence regimes (`volpath`): the limit of the process dJ = c(r) J dr + omega(r) dW with the
     standard deviation omega and, with ``c`` a sequence of one value per regime, the local-to-unity parameter piecewise
-    constant between known dates (zero start, least squares detrending, the one-step regression, every c in [-480, 0];
-    ``method`` "auto" or "paths": the inversion on paths of the volatility transform). One regime with a scalar ``c`` is
-    the engine itself."""
+    constant between known dates (every c in [-480, 0]; ``method`` "auto" or "paths": the inversion on paths of the
+    volatility transform). The detrending and the start are the engine's: least squares or GLS detrending (``gls``),
+    the one-step regression or the statistic that detrends first (`detrend_first`), and a zero start or, with least
+    squares in the one-step regression, the stationary start of the first regime (``start="stationary"``: J(0) ~ N(0,
+    omega_1^2/(-2 c_1)), which needs c < 0 on the first regime). A fixed start (``gamma0 != 0``) is refused with more
+    than one regime: the engine's paths of a fixed start are laid for a constant variance and persistence, and under
+    regimes they fail or lose accuracy for starts of moderate size. One regime with a scalar ``c`` is the engine
+    itself."""
 
 RHO_DOC = """\
 rho : float, default 1
@@ -59,6 +64,10 @@ class VolPath:
 def volpath(breaks=(), omega=None):
     """Volatility (and persistence) regimes between known dates.
 
+    With a volatility path the functions take the detrending and the start of the engine (``gls``, `detrend_first`,
+    ``start="stationary"``, the stationary start of the first regime), and the case strings ``"SK"``, ``"SU"``,
+    ``"ST"`` and ``"DG"`` their own; a fixed start is refused with more than one regime.
+
     Parameters
     ----------
     breaks : array_like
@@ -76,10 +85,14 @@ def volpath(breaks=(), omega=None):
 
     Examples
     --------
-    >>> from dflimit import volpath, dist_cdf, trend
+    >>> from dflimit import volpath, dist_cdf, dist_quantile, ltratio_icdf, trend
     >>> V = volpath([0.3], [1, 3])            # the standard deviation triples at 30% of the sample
     >>> dist_cdf(trend(0), -1.5, 0, vol=V)
     0.386893...
+    >>> dist_quantile(trend(1), 0.05, 0, vol=V, gls=-13.5)    # DF-GLS (cbar = -13.5) under the variance break
+    -2.996681...
+    >>> ltratio_icdf(0.05, "SU", -5, vol=V)    # the stationary start of the first regime, J(0) ~ N(0, omega_1^2/10)
+    -3.225345...
     """
     br = np.atleast_1d(np.asarray(breaks, dtype=np.float64))
     if not np.all(np.isfinite(br) & (br > 0) & (br < 1)):

@@ -205,20 +205,26 @@ int det_tstar(const det_model *Mo, double c, double *ts, int *mult, char *err, s
  * of N x N, Sc of N0 x N0 complex entries and piv of N ints are the caller's work space; W->M is overwritten */
 cdouble det_detlog_piv(det_work *W, double c, cdouble s, cdouble t, cdouble th, cdouble *K, cdouble *Sl, cdouble *Sc, int *piv);
 
-/* the two largest eigenvalues of the Nystrom estimates (eigtop, eigtop_q; det_eigtop_k with the covariance kernel
- * kern(r, u, ctx) in place of the Ornstein-Uhlenbeck one) */
+/* the two largest eigenvalues of the Nystrom estimates (eigtop, eigtop_q; det_eigtop_k and det_eigtop_qk with the
+ * covariance kernel kern(r, u, ctx) in place of the Ornstein-Uhlenbeck one, the keyword kern of DFDet.jl) */
 int det_eigtop(const det_prep *P, double c, int m, int stat, double *l1, double *l2);
 int det_eigtop_k(const det_prep *P, int m, double (*kern)(double r, double u, const void *ctx), const void *ctx, double *l1, double *l2);
 int det_eigtop_q(const det_prep *P, double c, int m, double *l1, double *l2);
+int det_eigtop_qk(const det_prep *P, int m, double (*kern)(double r, double u, const void *ctx), const void *ctx, double *l1, double *l2);
 double det_e0r(double z);
 
 /* ---- the volatility and persistence regimes (src/DFDet_vol.jl): the model (dfl_det_path.c) and its transform
  * (dfl_det_mgf.c) ----
- * The design refined at the regime boundaries (its prepared design P and zero-start model, the inner model of the paths, in
- * mr), np pieces of lengths L with omega^2 and c on each, the vector ell = (J(1), J at the jumps of d, z = int g J, J at the
- * regime boundaries that are not jumps of d) of dimension Ne, bpos[j] (j < np - 1) the position in ell of J at the boundary
- * between pieces j and j + 1 (-1: not in ell), the padded matrices A, B (Ne x Ne) and Lx (Ne x r) of the design and the
- * eigenvalues Dv.  The path: nreg regimes, lam (nreg + 1) the boundaries, om the scaled standard deviations, cr the c. */
+ * The design refined at the regime boundaries (its prepared design P, by least squares or, with GLS detrending, by
+ * prep_gls, and the engine's model of P with the start, the inner model of the paths, in mr), np pieces of lengths L with
+ * omega^2 and c on each, the vector ell = (J(1), J at the jumps of d, z = int g J, J at the regime boundaries that are not
+ * jumps of d) of dimension Ne, bpos[j] (j < np - 1) the position in ell of J at the boundary between pieces j and j + 1
+ * (-1: not in ell), the padded matrices A, B (N x N) and Lx (N x r) of the design and the eigenvalues Dv.  The start: 0
+ * zero (N = Ne), or 2 a normal start of variance v0 (the stationary start of the first regime unless det_vol_model is given
+ * another), where J(0) is one more functional: N = Ne + 1 and A, B, Lx, Dv are the matrices of the engine's stationary
+ * start (A bordered by b/2 and -1/2, B by zeros).  The path: nreg regimes, lam (nreg + 1) the boundaries, om the scaled
+ * standard deviations, cr the c.  (The fixed start under regimes, vol_qf of DFDet.jl, is not ported: its distribution is
+ * refused in every language.) */
 struct det_model_ref;
 typedef struct det_vmodel {
     struct det_model_ref *mr;
@@ -226,17 +232,19 @@ typedef struct det_vmodel {
     int nreg; double *lam, *om, *cr;
     int np; double *L, *om2, *c;
     int Ne; int *bpos;
+    int start, N; double v0;
     double *A, *B, *Lx, *Dv;
     int r, rp, rm;
     double cmin;
     unsigned long long key;
     int refs;
 } det_vmodel;
-/* the work space of the volatility transform at one t (VolWork) */
+/* the work space of the volatility transform at one t (VolWork): with a normal start h the mean of ell under the tilted
+ * process started at one (vol_start!) and Sx the covariance of (ell, J(0)), N x N; otherwise Sx is S itself */
 typedef struct {
     const det_vmodel *VM;
     int nq; const double *zq, *wq;
-    cdouble *e, *F, *Rb, *Ib, *S, *M, *th, *v, *gam, *X, *Hm, *v1;
+    cdouble *e, *F, *Rb, *Ib, *S, *M, *th, *v, *gam, *X, *Hm, *v1, *h, *Sx;
     double *a;
     int *piv;
     void *heap;
@@ -244,15 +252,18 @@ typedef struct {
 int det_vwork_init(det_vwork *W, const det_vmodel *VM, void *buf, size_t bytes);
 void det_vwork_free(det_vwork *W);
 /* the transform at t (mgfparts of a VolModel): log D_V(t) = sum_j (c_j + theta_j) L_j + log det{I - 2 (t B + Gamma) Sigma}
- * and the r reciprocal roots mu; 1 if the eigenvalue routine fails */
+ * and the r reciprocal roots mu (with a normal start B, Gamma and Sigma those of (ell, J(0))); 1 if the eigenvalue routine
+ * fails */
 int det_vol_parts(det_vwork *W, cdouble t, cdouble *ld, cdouble *mu);
 /* D(s, t) = exp{sum_j (c_j + theta_j) L_j} det{I - 2 (s A + t B + Gamma) Sigma} (vol_dval) */
 cdouble det_vol_dval(const det_vmodel *VM, cdouble s, cdouble t);
 /* t_* of the volatility model (vol_tstar) */
 int det_vol_tstar(const det_vmodel *VM, double *ts, int *mult, char *err, size_t errlen);
-/* the cached model of the design D (least squares, the one-step regression) with the regimes of v at the c of the regimes
- * (cr, nreg values); a reference (det_vol_release) */
-det_vmodel *det_vol_model(const dfl_design *D, const dfl_vol *v, const double *cr, char *err, size_t errlen);
+/* the cached model (vol_model) of the design D (with D->first the statistic that detrends first) with the regimes of v at
+ * the c of the regimes (cr, nreg values): start DFL_START_ZERO, or DFL_START_STAT (a normal start, its variance v0 that of
+ * the stationary law of the first regime, om_1^2/(-2 c_1), where v0 is NaN), and GLS detrending at gls = cbar (NaN: least
+ * squares; zero start); a reference (det_vol_release) */
+det_vmodel *det_vol_model(const dfl_design *D, const dfl_vol *v, const double *cr, int start, double gls, double v0, char *err, size_t errlen);
 void det_vol_release(det_vmodel *VM);
 
 /* a transform model of the outer contour (TransformModel of DFDet.jl): the engine's model Mo (vm NULL) or the volatility

@@ -8,7 +8,7 @@
 
 /* ---- the transform model: its work space, its transform at t and its t_* ---- */
 static det_tm tm_of_model(const det_model *Mo) { det_tm T = {Mo, NULL, Mo->r, Mo->rp, Mo->rm, Mo->start, Mo->g0}; return T; }
-static det_tm tm_of_vol(const det_vmodel *VM) { det_tm T = {&VM->mr->Mo, VM, VM->r, VM->rp, VM->rm, 0, 0.0}; return T; }
+static det_tm tm_of_vol(const det_vmodel *VM) { det_tm T = {&VM->mr->Mo, VM, VM->r, VM->rp, VM->rm, VM->start, 0.0}; return T; }
 typedef struct { const det_tm *T; det_work W; det_vwork V; } tw_t;
 static int tw_init(tw_t *w, const det_tm *T, void *buf, size_t bytes)
 {
@@ -722,8 +722,9 @@ det_path *det_v_path(const dfl_design *D, double cbar, int start, double g0, dou
 }
 
 /* =====================================================================================================================
- * The volatility and persistence regimes (src/DFDet_vol.jl): the model of a design with the regimes (vol_model), cached,
- * and its outer contours (vol_path), cached
+ * The volatility and persistence regimes (src/DFDet_vol.jl): the model of a design with the regimes (vol_model: with
+ * least squares or GLS detrending, the one-step regression or the statistic that detrends first, a zero or a normal start),
+ * cached, and its outer contours (vol_path, keyed by the model, which holds the design, cbar, the start and v0), cached
  * ===================================================================================================================== */
 typedef struct { unsigned long long key; det_vmodel *VM; } vol_entry;
 static vol_entry VOLC[DET_CACHE_MAX]; static int NVOLC = 0;
@@ -778,17 +779,29 @@ static int vol_refine(const dfl_design *D, int nl, const double *lam, dfl_design
     }
     return 0;
 }
-static unsigned long long vol_key(const dfl_design *D, int nreg, const double *lam, const double *om, const double *cr)
+/* the key of the model: the design (with D->first) and the regimes, the c of the regimes, the start, cbar and v0 */
+static unsigned long long vol_key(const dfl_design *D, int nreg, const double *lam, const double *om, const double *cr, int start, double gls, double v0)
 {
-    unsigned long long h = det_design_key(D, NAN);
+    unsigned long long h = det_design_key(D, gls);
 #define MIX(p, n) do { const unsigned char *b_ = (const unsigned char *) (p); for (size_t i_ = 0; i_ < (n); i_++) { h ^= b_[i_]; h *= 1099511628211ULL; } } while (0)
     MIX(&nreg, sizeof nreg);
     MIX(lam, (nreg + 1) * sizeof(double)); MIX(om, nreg * sizeof(double)); MIX(cr, nreg * sizeof(double));
+    if (start != 0) {
+        /* (the zero start keeps the key of before; a normal start mixes in its code and v0, NaN by one bit pattern) */
+        unsigned long long vb; memcpy(&vb, &v0, 8); if (isnan(v0)) vb = 0x7ff8000000000000ULL;
+        MIX(&start, sizeof start); MIX(&vb, 8);
+    }
 #undef MIX
     return h;
 }
-det_vmodel *det_vol_model(const dfl_design *D, const dfl_vol *v, const double *cr, char *err, size_t errlen)
+/* vol_model: the design refined at the regime boundaries, its prepared design by least squares or GLS detrending
+ * (prep_cached(D, gls)) and the engine's model of it with the start (which refuses a start with GLS detrending or with the
+ * statistic that detrends first), the pieces, the extended vector ell, and with a normal start J(0) as the last functional
+ * with the matrices of the engine's stationary start */
+det_vmodel *det_vol_model(const dfl_design *D, const dfl_vol *v, const double *cr, int start, double gls, double v0, char *err, size_t errlen)
 {
+    if (start == 1) start = 0;           /* (a fixed start with gamma0 = 0 is the zero start; gamma0 != 0 is refused before, det_vol_args) */
+    if (start != 0 && start != 2) { snprintf(err, errlen, "vol_model: start must be zero (0) or stationary (2) (the fixed start under regimes is not computed)"); return NULL; }
     int nreg = v->nreg;
     double *lam = malloc((nreg + 1) * sizeof(double)), *om = malloc(nreg * sizeof(double)), *crc = malloc(nreg * sizeof(double));
     if (!lam || !om || !crc) { free(lam); free(om); free(crc); snprintf(err, errlen, "out of memory"); return NULL; }
@@ -797,16 +810,16 @@ det_vmodel *det_vol_model(const dfl_design *D, const dfl_vol *v, const double *c
     for (int i = 0; i < nreg; i++) { om[i] = v->omega ? v->omega[i] : 1.0; s2 += om[i] * om[i] * (lam[i + 1] - lam[i]); }
     double sc = sqrt(s2);
     for (int i = 0; i < nreg; i++) { om[i] /= sc; crc[i] = cr[i]; }
-    unsigned long long key = vol_key(D, nreg, lam, om, crc);
+    unsigned long long key = vol_key(D, nreg, lam, om, crc, start, gls, v0);
     dfl_lock(&CLOCK_);
     for (int i = 0; i < NVOLC; i++) if (VOLC[i].key == key) { det_vmodel *VM = VOLC[i].VM; VM->refs++; dfl_unlock(&CLOCK_); free(lam); free(om); free(crc); return VM; }
     dfl_unlock(&CLOCK_);
     dfl_design Dr;
     if (vol_refine(D, nreg + 1, lam, &Dr)) { free(lam); free(om); free(crc); snprintf(err, errlen, "out of memory"); return NULL; }
-    det_prep *P = det_prep_cached(&Dr, NAN, err, errlen);
+    det_prep *P = det_prep_cached(&Dr, gls, err, errlen);
     free(Dr.br); free(Dr.C);
     if (!P) { free(lam); free(om); free(crc); return NULL; }
-    det_model_ref *mr = mref_new(P, 0, 0.0, err, errlen);
+    det_model_ref *mr = mref_new(P, start, 0.0, err, errlen);
     if (!mr) { det_prep_release(P); free(lam); free(om); free(crc); return NULL; }
     det_vmodel *VM = calloc(1, sizeof *VM);
     VM->mr = mr; VM->P = P; VM->nreg = nreg; VM->lam = lam; VM->om = om; VM->cr = crc; VM->key = key; VM->refs = 1;
@@ -828,13 +841,34 @@ det_vmodel *det_vol_model(const dfl_design *D, const dfl_vol *v, const double *c
         else if (VM->om2[j] != VM->om2[j + 1] || VM->c[j] != VM->c[j + 1]) VM->bpos[j] = Ne++;
         else VM->bpos[j] = -1;
     }
-    VM->Ne = Ne;
-    VM->A = calloc((size_t) Ne * Ne, sizeof(double)); VM->B = calloc((size_t) Ne * Ne, sizeof(double));
-    VM->Lx = calloc((size_t) Ne * imax(r, 1), sizeof(double)); VM->Dv = malloc(imax(r, 1) * sizeof(double));
-    for (int j = 0; j < N; j++) for (int i = 0; i < N; i++) { VM->A[i + (size_t) j * Ne] = P->A[i + (size_t) j * N]; VM->B[i + (size_t) j * Ne] = P->B[i + (size_t) j * N]; }
-    for (int k = 0; k < r; k++) { for (int i = 0; i < N; i++) VM->Lx[i + (size_t) k * Ne] = P->L[i + (size_t) k * N]; VM->Dv[k] = P->Dv[k]; }
-    VM->r = r; VM->rp = P->rp; VM->rm = P->rm;
+    VM->Ne = Ne; VM->start = mr->Mo.start; VM->N = Ne; VM->v0 = 0;
     VM->cmin = crc[0]; for (int i = 1; i < nreg; i++) VM->cmin = dmin(VM->cmin, crc[i]);
+    if (VM->start == 2) {
+        /* a normal start: J(0) the last functional, the matrices of the engine's stationary start (det_model_make), A bordered
+         * by b/2 and -1/2 and B by zeros, and the inertia of A that of the engine's model */
+        if (isnan(v0)) v0 = VM->om2[0] / (-2 * VM->c[0]);
+        if (!(isfinite(v0) && v0 > 0)) {
+            snprintf(err, errlen, "the variance of a normal start must be positive and finite (the stationary start of the first regime needs c < 0 there)");
+            dfl_lock(&CLOCK_); vol_unref_locked(VM); dfl_unlock(&CLOCK_); return NULL;
+        }
+        int Nx = Ne + 1;
+        VM->N = Nx; VM->v0 = v0;
+        VM->A = calloc((size_t) Nx * Nx, sizeof(double)); VM->B = calloc((size_t) Nx * Nx, sizeof(double));
+        for (int j = 0; j < N; j++) for (int i = 0; i < N; i++) { VM->A[i + (size_t) j * Nx] = P->A[i + (size_t) j * N]; VM->B[i + (size_t) j * Nx] = P->B[i + (size_t) j * N]; }
+        for (int i = 0; i < N; i++) VM->A[i + (size_t) Ne * Nx] = VM->A[Ne + (size_t) i * Nx] = P->b[i] / 2;
+        VM->A[Ne + (size_t) Ne * Nx] = -0.5;
+        det_keep_eig(Nx, VM->A, &VM->Dv, &VM->Lx, &VM->r, &VM->rp, &VM->rm);
+        if (VM->r != mr->Mo.r || VM->rp != mr->Mo.rp || VM->rm != mr->Mo.rm) {
+            snprintf(err, errlen, "vol_model: internal error: the inertia of the numerator with the start differs from that of the engine's model");
+            dfl_lock(&CLOCK_); vol_unref_locked(VM); dfl_unlock(&CLOCK_); return NULL;
+        }
+    } else {
+        VM->A = calloc((size_t) Ne * Ne, sizeof(double)); VM->B = calloc((size_t) Ne * Ne, sizeof(double));
+        VM->Lx = calloc((size_t) Ne * imax(r, 1), sizeof(double)); VM->Dv = malloc(imax(r, 1) * sizeof(double));
+        for (int j = 0; j < N; j++) for (int i = 0; i < N; i++) { VM->A[i + (size_t) j * Ne] = P->A[i + (size_t) j * N]; VM->B[i + (size_t) j * Ne] = P->B[i + (size_t) j * N]; }
+        for (int k = 0; k < r; k++) { for (int i = 0; i < N; i++) VM->Lx[i + (size_t) k * Ne] = P->L[i + (size_t) k * N]; VM->Dv[k] = P->Dv[k]; }
+        VM->r = r; VM->rp = P->rp; VM->rm = P->rm;
+    }
     dfl_lock(&CLOCK_);
     for (int i = 0; i < NVOLC; i++) if (VOLC[i].key == key) {
         det_vmodel *Q = VOLC[i].VM; Q->refs++;

@@ -1,16 +1,18 @@
 """The extensions of the limit (volatility and persistence regimes, a normal component, the first seasonal t-ratio)
 against the values of the Julia engine DFLimit.jl (ref/ext_ref.txt, written by dev/ext_ref.jl of DFLimit.jl; the second
-seasonal t-ratio and the F statistic are not part of the release 0.5.0), the argument errors and the
-limiting cases (tests/testthat/test-extensions.R of the R package)."""
+seasonal t-ratio and the F statistic are not part of the release 0.5.0), the regimes with GLS detrending, with the
+statistic that detrends first and with the stationary start of the first regime (the tags rval, rquant, rcase, rwarn),
+the argument errors and the limiting cases (tests/testthat/test-extensions.R of the R package)."""
 import math
 import os
+import re
 
 import numpy as np
 import pytest
 
 import dflimit
-from dflimit import (cadf_c0, dist_cdf, dist_pdf, dist_quantile, hegy_t3_cdf, hegy_t3_pdf, hegy_t3_quantile, ltratio_cdf,
-                     ltratio_icdf, perron, predictive_c0, trend, volpath)
+from dflimit import (cadf_c0, detrend_first, dist_cdf, dist_pdf, dist_quantile, hegy_t3_cdf, hegy_t3_pdf, hegy_t3_quantile,
+                     ltratio_cdf, ltratio_icdf, ltratio_pdf, perron, predictive_c0, trend, volpath)
 
 REF = os.path.join(os.path.dirname(__file__), "ref", "ext_ref.txt")
 
@@ -28,8 +30,12 @@ for w in LINES:
     elif w[0] == "vol":
         nb = int(w[2])
         VOLS[int(w[1])] = volpath([float(v) for v in w[3:3 + nb]], [float(v) for v in w[3 + nb:4 + 2 * nb]])
-CASES = [w for w in LINES if w[0] in ("vval", "vquant", "cval", "cquant")
+# (the layers of the engine that the package does not reach, the transform, its roots and t_*, are not checked: vdval,
+# vroots, vtstar, rdval, rroots, rtstar)
+SKIPPED = ("vdval", "vroots", "vtstar", "rdval", "rroots", "rtstar")
+CASES = [w for w in LINES if w[0] in ("vval", "vquant", "cval", "cquant", "rval", "rquant", "rcase", "rwarn")
          or (w[0] == "sval" and w[1].startswith("t3")) or (w[0] == "squant" and w[1] == "t3")]
+ERRS = [" ".join(w[w.index("|") + 1:]) for w in LINES if w[0] == "err"]
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -43,10 +49,50 @@ def _vec(w, k):
     return np.array([float(v) for v in w[k + 1:k + 1 + n]]), k + 1 + n
 
 
-@pytest.mark.parametrize("w", CASES, ids=[" ".join(w[:6]) for w in CASES])
+def _var(w, k):
+    """The variant of the regimes at w[k] (did vid nc c_1..c_nc start gls first: start 0 zero or 2 stationary, gls cbar or
+    NaN for least squares, first 1 for detrend_first of the design): the design, c, the keywords, the next index."""
+    did, vid, nc = int(w[k]), int(w[k + 1]), int(w[k + 2])
+    c = [float(v) for v in w[k + 3:k + 3 + nc]]
+    st, g, first = int(w[k + 3 + nc]), float(w[k + 4 + nc]), int(w[k + 5 + nc])
+    D = detrend_first(DESIGNS[did]) if first == 1 else DESIGNS[did]
+    kw = {"vol": VOLS[vid], "start": "stationary" if st == 2 else "zero"}
+    if not math.isnan(g):
+        kw["gls"] = g
+    return D, c, kw, k + 6 + nc
+
+
+def _id(w):
+    return " ".join(w[:11] if w[0] in ("rval", "rquant", "rcase", "rwarn") else w[:6])
+
+
+@pytest.mark.parametrize("w", CASES, ids=[_id(w) for w in CASES])
 def test_reference(w):
     tag = w[0]
-    if tag in ("vval", "vquant"):
+    if tag == "rval":
+        D, c, kw, k = _var(w, 2)
+        c0 = float(w[k]); x, k = _vec(w, k + 1); ref, k = _vec(w, k); tol = float(w[k])
+        got = (dist_cdf if w[1] == "cdf" else dist_pdf)(D, x, c, c0=c0, **kw)
+    elif tag == "rquant":
+        D, c, kw, k = _var(w, 1)
+        c0, p, ref, tol = (float(v) for v in w[k:k + 4])
+        got = dist_quantile(D, p, c, c0=c0, **kw)
+    elif tag == "rcase":
+        # (the case strings SU, ST, DG with a volatility path; for icdf x holds the probabilities)
+        f = {"cdf": ltratio_cdf, "pdf": ltratio_pdf, "icdf": ltratio_icdf}[w[1]]
+        cas, V, nc = w[2], VOLS[int(w[3])], int(w[4])
+        c = [float(v) for v in w[5:5 + nc]]
+        k = 5 + nc
+        c0 = float(w[k]); x, k = _vec(w, k + 1); ref, k = _vec(w, k); tol = float(w[k])
+        got = f(x, cas, c, c0, vol=V)
+    elif tag == "rwarn":
+        # (dist_cdf at one point, which warns with a message that holds the fragment after the bar)
+        D, c, kw, k = _var(w, 1)
+        c0, x, ref, tol = (float(v) for v in w[k:k + 4])
+        frag = " ".join(w[w.index("|") + 1:])
+        with pytest.warns(RuntimeWarning, match=re.escape(frag)):
+            got = dist_cdf(D, x, c, c0=c0, **kw)
+    elif tag in ("vval", "vquant"):
         k0 = 2 if tag == "vval" else 1
         D, V, nc = DESIGNS[int(w[k0])], VOLS[int(w[k0 + 1])], int(w[k0 + 2])
         c = [float(v) for v in w[k0 + 3:k0 + 3 + nc]]
@@ -78,17 +124,32 @@ def test_reference(w):
 
 
 def test_coverage():
-    assert len(CASES) == 20 + 6 + 20 + 3 + 12 + 2
+    # vval, vquant, cval, cquant, sval, squant; rval, rquant, rcase, rwarn
+    assert len(CASES) == 20 + 6 + 20 + 3 + 12 + 2 + 38 + 12 + 12 + 1
+    # every tag of the file is checked or skipped on purpose (a new tag of dev/ext_ref.jl is noticed)
+    assert {w[0] for w in LINES} <= {w[0] for w in CASES} | set(SKIPPED) | {"design", "vol", "err"}
+    # the err lines: each fragment is checked by test_errors or test_errors_types
+    assert len(ERRS) == 18
+    assert set(ERRS) <= {frag for _, frag in ERRORS} | {"needs a volatility path"}
 
 
-@pytest.mark.parametrize("call, frag", [
+ERRORS = [
     (lambda: volpath([1.2]), "must lie in (0, 1)"),
     (lambda: volpath([0.5, 0.3]), "strictly increasing"),
     (lambda: volpath([0.5], [1.0]), "one standard deviation omega per regime"),
     (lambda: volpath([0.5], [1.0, -1.0]), "finite and positive"),
     (lambda: dist_cdf(trend(0), -2, 2, vol=volpath([0.3], [1, 3])), "must be at most 0"),
-    (lambda: dist_cdf(trend(0), -2, -5, vol=volpath([0.3], [1, 3]), start="stationary"), "zero start only"),
-    (lambda: dist_cdf(trend(1), -2, -5, vol=volpath([0.3], [1, 3]), gls=-13.5), "GLS detrending"),
+    # (the regime variants: a fixed start is refused under more than one regime, the stationary start is that of the
+    # first regime, and GLS detrending, detrending first and a start exclude each other as without regimes)
+    (lambda: dist_cdf(trend(0), -2, -5, vol=volpath([0.3], [1, 3]), start="fixed", gamma0=1),
+     "fixed start (gamma0 != 0) is not computed"),
+    (lambda: ltratio_cdf(-2, "DU", -5, g0=1, vol=volpath([0.3], [1, 3])), "fixed start (gamma0 != 0) is not computed"),
+    (lambda: dist_cdf(trend(0), -2, [0, -5], vol=volpath([0.3], [1, 3]), start="stationary"),
+     "needs c < 0 on the first regime"),
+    (lambda: ltratio_cdf(-2, "SU", [0, -5], vol=volpath([0.3], [1, 3])), "needs c < 0 on the first regime"),
+    (lambda: dist_cdf(detrend_first(trend(1)), -2, -5, vol=volpath([0.3], [1, 3]), gls=-13.5), "detrends first already"),
+    (lambda: dist_cdf(trend(1), -2, -5, vol=volpath([0.3], [1, 3]), gls=-13.5, start="stationary"), "zero start only"),
+    (lambda: dist_cdf(detrend_first(trend(1)), -2, -5, vol=volpath([0.3], [1, 3]), start="stationary"), "zero start only"),
     (lambda: dist_cdf(trend(0), -2, [0, -1, 0], vol=volpath([0.3], [1, 3])), "one value per regime"),
     (lambda: dist_cdf(trend(0), -2, -5, vol=volpath([0.3], [1, 3]), rho=0.5), "rho and vol together"),
     (lambda: dist_cdf(trend(0), -2, -5, rho=1.5), "rho must lie in [-1, 1]"),
@@ -105,7 +166,10 @@ def test_coverage():
     (lambda: predictive_c0(-5, 1.5), "not be 0"),
     (lambda: hegy_t3_cdf(trend(0), 1, 1), "must be at most 0"),
     (lambda: ltratio_cdf(-2, "DU", 0, vol=volpath([0.3], [1, 3]), engine="classical"), "engine classical"),
-])
+]
+
+
+@pytest.mark.parametrize("call, frag", ERRORS)
 def test_errors(call, frag):
     with pytest.raises(ValueError) as e:
         call()
@@ -132,6 +196,18 @@ def test_limiting_cases():
     for c in (0, -10):
         assert np.max(np.abs(dist_cdf(T0, xs, c, vol=volpath([0.4])) - dist_cdf(T0, xs, c, method="paths"))) < 1e-12
         assert np.max(np.abs(dist_pdf(T0, xs, c, vol=volpath([0.4])) - dist_pdf(T0, xs, c, method="paths"))) < 1e-12
+    # the regime variants at a dummy regime boundary, a constant variance and the same c on both regimes: the engine
+    # itself (its paths) with the same detrending, design and start (GLS detrending, the statistic that detrends first,
+    # the stationary start; within about 1e-14)
+    V1 = volpath([0.4], [1, 1])
+    for D, c, kw in ((trend(1), 0, {"gls": -13.5}), (perron("C", 0.4), -10, {"gls": -13.5}),
+                     (detrend_first(trend(1)), 0, {}), (detrend_first(trend(2)), -10, {}),
+                     (T0, -2, {"start": "stationary"}), (perron("A", 0.3), -10, {"start": "stationary"})):
+        for f in (dist_cdf, dist_pdf):
+            got, ref = f(D, xs, [c, c], vol=V1, **kw), f(D, xs, c, method="paths", **kw)
+            assert np.max(np.abs(got - ref)) < 1e-10, (f.__name__, D.name, c, kw)
+    # one regime with a fixed start is the engine itself (a fixed start is refused under more than one regime only)
+    assert dist_cdf(T0, -2, -5, vol=volpath([]), gamma0=1) == dist_cdf(T0, -2, -5, gamma0=1)
     # the endpoints and the reflection of rho
     x4 = np.array([-3, -1, 0.5, 2])
     phi = np.array([0.5 * math.erfc(-v / math.sqrt(2)) for v in x4])
@@ -145,6 +221,10 @@ def test_limiting_cases():
     assert np.max(np.abs(ltratio_cdf([-3, -2], "DU", -5, vol=V2) - dist_cdf(T0, [-3, -2], -5, vol=V2))) < 1e-15
     q = ltratio_icdf(0.05, "DU", 0, vol=V2)
     assert abs(ltratio_cdf(q, "DU", 0, vol=V2) - 0.05) < 1e-9
+    # (the case strings with their start and detrending: SU the stationary start of the first regime, DG GLS detrending at
+    # cbar = -13.5)
+    assert np.max(np.abs(ltratio_cdf([-3, -2], "SU", -5, vol=V2) - dist_cdf(T0, [-3, -2], -5, vol=V2, start="stationary"))) < 1e-15
+    assert np.max(np.abs(ltratio_cdf([-3, -2], "DG", -5, vol=V2) - dist_cdf(trend(1), [-3, -2], -5, vol=V2, gls=-13.5))) < 1e-15
     assert abs(ltratio_cdf(1.645, "DU", 0, predictive_c0(0, -0.95), rho=-0.95) - 0.5788122) < 1e-7
     # non-finite points, the shapes
     assert list(dist_cdf(T0, [-math.inf, math.inf], -5, vol=V2)) == [0.0, 1.0]

@@ -642,8 +642,10 @@ int dfl_det_msb_quantile(const dfl_design *D, double p, double c, double gls, do
 /* ---- the extensions of the limit (dfl_det_ext.c; src/DFDet_vol.jl, src/DFDet_cov.jl, src/DFDet_seas.jl of DFLimit.jl) ----
  * Volatility and persistence regimes (o->vol of dfl_det_dist, dfl_det_quantile): the limit (U - c0 V)/sqrt(V) of the
  * process dJ = c(r) J dr + omega(r) dW with c and omega piecewise constant between known dates, by the inversion on paths
- * of its transform (zero start, least squares detrending, the one-step regression, every c in [-480, 0]; method DFL_DET_AUTO
- * or DFL_DET_PATHS; the rules of one evaluation and verified as without it).  A normal component (o->rho): the limit
+ * of its transform (every c in [-480, 0]; o->gls, a design that detrends first and the stationary start as without it, the
+ * stationary start being that of the first regime, J(0) ~ N(0, omega_1^2/(-2 c_1)), which needs c < 0 on the first regime;
+ * a fixed start with gamma0 != 0 is refused with more than one regime; method DFL_DET_AUTO or DFL_DET_PATHS; the rules of
+ * one evaluation and verified as without it).  A normal component (o->rho): the limit
  * rho tau_c0 + sqrt(1 - rho^2) Z of the covariate-augmented t-ratio of Hansen (1995) at c0 = dfl_cadf_c0(c, rho, R) and
  * of the t-ratio of the slope in a predictive regression with a regressor local to unity at c0 = dfl_predictive_c0(c,
  * rho, b) (least squares detrending, the one-step regression; method DFL_DET_AUTO, DFL_DET_LINES or DFL_DET_MIXTURE;

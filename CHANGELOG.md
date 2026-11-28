@@ -58,6 +58,19 @@ the classical values, bit for bit those of before.
   `hegy_t3_pdf`, `hegy_t3_quantile`). Calls without them are unchanged. The general engine's outer contour is steepened
   while either group of roots leaves its side of the imaginary axis (the engine's designs are not affected). Tests
   against the reference values of the Julia engine (`tests/ref/ext_ref.txt`).
+- The C engine of dflimit-matlab 8be66f6 (November 28, 2026; the regime variants of DFLimit.jl): `vol` now goes with
+  GLS detrending (`gls=cbar`), with the statistic that detrends first (a design from `detrend_first`) and with a
+  stationary start, that of the first regime (`start="stationary"`: J(0) ~ N(0, omega_1^2/(-2 c_1)), which needs
+  c < 0 on the first regime), where it was the zero start with least squares detrending in the one-step regression; the
+  case strings `"SK"`, `"SU"`, `"ST"` and `"DG"` of `ltratio_cdf`, `ltratio_pdf` and `ltratio_icdf` take `vol` with
+  their start and detrending. A fixed start (`gamma0 != 0`, or `g0` with a case string) under more than one regime is
+  refused with a `ValueError`: the engine's paths of a fixed start are laid for a constant variance and persistence,
+  and under regimes they fail or lose accuracy for starts of moderate size. GLS detrending and the statistic that
+  detrends first keep the zero start, as without regimes. The values of the regimes computed before are unchanged (bit
+  for bit). Tests against the new reference values of the Julia engine (the distribution functions, densities and
+  quantiles of the variants, the case strings with `vol`, the warning on the vertical line with GLS detrending at
+  cbar = -2, five new argument errors; the two that asserted the lifted refusals are gone) and the three variants at a
+  dummy regime boundary against the engine itself.
 
 ### Repairs
 

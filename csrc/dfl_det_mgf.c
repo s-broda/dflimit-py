@@ -225,17 +225,17 @@ static void buildMx(det_work *W, double c, cdouble s, cdouble t, cdouble th)
     }
     for (int i = 0; i < N; i++) M[i + i * N] = caddr(M[i + i * N], 1);
 }
-/* the stationary covariance Sigma_ext = [S + v h h', v h; v h', v] into Sx */
-static void statsigma(det_work *W, double v)
+/* the stationary covariance Sigma_ext = [S + v h h', v h; v h', v] (S n x n) into Sx (statsigma!) */
+static void statsigma_x(int n, cdouble *Sx, const cdouble *S, const cdouble *h, double v)
 {
-    int n = W->N0, N = n + 1;
-    cdouble *Sx = W->Sx, *S = W->S, *h = W->h;
+    int N = n + 1;
     for (int j = 0; j < n; j++) {
         for (int i = 0; i < n; i++) Sx[i + j * N] = cadd(S[i + j * n], cscale(v, cmul(h[i], h[j])));
         Sx[n + j * N] = cscale(v, h[j]); Sx[j + n * N] = cscale(v, h[j]);
     }
     Sx[n + n * N] = CPX(v, 0);
 }
+static void statsigma(det_work *W, double v) { statsigma_x(W->N0, W->Sx, W->S, W->h, v); }
 /* H = 2 Dv L' S M0^{-1} L (r x r) into W->Hm, with M0's LU in W->M: X = M0^{-1} L */
 static void hmat(det_work *W, const cdouble *S)
 {
@@ -533,7 +533,8 @@ int det_eigtop_k(const det_prep *P, int m, double (*kern)(double r, double u, co
     return rc;
 }
 /* eigtop_q: the eigenvalues of C^{1/2} (W + Lambda' B Lambda) C^{1/2}, here those of R' Q R with C = R R' (pivoted Cholesky;
- * the same nonzero eigenvalues as C Q) */
+ * the same nonzero eigenvalues as C Q); C the covariance of X = (J at the nodes, J(1), J(lambda_i)) by the kernel kern
+ * (det_eigtop_qk: the volatility model's, vol_kernel; det_eigtop_q: the Ornstein-Uhlenbeck one, zero start) */
 typedef struct { int M, rk; const double *R, *Q; double *tmp1, *tmp2; } q_op;
 static void q_apply(int nb, const double *X, double *Y, void *v)
 {
@@ -548,13 +549,18 @@ static void q_apply(int nb, const double *X, double *Y, void *v)
 }
 int det_eigtop_q(const det_prep *P, double c, int m, double *l1, double *l2)
 {
+    ou_ctx o = {c, 0.0};
+    return det_eigtop_qk(P, m, ou_kern, &o, l1, l2);
+}
+int det_eigtop_qk(const det_prep *P, int m, double (*kern)(double r, double u, const void *ctx), const void *ctx, double *l1, double *l2)
+{
     double *rs, *ws; int *pj; int n = nystrom_nodes(P, m, &rs, &ws, &pj);
     int nj = P->nj, N = P->N, M = n + 1 + nj, d1 = P->gdeg + 1;
     double *pts = malloc(M * sizeof(double));
     memcpy(pts, rs, n * sizeof(double)); pts[n] = 1.0; for (int i = 0; i < nj; i++) pts[n + 1 + i] = P->jl[i];
     double *C = malloc((size_t) M * M * sizeof(double)), *Lam = calloc((size_t) N * M, sizeof(double));
     if (!C || !Lam) { free(rs); free(ws); free(pj); free(pts); free(C); free(Lam); return 1; }
-    for (int j = 0; j < M; j++) for (int i = j; i < M; i++) { double v = oukernel(c, pts[i], pts[j], 0.0); C[i + (size_t) j * M] = C[j + (size_t) i * M] = v; }
+    for (int j = 0; j < M; j++) for (int i = j; i < M; i++) { double v = kern(pts[i], pts[j], ctx); C[i + (size_t) j * M] = C[j + (size_t) i * M] = v; }
     Lam[0 + (size_t) n * N] = 1;
     for (int i = 0; i < nj; i++) Lam[(1 + i) + (size_t) (n + 1 + i) * N] = 1;
     for (int i = 0; i < P->p; i++) for (int q = 0; q < n; q++) Lam[(1 + nj + i) + (size_t) q * N] = ws[q] * evalpoly(rs[q] - P->off[pj[q]], P->g + ((size_t) pj[q] * P->p + i) * d1, d1);
@@ -678,7 +684,10 @@ done:
 
 /* =====================================================================================================================
  * Volatility and persistence regimes (src/DFDet_vol.jl): the covariance Sigma of ell under the tilted process with the
- * theta_j of the pieces, the tilt Gamma, the transform and t_*
+ * theta_j of the pieces, the tilt Gamma, the transform and t_*.  GLS detrending and the statistic that detrends first change
+ * the matrices A and B alone (those of the prepared design on the refined partition); a normal start, J(0) centred normal
+ * with variance v0 and independent of W, joins the functionals: with h the mean of ell under the tilted process started at
+ * one, the covariance of (ell, J(0)) is [Sigma + v0 h h', v0 h; v0 h', v0], and Gamma gains -g_1 at the start
  * ===================================================================================================================== */
 int det_vwork_init(det_vwork *W, const det_vmodel *VM, void *buf, size_t bytes)
 {
@@ -686,16 +695,21 @@ int det_vwork_init(det_vwork *W, const det_vmodel *VM, void *buf, size_t bytes)
     const det_prep *P = VM->P;
     memset(W, 0, sizeof *W);
     W->VM = VM; W->nq = 24; W->zq = det_gl(24, &W->wq);
-    int N = VM->Ne, np = VM->np, d1 = P->gdeg + 1, pm = imax(P->p, 1), r = imax(VM->r, 1);
-    size_t nc = (size_t) d1 + N + (size_t) N * np + (size_t) pm * np + 2 * (size_t) N * N + 2 * (size_t) np + N + (size_t) N * r + (size_t) r * r + N;
+    /* (Ne the size of ell, of Sigma and of the transfer functions; N that of the transform, Ne + 1 with a normal start,
+     * whose covariance Sx of (ell, J(0)) has its own block; otherwise Sx is S) */
+    int Ne = VM->Ne, N = VM->N, np = VM->np, d1 = P->gdeg + 1, pm = imax(P->p, 1), r = imax(VM->r, 1);
+    size_t nc = (size_t) d1 + Ne + (size_t) Ne * np + (size_t) pm * np + (size_t) Ne * Ne + (size_t) N * N + 2 * (size_t) np + N + (size_t) N * r + (size_t) r * r + N
+              + Ne + (N != Ne ? (size_t) N * N : 0);
     size_t nd = (size_t) d1 * pm, need = nc * sizeof(cdouble) + nd * sizeof(double) + N * sizeof(int) + 64;
     char *m;
     if (buf && bytes >= need) m = buf; else { m = malloc(need); if (!m) return 1; W->heap = m; }
     m = (char *) (((size_t) m + 15) & ~(size_t) 15);
     cdouble *c = (cdouble *) m;
-    W->e = c; c += d1; W->F = c; c += N; W->Rb = c; c += (size_t) N * np; W->Ib = c; c += (size_t) pm * np;
-    W->S = c; c += (size_t) N * N; W->M = c; c += (size_t) N * N; W->th = c; c += np; W->v = c; c += np; W->gam = c; c += N;
+    W->e = c; c += d1; W->F = c; c += Ne; W->Rb = c; c += (size_t) Ne * np; W->Ib = c; c += (size_t) pm * np;
+    W->S = c; c += (size_t) Ne * Ne; W->M = c; c += (size_t) N * N; W->th = c; c += np; W->v = c; c += np; W->gam = c; c += N;
     W->X = c; c += (size_t) N * r; W->Hm = c; c += (size_t) r * r; W->v1 = c; c += N;
+    W->h = c; c += Ne;
+    if (N != Ne) { W->Sx = c; c += (size_t) N * N; } else W->Sx = W->S;
     W->a = (double *) c; W->piv = (int *) (W->a + nd);
     return 0;
 }
@@ -793,13 +807,31 @@ static void sigma_vol(det_vwork *W)
     }
     for (int jj = 0; jj < N; jj++) for (int ii = 0; ii < jj; ii++) S[jj + ii * N] = S[ii + jj * N];
 }
+/* the mean of ell under the tilted process started at one, the functionals of the path exp(-int_0^r theta): its values at
+ * one and at the boundaries in ell, and int g(r) exp(-int_0^r theta) dr piece by piece in closed form, from the integrals of
+ * g against e^{-theta_j y} over the pieces that sigma_vol has left in W->Ib (so that nothing is lost far out on a contour),
+ * into W->h (vol_start!) */
+static void vol_start(det_vwork *W)
+{
+    const det_vmodel *VM = W->VM;
+    const det_prep *P = VM->P;
+    int np = VM->np, p = P->p, pm = imax(p, 1), iz0 = 1 + P->nj;
+    cdouble *h = W->h, E = DONE;                 /* E: exp(-int theta) up to the left end of the piece */
+    for (int i = 0; i < VM->Ne; i++) h[i] = DZERO;
+    for (int m = 0; m < np; m++) {
+        for (int i = 0; i < p; i++) h[iz0 + i] = cadd(h[iz0 + i], cmul(E, W->Ib[i + m * pm]));
+        E = cmul(E, cexp(cscale(-VM->L[m], W->th[m])));
+        int pos = m == np - 1 ? 0 : VM->bpos[m];
+        if (pos >= 0) h[pos] = E;
+    }
+}
 /* the theta_j at t (principal square roots), Sigma into W->S and the diagonal tilt Gamma into W->gam (g_last at J(1),
- * g_j - g_{j+1} at the boundary between pieces j and j + 1, g_j = (c_j + theta_j)/(2 omega_j^2)); returns the exponent
- * sum_j (c_j + theta_j) L_j (vol_tilt!) */
+ * g_j - g_{j+1} at the boundary between pieces j and j + 1, g_j = (c_j + theta_j)/(2 omega_j^2); with a normal start -g_1
+ * at J(0), and the covariance of (ell, J(0)) into W->Sx); returns the exponent sum_j (c_j + theta_j) L_j (vol_tilt!) */
 static cdouble vol_tilt(det_vwork *W, cdouble t)
 {
     const det_vmodel *VM = W->VM;
-    int np = VM->np, N = VM->Ne;
+    int np = VM->np, N = VM->N;
     for (int j = 0; j < np; j++) { double cj = VM->c[j], w2 = VM->om2[j]; W->th[j] = csq(CPX(cj * cj - 2 * creal(t) * w2, -(2 * cimag(t) * w2))); }
     sigma_vol(W);
     for (int i = 0; i < N; i++) W->gam[i] = DZERO;
@@ -810,15 +842,20 @@ static cdouble vol_tilt(det_vwork *W, cdouble t)
         ex = cadd(ex, cscale(VM->L[j], caddr(W->th[j], VM->c[j])));
         if (j < np - 1) { int pos = VM->bpos[j]; if (pos >= 0) W->gam[pos] = cadd(W->gam[pos], csub(GJ(j), GJ(j + 1))); }
     }
+    if (VM->start == 2) {
+        W->gam[N - 1] = cneg(GJ(0));
+        vol_start(W);
+        statsigma_x(VM->Ne, W->Sx, W->S, W->h, VM->v0);
+    }
 #undef GJ
     return ex;
 }
-/* M = I - 2 (s A + t B + Gamma) Sigma into W->M */
+/* M = I - 2 (s A + t B + Gamma) Sigma into W->M (with a normal start the matrices of (ell, J(0)) and Sx) */
 static void vol_buildM(det_vwork *W, cdouble s, cdouble t)
 {
     const det_vmodel *VM = W->VM;
-    int N = VM->Ne;
-    cdouble *M = W->M, *S = W->S;
+    int N = VM->N;
+    cdouble *M = W->M, *S = W->Sx;
     for (int i = 0; i < N * N; i++) M[i] = DZERO;
     for (int k = 0; k < N; k++) for (int i = 0; i < N; i++) {
         cdouble q = cadd(cscale(VM->A[i + k * N], s), cscale(VM->B[i + k * N], t));
@@ -832,7 +869,7 @@ static void vol_buildM(det_vwork *W, cdouble s, cdouble t)
 int det_vol_parts(det_vwork *W, cdouble t, cdouble *ld, cdouble *mu)
 {
     const det_vmodel *VM = W->VM;
-    int N = VM->Ne, r = VM->r, odd;
+    int N = VM->N, r = VM->r, odd;
     cdouble ex = vol_tilt(W, t);
     vol_buildM(W, DZERO, t);
     det_clu(N, W->M, W->piv, &odd);
@@ -843,7 +880,7 @@ int det_vol_parts(det_vwork *W, cdouble t, cdouble *ld, cdouble *mu)
         for (int i = 0; i < N; i++) x[i] = CPX(VM->Lx[i + (size_t) k * N], 0);
         det_csolve(N, W->M, W->piv, x);
     }
-    const cdouble *S = W->S;
+    const cdouble *S = W->Sx;
     for (int l = 0; l < r; l++) {
         const cdouble *x = W->X + (size_t) l * N;
         for (int i = 0; i < N; i++) { cdouble s = DZERO; for (int j = 0; j < N; j++) s = cadd(s, cmul(S[i + j * N], x[j])); W->v1[i] = s; }
@@ -861,15 +898,16 @@ cdouble det_vol_dval(const det_vmodel *VM, cdouble s, cdouble t)
     int odd;
     cdouble ex = vol_tilt(&W, t);
     vol_buildM(&W, s, t);
-    det_clu(VM->Ne, W.M, W.piv, &odd);
-    cdouble d = cmul(cexp(ex), det_cdet(VM->Ne, W.M, odd));
+    det_clu(VM->N, W.M, W.piv, &odd);
+    cdouble d = cmul(cexp(ex), det_cdet(VM->N, W.M, odd));
     det_vwork_free(&W);
     return d;
 }
 
-/* the covariance of the path with the regimes, zero start: e^{C(r) + C(u)} int_0^{min(r,u)} omega^2 e^{-2C(v)} dv with
- * C(r) = int_0^r c, piece by piece in closed form, the exponents combined so that nothing overflows (vol_kernel) */
-typedef struct { const det_vmodel *VM; const double *Cb; } vk_ctx;
+/* the covariance of the path with the regimes: e^{C(r) + C(u)} (v0 + int_0^{min(r,u)} omega^2 e^{-2C(v)} dv) with C(r) =
+ * int_0^r c and v0 the variance of a normal start (zero otherwise), piece by piece in closed form, the exponents combined
+ * so that nothing overflows (vol_kernel; the Nystrom estimate of t_*, eigtop and eigtop_q with kern) */
+typedef struct { const det_vmodel *VM; const double *Cb; double v0; } vk_ctx;
 static double vol_Cat(const vk_ctx *k, double r)
 {
     const det_vmodel *VM = k->VM; const double *br = VM->P->br;
@@ -879,7 +917,7 @@ static double vol_Cat(const vk_ctx *k, double r)
 static double vol_kern(double r, double u, const void *v)
 {
     const vk_ctx *k = v; const det_vmodel *VM = k->VM; const double *br = VM->P->br;
-    double m = dmin(r, u), E = vol_Cat(k, r) + vol_Cat(k, u), acc = 0;
+    double m = dmin(r, u), E = vol_Cat(k, r) + vol_Cat(k, u), acc = k->v0 != 0 ? k->v0 * exp(E) : 0.0;
     for (int j = 0; j < VM->np; j++) {
         double a = br[j];
         if (a >= m) break;
@@ -903,16 +941,19 @@ static void vgrid_body(int j, void *v)
     o->f[j] = vfval(&W, o->t[j], &o->st);
     det_vwork_free(&W);
 }
-/* t_* of the volatility model (vol_tstar): the Nystrom estimate with the covariance of the regimes; D_V on 81 points of
- * +-2% around it, bisection at the first change of sign, the golden section for a double zero; where the estimate is off,
- * D_V scanned from zero in steps of a thousandth of the estimate for its first change of sign (or a double zero) */
+/* t_* of the volatility model (vol_tstar): the Nystrom estimate with the covariance of the regimes (eigtop with kern;
+ * with GLS detrending, whose V is not the norm of a projection of the path, the quadratic form itself, eigtop_q with kern:
+ * the scan from zero below covers an estimate that is off, so the nodes are those of the least squares designs); D_V on 81
+ * points of +-2% around it, bisection at the first change of sign, the golden section for a double zero; where the
+ * estimate is off, D_V scanned from zero in steps of a thousandth of the estimate for its first change of sign (or a
+ * double zero) */
 int det_vol_tstar(const det_vmodel *VM, double *tsout, int *mult, char *err, size_t errlen)
 {
     double *Cb = malloc((VM->np + 1) * sizeof(double));
     Cb[0] = 0; for (int j = 0; j < VM->np; j++) Cb[j + 1] = Cb[j] + VM->c[j] * VM->L[j];
-    vk_ctx kc = {VM, Cb};
+    vk_ctx kc = {VM, Cb, VM->start == 2 ? VM->v0 : 0.0};
     double l1, l2;
-    int rc = det_eigtop_k(VM->P, 16, vol_kern, &kc, &l1, &l2);
+    int rc = isnan(VM->P->cbar) ? det_eigtop_k(VM->P, 16, vol_kern, &kc, &l1, &l2) : det_eigtop_qk(VM->P, 16, vol_kern, &kc, &l1, &l2);
     free(Cb);
     if (rc) { snprintf(err, errlen, "t_*: the Nystrom estimate failed"); return 1; }
     double te = 1 / (2 * l1), grid[81], vals[81];

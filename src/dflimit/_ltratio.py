@@ -99,8 +99,10 @@ classical engine computes, as before. The general engine's warnings (where one e
 EXT_DOC = """\
 vol : VolPath, optional
     Volatility and persistence regimes (`volpath`; ``c`` may then be a sequence of one value per regime), computed by
-    the general engine for the case or the design (``engine="classical"`` refuses it; ``method`` "auto" or "paths"):
-    see `dist_cdf`.
+    the general engine for the case or the design with its start and detrending (cases SK, SU, ST: the stationary
+    start of the first regime, which needs c < 0 on it; case DG and ``gls``: GLS detrending; a fixed start ``g0 != 0``
+    is refused with more than one regime; ``engine="classical"`` refuses ``vol``; ``method`` "auto" or "paths"): see
+    `dist_cdf`.
 rho : float, default 1
     A normal component (1: none), the limit rho tau + sqrt(1 - rho^2) Z of the covariate-augmented t-ratio (`cadf_c0`)
     and of the predictive regression (`predictive_c0`), computed by the general engine (``method`` "auto", "lines" or

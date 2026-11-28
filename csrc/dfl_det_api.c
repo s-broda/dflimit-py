@@ -180,7 +180,8 @@ int dfl_det_path_region(int fixed, int rank1, double c, double c0)
  * hyperbola is flatter than 70 degrees (at c = 0.5, g0 = 1, c0 = -20 the present step was off by 0.86, half of it by 0.31,
  * this one by 7e-12; on the steep hyperbolas of g0 = 2, 88 degrees, the present step is within 1e-12 and the thin inner rule
  * is not); on the vertical line the line itself.  *rl the rule taken (DET_RULE_GIVEN where hfac is given) */
-/* (VM: the paths of the volatility model, whose rule is that of its inner model, a zero start: vol_rule_path) */
+/* (VM: the paths of the volatility model, whose rule is that of its inner model, with a zero or a stationary start, at the
+ * smallest c of the regimes: vol_rule_path, DFL_RULE_FINESTEP with the g0 of the inner model, 0) */
 static det_path *rule_path_x(const dfl_design *D, det_vmodel *VM, double c, const dfl_det_opts *o, int verified, int *n, int *ntail, int *rl, char *err, size_t errlen)
 {
     if (o->rule < DFL_RULE_AUTO || o->rule > DFL_RULE_FINESTEP) { snprintf(err, errlen, "%s", DET_RULE_MSG); return NULL; }
@@ -209,7 +210,7 @@ static det_path *rule_path_x(const dfl_design *D, det_vmodel *VM, double c, cons
         if (!CP1) return NULL;
         if (isnan(CP1->h)) return CP1;
         phi = CP1->phi;
-        if (r == DFL_RULE_FINESTEP && !VM) hf = CP1->phi < DET_FINESTEP_PHI ? dmin(0.5, 2.5 / (fabs(CP1->Mo->g0) * fabs(o->c0))) : 1.0;
+        if (r == DFL_RULE_FINESTEP) hf = CP1->phi < DET_FINESTEP_PHI ? dmin(0.5, 2.5 / (fabs(CP1->Mo->g0) * fabs(o->c0))) : 1.0;
         det_path_release(CP1);
     }
     return GETPATH(phi, hf);
@@ -503,9 +504,12 @@ int dfl_det_quantile(const dfl_design *D, int n, const double *p, double c, doub
 
 /* ---------- the extensions of the limit: volatility and persistence regimes (vol_args, vol_eval, vol_quantile of
  * DFDet_vol.jl), the dispatch to the normal component (ext_eval, ext_quantile of DFDet_cov.jl) ---------- */
-#define VOL_START_MSG "a volatility path (vol) is implemented for the zero start only (J(0) = 0); a fixed or a stationary start is not supported with it"
-#define VOL_GLS_MSG "a volatility path (vol) is implemented for least squares detrending only; GLS detrending (gls) is not supported with it"
-#define VOL_FIRST_MSG "a volatility path (vol) is implemented for the one-step regression only; the statistic that detrends first (detrend_first) is not supported with it"
+#define VOL_STAT_MSG "with a volatility path (vol) the stationary start is that of the first regime, J(0) ~ N(0, omega_1^2/(-2 c_1)), which needs c < 0 on the first regime"
+#define VOL_FIXED_MSG "with a volatility path (vol) the distribution with a fixed start (gamma0 != 0) is not computed: the paths of the engine's fixed start are laid for a constant variance and persistence, and under regimes they fail or lose accuracy for starts of moderate size; the transform of the fixed start under regimes is DFDet.vol_qf of DFLimit.jl, and a zero or a stationary start is computed"
+/* (the messages of model and prep_gls of DFDet.jl, also those of det_model_make and prep_gls of dfl_det_design.c) */
+#define FIRST_GLS_MSG "GLS detrending (gls = cbar) detrends first already: use the design itself, not detrend_first(D), with gls"
+#define GLS_START_MSG "GLS detrending (gls = cbar) is implemented for the zero start only: the derivation of the GLS limit assumes u_0 = 0, and start = fixed (gamma0 != 0) and start = stationary are not supported with it"
+#define FIRST_START_MSG "the statistic that detrends first (detrend_first) is implemented for the zero start only; start = fixed (gamma0 != 0) and start = stationary are not supported with it"
 #define EXT_BOTH_MSG "rho and vol together are not implemented (the limit with a normal component under a volatility path is not derived)"
 /* the c below which the volatility extension refuses (the general engine's range below the unit root) */
 #define VOL_CMIN (-480.0)
@@ -517,7 +521,11 @@ static void cr_str(char *buf, size_t len, int k, const double *cr, int vec)
     if (o < len) snprintf(buf + o, len - o, "]");
 }
 /* the checks of the arguments of the volatility extension (vol_args) and its model (*VM, a reference); *VM NULL for one
- * regime, which the engine itself computes at *c1 */
+ * regime, which the engine itself computes at *c1 with its start and gls.  The variants: least squares detrending with a
+ * zero or a stationary start (that of the first regime), and with a zero start GLS detrending (o->gls = cbar) and the
+ * statistic that detrends first (D->first).  A fixed start (gamma0 != 0) is refused with more than one regime
+ * (VOL_FIXED_MSG): the engine's paths of a fixed start, laid for a constant variance and persistence, are not dependable
+ * under regimes; DFLimit.jl computes its transform (vol_qf), which is not ported here */
 int det_vol_args(const char *fn, const dfl_design *D, double c, const dfl_det_opts *o, det_vmodel **VM, double *c1, char *err, size_t errlen)
 {
     const dfl_vol *v = o->vol;
@@ -530,18 +538,24 @@ int det_vol_args(const char *fn, const dfl_design *D, double c, const dfl_det_op
     char cs[200]; cr_str(cs, sizeof cs, k, cr, v->c != NULL);
     int rc = 1, le = 1, ge = 1, fin = 1;
     for (int i = 0; i < k; i++) { if (!isfinite(cr[i])) fin = 0; if (!(cr[i] <= 0)) le = 0; if (!(cr[i] >= VOL_CMIN)) ge = 0; }
+    int st = o->start, gl = !isnan(o->gls), zero0 = st == DFL_START_ZERO || (st == DFL_START_FIXED && o->gamma0 == 0);
     if (!fin) snprintf(err, errlen, "%s: c must be finite", fn);
-    else if (!(o->start == DFL_START_ZERO || (o->start == DFL_START_FIXED && o->gamma0 == 0))) snprintf(err, errlen, "%s: " VOL_START_MSG, fn);
-    else if (!isnan(o->gls)) snprintf(err, errlen, "%s: " VOL_GLS_MSG, fn);
-    else if (D->first) snprintf(err, errlen, "%s: " VOL_FIRST_MSG, fn);
+    else if (st < 0 || st > 2) snprintf(err, errlen, "%s: start must be zero (0), fixed (1) or stationary (2)", fn);
+    else if (!isfinite(o->gamma0)) snprintf(err, errlen, "%s: gamma0 must be a finite real scalar", fn);
+    else if (gl && !(isfinite(o->gls) && o->gls < 0)) snprintf(err, errlen, "%s: GLS detrending needs cbar < 0 (a finite number)", fn);
+    else if (gl && D->first) snprintf(err, errlen, "%s: " FIRST_GLS_MSG, fn);
+    else if (gl && !zero0) snprintf(err, errlen, "%s: " GLS_START_MSG, fn);
+    else if (D->first && !zero0) snprintf(err, errlen, "%s: " FIRST_START_MSG, fn);
     else if (!(o->method == DFL_DET_AUTO || o->method == DFL_DET_PATHS))
         snprintf(err, errlen, "%s: with a volatility path (vol) the method is the inversion on paths: method must be 'auto' or 'paths' (the line integral is not implemented for the volatility transform)", fn);
     else if (!le) snprintf(err, errlen, "%s: with a volatility path (vol) every c must be at most 0 (above the unit root the extension is not implemented); c = %s", fn, cs);
     else if (!ge) snprintf(err, errlen, "%s: with a volatility path (vol) every c must be at least %g (the range of the general engine); c = %s", fn, VOL_CMIN, cs);
+    else if (st == DFL_START_STAT && !(cr[0] < 0)) snprintf(err, errlen, "%s: " VOL_STAT_MSG "; c = %s", fn, cs);
+    else if (k > 1 && !(zero0 || st == DFL_START_STAT)) snprintf(err, errlen, "%s: " VOL_FIXED_MSG, fn);
     else rc = 0;
     if (!rc) {
         if (k == 1) *c1 = cr[0];
-        else if (!(*VM = det_vol_model(D, v, cr, err, errlen))) rc = 1;
+        else if (!(*VM = det_vol_model(D, v, cr, zero0 ? DFL_START_ZERO : DFL_START_STAT, o->gls, NAN, err, errlen))) rc = 1;
     }
     free(cr);
     return rc;

@@ -184,8 +184,14 @@ and MATLAB:
 - **Volatility and persistence regimes**: `volpath(breaks, omega)` and the keyword `vol` of `dist_cdf`, `dist_pdf`,
   `dist_quantile`, `ltratio_cdf`, `ltratio_pdf`, `ltratio_icdf`: the limit of the t-ratio when the process is
   dJ = c(r) J dr + omega(r) dW with the standard deviation omega and, with `c` a sequence of one value per regime, the
-  local-to-unity parameter piecewise constant between known dates (zero start, least squares detrending, every `c` in
-  [-480, 0]; the inversion on paths of the volatility transform).
+  local-to-unity parameter piecewise constant between known dates (every `c` in [-480, 0]; the inversion on paths of
+  the volatility transform). The detrending and the start are the engine's: least squares or GLS detrending
+  (`gls=cbar`), the one-step regression or the statistic that detrends first (`detrend_first(D)`), and a zero start
+  or, with least squares in the one-step regression, the stationary start of the first regime (`start="stationary"`:
+  J(0) ~ N(0, omega_1^2/(-2 c_1)), which needs c < 0 on the first regime); the case strings `"SK"`, `"SU"`, `"ST"` and
+  `"DG"` take `vol` with their start and detrending. A fixed start (`gamma0 != 0`, or `g0` with a case string) is
+  refused with more than one regime: the engine's paths of a fixed start are laid for a constant variance and
+  persistence, and under regimes they fail or lose accuracy for starts of moderate size.
 - **A normal component**: the keyword `rho` of the same functions, the limit rho tau_c0 + sqrt(1 - rho^2) Z of the
   covariate-augmented t-ratio of Hansen (1995) at `c0=cadf_c0(c, rho, R)` and of the t-ratio of the slope in a
   predictive regression with a regressor local to unity at `c0=predictive_c0(c, rho, b)` (`method` `"auto"`, `"lines"`,
@@ -196,10 +202,12 @@ and MATLAB:
   roots of the engine's determinant on its outer contour, with `c0` and `vol`.
 
 ```python
-from dflimit import volpath, dist_cdf, dist_quantile, ltratio_cdf, predictive_c0, hegy_t3_quantile, trend
+from dflimit import volpath, dist_cdf, dist_quantile, ltratio_cdf, ltratio_icdf, predictive_c0, hegy_t3_quantile, trend
 V = volpath([0.3], [1, 3])                           # the standard deviation triples at 30% of the sample
 dist_cdf(trend(0), -2.86, 0, vol=V)
 dist_quantile(trend(1), 0.05, [-3, 0, -10], vol=volpath([0.2, 0.7], [2, 1, 0.5]))
+dist_quantile(trend(1), 0.05, 0, vol=V, gls=-13.5)   # DF-GLS (cbar = -13.5) under the variance break
+ltratio_icdf(0.05, "SU", -5, vol=V)                  # the stationary start of the first regime
 ltratio_cdf(1.645, "DU", 0, predictive_c0(0, -0.95), rho=-0.95)   # the predictive regression
 hegy_t3_quantile(trend(0), 0.05)                     # the 5% critical value with seasonal dummies
 ```
